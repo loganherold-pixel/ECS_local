@@ -20,12 +20,14 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 
 const {
   isUsableRouteContext,
+  routeContextEvidenceState,
   routeContextRoutePoints,
   routeContextSupplyCandidatesToResupplyPoints,
   routeContextTrailheadCoordinate,
   routeContextToTripBuilderItineraryContext,
   routeWithRouteContext,
 } = require(path.join(root, 'lib', 'tripBuilder', 'routeContextTripBuilderAdapter.ts'));
+const { buildTripPlan } = require(path.join(root, 'lib', 'tripBuilder', 'tripBuilderService.ts'));
 
 const screen = fs.readFileSync(path.join(root, 'app', 'explore-trip-builder.tsx'), 'utf8');
 
@@ -44,6 +46,9 @@ const supplyCandidates = [
     address: '1 Fuel Rd',
     distanceToTrailheadMeters: 2500,
     driveDistanceToTrailheadMeters: 3000,
+    detourDistanceMeters: 640,
+    detourDurationSeconds: 300,
+    openStatus: 'unknown',
     confidence: { value: 0.82, reasons: ['Fixture.'] },
     score: 0.91,
     warnings: [],
@@ -128,7 +133,12 @@ assert.strictEqual(routeContextRoutePoints(routeContext).length, 4);
 const resupplyPoints = routeContextSupplyCandidatesToResupplyPoints(routeContext, 'gas_and_grocery');
 assert.deepStrictEqual(resupplyPoints.map((point) => point.category), ['fuel', 'food_supplies']);
 assert.strictEqual(resupplyPoints[0].name, 'Route Fuel');
-assert.strictEqual(resupplyPoints[0].distanceFromStartMiles, 1.9);
+assert.strictEqual(resupplyPoints[0].distanceFromStartMiles, null, 'Candidate-to-trailhead distance must not masquerade as origin distance.');
+assert.strictEqual(resupplyPoints[0].distanceFromRouteMiles, 0.4);
+assert.strictEqual(resupplyPoints[0].approachEvidence.distanceBeforeTrailheadMiles, 1.9);
+assert.strictEqual(resupplyPoints[0].approachEvidence.detourDurationMinutes, 5);
+assert.strictEqual(resupplyPoints[0].approachEvidence.operatingStatus, 'unknown');
+assert.strictEqual(resupplyPoints[0].selectionState, 'route_context_selected');
 const itineraryContext = routeContextToTripBuilderItineraryContext(routeContext, 'gas_and_grocery');
 assert.strictEqual(itineraryContext.confidence.tier, 'high');
 assert.strictEqual(itineraryContext.supplyMode, 'gas_and_grocery');
@@ -144,6 +154,27 @@ const partialRouteContext = {
 assert.strictEqual(isUsableRouteContext(partialRouteContext), true);
 assert.strictEqual(routeContextToTripBuilderItineraryContext(partialRouteContext, 'gas_and_grocery').confidence.tier, 'partial');
 assert.strictEqual(routeContextSupplyCandidatesToResupplyPoints(partialRouteContext, 'gas_and_grocery').length, 2);
+assert.strictEqual(routeContextEvidenceState(partialRouteContext), 'partial');
+assert.match(
+  routeContextSupplyCandidatesToResupplyPoints(partialRouteContext, 'gas_and_grocery')[0].source,
+  /^partial_route_context_engine$/,
+);
+
+const staleRouteContext = {
+  ...routeContext,
+  status: 'stale',
+  warnings: [{ code: 'stale_cached_context', message: 'Cached Route Context.', severity: 'watch' }],
+  confidence: { value: 0.62, reasons: ['Stale fixture.'] },
+};
+assert.strictEqual(isUsableRouteContext(staleRouteContext), true);
+assert.strictEqual(routeContextEvidenceState(staleRouteContext), 'stale');
+const staleResupplyPoints = routeContextSupplyCandidatesToResupplyPoints(staleRouteContext, 'gas_and_grocery');
+assert.strictEqual(staleResupplyPoints[0].source, 'stale_route_context_engine');
+assert.ok(
+  staleResupplyPoints[0].notes.some((note) => /cached\/stale/i.test(note)),
+  'Cached Route Context supply evidence must remain visibly stale when live provider refresh is unavailable.',
+);
+assert.strictEqual(routeContextToTripBuilderItineraryContext(staleRouteContext, 'gas_and_grocery').status, 'stale');
 
 const errorRouteContext = {
   ...routeContext,
@@ -153,6 +184,54 @@ const errorRouteContext = {
 assert.strictEqual(isUsableRouteContext(errorRouteContext), false);
 assert.strictEqual(routeContextToTripBuilderItineraryContext(errorRouteContext, 'gas_and_grocery'), null);
 assert.strictEqual(routeContextSupplyCandidatesToResupplyPoints(errorRouteContext, 'gas_and_grocery').length, 0);
+
+const inaccessibleRouteContext = {
+  ...routeContext,
+  selectedSupplyMode: 'gas',
+  supplyCandidates: [{ ...supplyCandidates[0], id: 'gas-inaccessible', accessStatus: 'inaccessible' }],
+  selectedSupplyPlan: {
+    ...routeContext.selectedSupplyPlan,
+    mode: 'gas',
+    orderedStops: [{ candidateId: 'gas-inaccessible', category: 'gas', sequence: 1 }],
+  },
+};
+const inaccessibleResupplyPoints = routeContextSupplyCandidatesToResupplyPoints(inaccessibleRouteContext, 'gas');
+assert.strictEqual(inaccessibleResupplyPoints[0].accessStatus, 'inaccessible');
+const inaccessiblePlan = buildTripPlan({
+  route: {
+    id: 'inaccessible-route-context-plan',
+    name: 'Inaccessible Route Context Plan',
+    distanceMiles: 20,
+    startLat: 38,
+    startLng: -110,
+    destinationCoordinate: { latitude: 38.2, longitude: -109.8 },
+    waypoints: [],
+  },
+  input: {
+    tripType: 'day_trip',
+    timeWindow: 'full_day',
+    groupType: 'solo',
+    priorities: [],
+    smartResupplyPreference: 'fuel_only',
+  },
+  vehicleProfile: {
+    id: 'route-context-fixture-vehicle',
+    label: 'Fixture Vehicle',
+    rangeMiles: 250,
+    confidence: 'medium',
+  },
+  resupplyPoints: inaccessibleResupplyPoints,
+  capturedAt: '2026-05-29T12:00:00.000Z',
+});
+assert.strictEqual(
+  inaccessiblePlan.smartResupplyPlan.fuel.keyPoint,
+  null,
+  'An inaccessible Route Context POI must not become the mounted Smart Resupply recommendation.',
+);
+assert.ok(
+  inaccessiblePlan.suggestedStops.every((stop) => !stop.title.includes('Route Fuel')),
+  'An inaccessible Route Context POI must not leak into the generated itinerary support stops.',
+);
 
 assertIncludes(screen, 'routeContextOrchestrator.prefetchForTrailSelection', 'Trail selection should trigger background route context prefetch.');
 assertIncludes(screen, 'routeContextOrchestrator.getContext', 'Itinerary generation should read cached route context.');
@@ -165,14 +244,17 @@ assert.ok(!screen.includes('providerMetadata: candidate.providerMetadata'), 'Tri
 assertIncludes(screen, 'routeWithRouteContext(selectedRoute as unknown as TripBuilderRouteInput, routeContext)', 'Trip Builder should enrich route geometry before planning.');
 assertIncludes(screen, 'routeContextToTripBuilderItineraryContext(routeContext, selectedSupplyMode)', 'Trip Builder should pass RouteContext into the itinerary generator.');
 assertIncludes(screen, 'routeContextSupplyCandidatesToResupplyPoints(routeContext, selectedSupplyMode)', 'Trip Builder should pass RouteContext POI data into Smart Resupply.');
-assertIncludes(screen, 'const selectedTrailheadResupplyAnchorCoordinate = selectedRouteStartCoordinate', 'Trip Builder should keep the trailhead endpoint as the fallback Smart Resupply anchor.');
+assertIncludes(screen, 'const selectedTrailheadResupplyAnchorCoordinate = useMemo(', 'Trip Builder should keep a stable trailhead endpoint as the fallback Smart Resupply anchor.');
 assertIncludes(screen, 'approachRoute: liveApproachRoutePoints', 'Trip Builder should search fuel along the approach route before falling back to the trailhead endpoint.');
 assertIncludes(screen, 'fallbackAnchor: selectedPreTrailSupplyAnchorCoordinate', 'Trip Builder should search groceries along the approach route with the selected refuel stop as fallback.');
-assertIncludes(screen, 'mergeSmartResupplyOptions(routeContextFuelOptions, options, smartResupplyFuelOptionsRef.current)', 'Fuel picker should merge route context supply options into the existing visible list.');
-assertIncludes(screen, 'mergeSmartResupplyOptions(routeContextSupplyOptions, options, smartResupplySupplyOptionsRef.current)', 'Grocery picker should merge route context supply options into the existing visible list.');
+assertIncludes(screen, 'mergeAndRankSmartResupplyOptions({', 'Fuel and grocery candidates should be merged and reranked through the canonical approach model.');
 assertIncludes(screen, 'function compareSmartResupplyOptionsByApproach', 'Smart Resupply merge should rank approach-corridor stops before source-priority tie breakers.');
-assertIncludes(screen, "left.sourceType === 'route_context_engine' ? 0 : 1", 'Smart Resupply merge should preserve Route Context priority as an approach-score tie breaker.');
+assertIncludes(screen, "candidate.routeEvidenceState === 'provider_route'", 'Provider-routed evidence should survive the Route Context adapter without becoming unconditional source priority.');
 assertIncludes(screen, 'orderedCandidateIds.get(left.id)', 'Smart Resupply options should use selected SupplyPlan order before raw candidate score.');
 assertIncludes(screen, 'orderSelectedSmartResupplyPoints', 'Gas+grocery selected stops should preserve route context order when available.');
+assertIncludes(screen, 'accessStatus: option.accessStatus', 'Mounted Smart Resupply adapters should preserve access evidence through planning handoff.');
+assertIncludes(screen, 'smartResupplyOptionCoversFuelAndSupplies', 'Combined fuel and grocery copy should require explicit multi-category coverage.');
+assertIncludes(screen, "option.providerResultState === 'stale'", 'Mounted Smart Resupply cards should visibly label cached/stale Route Context evidence.');
+assertIncludes(screen, 'smartResupplyProviderFreshnessRank', 'Fresh live provider evidence should supersede stale Route Context presentation when identities reconcile.');
 
 console.log('Trip Builder Route Context integration checks passed.');

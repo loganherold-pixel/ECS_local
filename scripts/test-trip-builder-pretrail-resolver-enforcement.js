@@ -248,8 +248,12 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'routeContextPreTrailCandidateCount > 0',
-  'Trip Builder draft POI availability should treat Route Context supply candidates as provider-backed candidates',
+  'preTrailProviderStateFromRequestStatus(smartResupplyFuelRequest.status)',
+  'Trip Builder draft POI state should derive fuel availability from the actual terminal request state',
+);
+assert.ok(
+  /preTrailProviderStateFromRequestStatus\([\s\S]*?smartResupplySupplyRequest\.status[\s\S]*?\)/.test(screen),
+  'Trip Builder draft POI state should keep grocery/supply request lifecycle independent from fuel or a combined stop',
 );
 assertIncludes(
   screen,
@@ -258,8 +262,13 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'const selectedPreTrailSupplyAnchorCoordinate = selectedSmartFuel?.coordinate ?? selectedTrailheadResupplyAnchorCoordinate',
-  'Grocery/supply lookup should anchor to the selected refuel when one exists',
+  'const selectedPreTrailSupplyAnchorCoordinate = useMemo(',
+  'Grocery/supply lookup should use a stable anchor derived from the selected refuel when one exists',
+);
+assertIncludes(
+  screen,
+  'selectedSmartFuelLatitude != null && selectedSmartFuelLongitude != null',
+  'Grocery/supply lookup should prefer the selected refuel coordinate before the trailhead fallback',
 );
 assertIncludes(
   screen,

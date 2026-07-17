@@ -320,6 +320,7 @@ export async function searchRoadDestinations(params: {
   } | null;
   limit?: number;
   forwardGeocodeFallback?: boolean;
+  throwOnSearchboxError?: boolean;
 }): Promise<RoadNavSearchSuggestion[]> {
   const trimmed = params.query.trim();
   if (!trimmed) return [];
@@ -339,6 +340,7 @@ export async function searchRoadDestinations(params: {
     requestSignature,
   };
   let fallbackReason = 'searchbox_empty';
+  let searchboxFailed = false;
 
   const searchboxUrl = new URL(SEARCHBOX_URL);
   searchboxUrl.searchParams.set('q', trimmed);
@@ -380,6 +382,7 @@ export async function searchRoadDestinations(params: {
       return suggestions;
     }
   } catch (error) {
+    searchboxFailed = true;
     const message = error instanceof Error ? error.message : String(error ?? '');
     fallbackReason = /429|rate|quota|limit/i.test(message) ? 'quota_limited' : 'searchbox_suggest_error';
     recordMapboxSearchBillingEvent({
@@ -393,6 +396,9 @@ export async function searchRoadDestinations(params: {
   }
 
   if (params.forwardGeocodeFallback === false) {
+    if (searchboxFailed && params.throwOnSearchboxError) {
+      throw new Error('Mapbox Search Box suggestion request failed.');
+    }
     return [];
   }
 

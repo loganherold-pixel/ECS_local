@@ -51,6 +51,7 @@ type CandidateRouteMetrics = {
   driveDurationToSupplyChainAnchorSeconds: number | null;
   detourDistanceMeters: number | null;
   detourDurationSeconds: number | null;
+  accessStatus: NonNullable<SupplyCandidate['accessStatus']>;
 };
 
 type CandidateScoreComponents = {
@@ -122,6 +123,38 @@ function providerConfidence(place: PlaceCandidate): Confidence {
   const value = finitePositiveNumber(place.confidence);
   if (value != null) return confidence(value, ['Provider supplied normalized place confidence.']);
   return confidence(0.62, ['ECS normalized place provider output.']);
+}
+
+function normalizedSupplyAccessStatus(value: unknown): NonNullable<SupplyCandidate['accessStatus']> {
+  if (value === true) return 'accessible';
+  if (value === false) return 'inaccessible';
+  const normalized = String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['accessible', 'reachable', 'open', 'available'].includes(normalized)) return 'accessible';
+  if (['inaccessible', 'unreachable', 'blocked', 'restricted', 'closed'].includes(normalized)) return 'inaccessible';
+  return 'unknown';
+}
+
+function providerSupplyAccessStatus(place: PlaceCandidate): NonNullable<SupplyCandidate['accessStatus']> {
+  const metadata = place.providerMetadata ?? {};
+  const nested = [metadata.placeProviderMetadata, metadata.providerMetadata]
+    .find((value): value is RouteContextProviderMetadata => !!value && typeof value === 'object' && !Array.isArray(value));
+  return normalizedSupplyAccessStatus(
+    metadata.accessStatus ??
+    metadata.access_status ??
+    metadata.routeAccessStatus ??
+    metadata.reachable ??
+    nested?.accessStatus ??
+    nested?.access_status ??
+    nested?.routeAccessStatus ??
+    nested?.reachable,
+  );
+}
+
+function matrixAccessStatus(cell: RouteMatrixCell | null): NonNullable<SupplyCandidate['accessStatus']> {
+  if (!cell) return 'unknown';
+  if (cell.status === 'unreachable') return 'inaccessible';
+  if (cell.status === 'ok' || finitePositiveNumber(cell.distanceMeters) != null) return 'accessible';
+  return 'unknown';
 }
 
 function providerMetadata(
@@ -443,6 +476,7 @@ function placeToCandidate(args: {
     driveDurationToSupplyChainAnchorSeconds: null,
     detourDistanceMeters: null,
     detourDurationSeconds: null,
+    accessStatus: 'unknown',
   };
   const distanceToRefuelMeters = args.supplyChainAnchor?.role === 'refuel'
     ? distanceToSupplyChainAnchorMeters
@@ -479,6 +513,7 @@ function placeToCandidate(args: {
     driveDurationToRefuelSeconds: args.supplyChainAnchor?.role === 'refuel' ? metrics.driveDurationToSupplyChainAnchorSeconds : null,
     detourDistanceMeters: metrics.detourDistanceMeters,
     detourDurationSeconds: metrics.detourDurationSeconds,
+    accessStatus: metrics.accessStatus === 'unknown' ? providerSupplyAccessStatus(args.place) : metrics.accessStatus,
     approachScore: scoreComponents.approachScore,
     trailheadProximityScore: scoreComponents.trailheadProximityScore,
     refuelAdjacencyScore: scoreComponents.refuelAdjacencyScore,
@@ -559,6 +594,7 @@ async function routeMetricsForCandidates(
           driveDurationToSupplyChainAnchorSeconds: null,
           detourDistanceMeters: null,
           detourDurationSeconds: null,
+          accessStatus: matrixAccessStatus(candidateToTrailhead),
         });
       });
       return empty;
@@ -595,6 +631,13 @@ async function routeMetricsForCandidates(
       const detourDurationSeconds = approachDuration != null && driveDurationToTrailheadSeconds != null && directDuration != null
         ? Math.max(0, Math.round(approachDuration + driveDurationToTrailheadSeconds - directDuration))
         : null;
+      const originAccess = matrixAccessStatus(originToCandidate);
+      const trailheadAccess = matrixAccessStatus(candidateToTrailhead);
+      const accessStatus = originAccess === 'inaccessible' || trailheadAccess === 'inaccessible'
+        ? 'inaccessible'
+        : originAccess === 'accessible' && trailheadAccess === 'accessible'
+          ? 'accessible'
+          : 'unknown';
       empty.set(candidate.id, {
         driveDistanceToTrailheadMeters: driveDistanceToTrailheadMeters == null ? null : Math.round(driveDistanceToTrailheadMeters),
         driveDurationToTrailheadSeconds: driveDurationToTrailheadSeconds == null ? null : Math.round(driveDurationToTrailheadSeconds),
@@ -602,6 +645,7 @@ async function routeMetricsForCandidates(
         driveDurationToSupplyChainAnchorSeconds: approachDuration == null ? null : Math.round(approachDuration),
         detourDistanceMeters,
         detourDurationSeconds,
+        accessStatus,
       });
     });
   } catch {

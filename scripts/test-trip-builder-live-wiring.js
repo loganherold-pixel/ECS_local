@@ -42,8 +42,8 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'origin: liveRouteContextOrigin,',
-  'Route Context prefetch and lookups should use live GPS as the approach origin',
+  'origin: planningRouteContextOrigin,',
+  'Route Context prefetch and lookups should use the stable captured trip origin',
 );
 assertIncludes(
   screen,
@@ -57,8 +57,8 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'const [liveApproachRoutePoints',
-  'Trip Builder should keep live approach geometry for the itinerary builder',
+  'const liveApproachRoutePoints = useMemo(',
+  'Trip Builder should expose only approach geometry matching the current request fingerprint',
 );
 assertIncludes(
   screen,
@@ -67,8 +67,8 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'userLocation: liveTripBuilderUserLocation ?? handoffItinerary?.userStart ?? null',
-  'Trip Builder should recover pending GPS handoffs when live location becomes available',
+  'userLocation: selectedTripOrigin ?? handoffItinerary?.userStart ?? null',
+  'Trip Builder should build the itinerary from the selected trip origin instead of reranking on GPS jitter',
 );
 assertIncludes(
   screen,
@@ -77,13 +77,13 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'preTrailProviderAvailable: preTrailProviderAvailableForDraft',
-  'Trip Builder should report the POI provider as wired once searches have run',
+  'preTrailProviderStates: preTrailProviderStatesForDraft',
+  'Trip Builder should preserve independent pending, empty, and error states for fuel and supply provider requests',
 );
 assertIncludes(
   screen,
-  'currentLocation: liveTripBuilderUserLocation,',
-  'Trip plans should pass current location into smart resupply planning',
+  'currentLocation: selectedTripOrigin,',
+  'Trip plans should pass the stable selected origin into Smart Resupply planning',
 );
 assertIncludes(
   screen,

@@ -111,6 +111,33 @@ export function guidanceRouteDistanceMeters(
   return EARTH_RADIUS_M * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(Math.max(0, 1 - h)));
 }
 
+/**
+ * Keeps canonical route geometry intact while orienting it from a confirmed
+ * start/trailhead. The caller remains responsible for validating the route;
+ * this helper only chooses which existing endpoint is the start.
+ */
+export function orientGuidanceRouteFromStart<T extends GuidanceRouteCoordinate>(
+  routeGeometry: T[],
+  preferredStart: GuidanceRouteCoordinate | null | undefined,
+): T[] {
+  const geometry = Array.isArray(routeGeometry) ? routeGeometry.slice() : [];
+  if (
+    geometry.length < 2 ||
+    !isValidCoordinate(preferredStart) ||
+    !isValidCoordinate(geometry[0]) ||
+    !isValidCoordinate(geometry[geometry.length - 1])
+  ) {
+    return geometry;
+  }
+
+  const firstDistanceM = guidanceRouteDistanceMeters(preferredStart, geometry[0]);
+  const lastDistanceM = guidanceRouteDistanceMeters(
+    preferredStart,
+    geometry[geometry.length - 1],
+  );
+  return lastDistanceM < firstDistanceM ? geometry.reverse() : geometry;
+}
+
 export function buildGuidanceRouteDistanceIndex(
   routeGeometry: GuidanceRouteCoordinate[],
 ): GuidanceRouteDistanceIndex {

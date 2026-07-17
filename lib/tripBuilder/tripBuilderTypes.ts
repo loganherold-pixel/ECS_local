@@ -233,9 +233,17 @@ export type ItineraryPreTrailStopBucketStatus =
   | 'missing_anchor'
   | 'not_requested';
 
+export type ItineraryPreTrailProviderState =
+  | 'pending'
+  | 'ready'
+  | 'empty'
+  | 'error'
+  | 'unavailable';
+
 export type ItineraryPreTrailStopSearchSummary = {
   bucket: ItineraryPreTrailStopBucket;
   status: ItineraryPreTrailStopBucketStatus;
+  providerState?: ItineraryPreTrailProviderState | null;
   anchorCoordinate: GeoPoint | null;
   stopCount: number;
   provider?: string | null;
@@ -415,6 +423,7 @@ export type TripBuilderRouteContextInput = {
     driveDurationToTrailheadSeconds?: number | null;
     detourDistanceMeters?: number | null;
     detourDurationSeconds?: number | null;
+    accessStatus?: 'accessible' | 'inaccessible' | 'unknown' | string | null;
     openStatus?: 'open' | 'closed' | 'temporarily_closed' | 'unknown' | string | null;
     rating?: number | null;
     confidence?: {
@@ -660,6 +669,7 @@ export type TripPlanStop = {
   etaOffsetHours: number | null;
   source: string;
   confidence: TripBuilderConfidence;
+  approachProgressRatio?: number | null;
   guidanceRole?: TripPlanGuidanceRole;
   referenceType?: TripPlanReferenceType | null;
   notes?: string[];
@@ -759,6 +769,28 @@ export type ResupplyPoint = {
   reliability?: TripBuilderConfidence | null;
   source?: string | null;
   notes?: string[] | null;
+  accessStatus?: 'accessible' | 'inaccessible' | 'unknown' | null;
+  placeIdentity?: string | null;
+  categoryCoverage?: Array<'fuel' | 'food_supplies'> | null;
+  selectionState?: 'operator_selected' | 'route_context_selected' | 'candidate' | 'route_waypoint' | null;
+  approachEvidence?: {
+    rank: number | null;
+    score: number | null;
+    progressRatio: number | null;
+    distanceFromOriginMiles: number | null;
+    distanceBeforeTrailheadMiles: number | null;
+    distanceBeforeRemoteEntryMiles: number | null;
+    corridorOffsetMiles: number | null;
+    detourDistanceMiles: number | null;
+    detourDurationMinutes: number | null;
+    detourSource: 'provider_route' | 'corridor_offset_estimate' | 'unavailable';
+    routeAwareConfidence: TripBuilderConfidence;
+    beforeTrailhead: boolean | null;
+    beforeRemoteEntry: boolean | null;
+    remoteEntrySource: string;
+    remoteEntryEstimated: boolean;
+    operatingStatus: 'open' | 'closed' | 'temporarily_closed' | 'unknown';
+  } | null;
 };
 
 export type ResupplyRecommendation = {

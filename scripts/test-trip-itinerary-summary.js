@@ -110,6 +110,36 @@ assert.strictEqual(fullSummary.phases.find((phase) => phase.key === 'fuel_suppli
 assert.strictEqual(fullSummary.phases.find((phase) => phase.key === 'trail_route').status, 'available');
 assert.strictEqual(fullSummary.phases.find((phase) => phase.key === 'waypoints').status, 'available');
 
+const combinedSummaryStop = {
+  id: 'summary-combined-stop',
+  title: 'Combined Fuel and Market',
+  coordinate: { latitude: 37.94, longitude: -110.11 },
+  confidence: 'medium',
+  source: 'operator_selected',
+  metadata: {
+    placeIdentity: 'provider-place:mapbox:summary-combined-stop',
+    mapboxId: 'summary-combined-stop',
+    categoryCoverage: ['fuel', 'food_supplies'],
+  },
+};
+const combinedSummaryItinerary = buildTripItineraryFromSuggestedRoute({
+  suggestedRoute: routeWithTrailIntelligence,
+  userLocation,
+  selectedPreTrailOptions: {
+    fuel: [combinedSummaryStop],
+    grocery: [combinedSummaryStop],
+  },
+  generatedAt: '2026-05-30T12:00:00.000Z',
+});
+const combinedSummary = getTripItinerarySummary(combinedSummaryItinerary);
+const combinedFuelSupplyPhase = combinedSummary.phases.find((phase) => phase.key === 'fuel_supplies');
+assert.strictEqual(combinedFuelSupplyPhase.count, 1);
+assert.strictEqual(
+  combinedFuelSupplyPhase.detail,
+  '1 stop',
+  'One physical stop covering fuel and groceries must not be double-counted in the itinerary summary.',
+);
+
 const missingTrailGeometryItinerary = buildTripItineraryFromSuggestedRoute({
   suggestedRoute: {
     id: 'summary-missing-trail',

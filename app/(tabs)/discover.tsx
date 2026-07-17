@@ -941,9 +941,6 @@ function DiscoverScreenInner() {
   const [aiPreviewRoute, setAiPreviewRoute] = useState<AIGeneratedRoute | null>(null);
   const [aiPreviewVisible, setAiPreviewVisible] = useState(false);
   const [trailPackPreview, setTrailPackPreview] = useState<ECSTrailPackDiscoveryItem | null>(null);
-  const [trailPackPreviewDetailStatus, setTrailPackPreviewDetailStatus] =
-    useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
-  const [trailPackPreviewDetailError, setTrailPackPreviewDetailError] = useState<string | null>(null);
   const [trailPackFeedbackEvents, setTrailPackFeedbackEvents] = useState(() => getTrailPackFeedbackSnapshot());
   const [trailPackSubmissionSnapshot, setTrailPackSubmissionSnapshot] = useState(() =>
     trailPackSubmissionStore.getSnapshot(),
@@ -1021,8 +1018,6 @@ function DiscoverScreenInner() {
 
   const mountedRef = useRef(true);
   const routeCatalogManualRetryAbortRef = useRef<AbortController | null>(null);
-  const trailPackPreviewRequestRef = useRef(0);
-  const trailPackDetailAbortRef = useRef<AbortController | null>(null);
   const routeCatalogPaginationGenerationRef = useRef(0);
   const routeCatalogPaginationRequestRef = useRef<ExploreCatalogPaginationRequest | null>(null);
   const exploreRouteIntentGenerationRef = useRef(0);
@@ -1048,8 +1043,6 @@ function DiscoverScreenInner() {
       mountedRef.current = false;
       routeCatalogManualRetryAbortRef.current?.abort();
       routeCatalogManualRetryAbortRef.current = null;
-      trailPackDetailAbortRef.current?.abort();
-      trailPackDetailAbortRef.current = null;
       routeCatalogPaginationRequestRef.current?.controller.abort('unmount');
       routeCatalogPaginationRequestRef.current = null;
       exploreRouteIntentRequestRef.current?.controller.abort('unmount');
@@ -2113,6 +2106,7 @@ function DiscoverScreenInner() {
   const stageTripBuilderItineraryHandoff = useCallback((route: ExpeditionOpportunity) => {
     saveTripBuilderRouteHandoff(route as any, {
       userLocation: tripBuilderHandoffUserLocation,
+      deferItineraryBuild: true,
     });
   }, [tripBuilderHandoffUserLocation]);
 
@@ -2466,54 +2460,28 @@ function DiscoverScreenInner() {
     [beginExploreRouteIntentRequest, confirmRouteHandoffAgainstActiveGuidance, finishExploreRouteIntentRequest, guardGuidanceReadyRouteHandoff, guardHydratedGuidanceReadyHandoff, hasGPSFix, hydrateRouteCatalogOpportunityForHandoff, isCurrentExploreRouteIntentRequest, pushSingleFlight, stageExploreReadinessPreview, userLat, userLng],
   );
 
-  const handleBuildTripFromRoute = useCallback(
-    async (
-      route: ExpeditionOpportunity,
-      options: {
-        request?: ExploreRouteIntentRequest;
-        routeAlreadyHydrated?: boolean;
-      } = {},
-    ) => {
-      hapticMicro();
-      if (!guardGuidanceReadyRouteHandoff(route, 'trip_builder')) {
-        if (options.request) finishExploreRouteIntentRequest(options.request);
-        return;
-      }
-      const request = options.request ?? beginExploreRouteIntentRequest();
-      if (!isCurrentExploreRouteIntentRequest(request)) return;
-      try {
-        const routeForHandoff = options.routeAlreadyHydrated
-          ? route
-          : await hydrateRouteCatalogOpportunityForHandoff(route, {
-              requireFullCatalogDetail: true,
-              signal: request.controller.signal,
-            });
-        if (!isCurrentExploreRouteIntentRequest(request)) return;
-        if (!guardHydratedGuidanceReadyHandoff(routeForHandoff, 'trip_builder')) return;
-        stageExploreReadinessPreview(routeForHandoff);
-        stageTripBuilderItineraryHandoff(routeForHandoff);
-        setAnalysisVisible(false);
-        setSelectedOpportunity(null);
-        setAiPreviewVisible(false);
-        setAiPreviewRoute(null);
-        setTrailPackPreview(null);
-        if (!isCurrentExploreRouteIntentRequest(request)) return;
-        pushSingleFlight({
-          pathname: '/explore-trip-builder',
-          params: { routeId: routeForHandoff.id, setup: '1' },
-        } as any);
-      } catch {
-        if (!isCurrentExploreRouteIntentRequest(request)) return;
-        Alert.alert(
-          'Verified route unavailable',
-          'Verified route detail could not be loaded. Retry when the route provider is available.',
-        );
-      } finally {
-        finishExploreRouteIntentRequest(request);
-      }
-    },
-    [beginExploreRouteIntentRequest, finishExploreRouteIntentRequest, guardGuidanceReadyRouteHandoff, guardHydratedGuidanceReadyHandoff, hydrateRouteCatalogOpportunityForHandoff, isCurrentExploreRouteIntentRequest, pushSingleFlight, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff],
-  );
+  const handleBuildTripFromRoute = useCallback((route: ExpeditionOpportunity) => {
+    hapticMicro();
+    const availability = classifyExploreRouteAvailability(route);
+    if (!availability.tripBuilder.eligible) {
+      Alert.alert(
+        'Trip Builder unavailable',
+        availability.tripBuilder.reason ??
+          'This route does not have enough safe summary identity and endpoint data for Trip Builder.',
+      );
+      return;
+    }
+    stageTripBuilderItineraryHandoff(route);
+    setAnalysisVisible(false);
+    setSelectedOpportunity(null);
+    setAiPreviewVisible(false);
+    setAiPreviewRoute(null);
+    setTrailPackPreview(null);
+    pushSingleFlight({
+      pathname: '/explore-trip-builder',
+      params: { routeId: route.id, setup: '1' },
+    } as any);
+  }, [pushSingleFlight, stageTripBuilderItineraryHandoff]);
 
   const handlePrepareOfflineFromRoute = useCallback(
     async (route: ExpeditionOpportunity) => {
@@ -2646,60 +2614,10 @@ function DiscoverScreenInner() {
 
   const handlePreviewTrailPack = useCallback((trailPack: ECSTrailPackDiscoveryItem) => {
     hapticMicro();
-    trailPackDetailAbortRef.current?.abort();
-    const controller = new AbortController();
-    trailPackDetailAbortRef.current = controller;
-    const requestId = trailPackPreviewRequestRef.current + 1;
-    trailPackPreviewRequestRef.current = requestId;
     setTrailPackPreview(trailPack);
-
-    if (!trailPack.catalogVerification?.publicRecommendation && trailPack.source !== 'ecs_validated') {
-      setTrailPackPreviewDetailStatus('idle');
-      setTrailPackPreviewDetailError(null);
-      return;
-    }
-
-    setTrailPackPreviewDetailStatus('loading');
-    setTrailPackPreviewDetailError(null);
-    void fetchRouteCatalogTrailPackDetail(trailPack, {
-      signal: controller.signal,
-      cancellationReason: 'superseded',
-    })
-      .then((detail) => {
-        if (!mountedRef.current || trailPackPreviewRequestRef.current !== requestId) return;
-        setTrailPackPreview((current) => {
-          if (!current || current.id !== trailPack.id) return current;
-          return {
-            ...current,
-            ...detail,
-            distanceFromUserMiles: current.distanceFromUserMiles,
-            confidenceScore: current.confidenceScore,
-            confidenceReasons: current.confidenceReasons,
-            evaluatedConfidence: current.evaluatedConfidence,
-          };
-        });
-        setTrailPackPreviewDetailStatus('ready');
-      })
-      .catch((error) => {
-        if (!mountedRef.current || trailPackPreviewRequestRef.current !== requestId) return;
-        setTrailPackPreviewDetailStatus('error');
-        setTrailPackPreviewDetailError(
-          error instanceof Error ? error.message : 'Verified route detail unavailable.',
-        );
-      })
-      .finally(() => {
-        if (trailPackDetailAbortRef.current === controller) {
-          trailPackDetailAbortRef.current = null;
-        }
-      });
   }, []);
 
   const handleCloseTrailPackPreview = useCallback(() => {
-    trailPackDetailAbortRef.current?.abort();
-    trailPackDetailAbortRef.current = null;
-    trailPackPreviewRequestRef.current += 1;
-    setTrailPackPreviewDetailStatus('idle');
-    setTrailPackPreviewDetailError(null);
     setTrailPackPreview(null);
   }, []);
 
@@ -2889,8 +2807,7 @@ function DiscoverScreenInner() {
   );
 
   const handleBuildTripFromExploreWizardCandidate = useCallback(
-    async (candidate: ExploreWizardRouteCandidate) => {
-      hapticMicro();
+    (candidate: ExploreWizardRouteCandidate) => {
       if (!candidate.tripBuilderEligible) {
         Alert.alert(
           'Trip Builder unavailable',
@@ -2899,79 +2816,9 @@ function DiscoverScreenInner() {
         );
         return;
       }
-      if (candidate.detailState === 'deferred') {
-        stageTripBuilderItineraryHandoff(candidate.route);
-        setAnalysisVisible(false);
-        setSelectedOpportunity(null);
-        setAiPreviewVisible(false);
-        setAiPreviewRoute(null);
-        setTrailPackPreview(null);
-        pushSingleFlight({
-          pathname: '/explore-trip-builder',
-          params: { routeId: candidate.route.id, setup: '1' },
-        } as any);
-        return;
-      }
-      if (!candidate.guidanceReady) {
-        Alert.alert(
-          'Trip Builder unavailable',
-          candidate.guidanceUnavailableReason ?? 'This route is not ready for a planning handoff.',
-        );
-        return;
-      }
-      if (!guardGuidanceReadyRouteHandoff(candidate.route, 'trip_builder_candidate')) return;
-      const request = beginExploreRouteIntentRequest();
-      let delegatedToBuildHandler = false;
-      try {
-        const hydratedCandidate = await hydrateExploreWizardCandidateForPlanning(candidate, {
-          signal: request.controller.signal,
-        });
-        if (!isCurrentExploreRouteIntentRequest(request)) return;
-        if (!guardGuidanceReadyRouteHandoff(
-          hydratedCandidate.route,
-          'trip_builder_candidate_hydrated',
-        )) return;
-        await saveExploreRouteForPlanning(hydratedCandidate);
-        if (!isCurrentExploreRouteIntentRequest(request)) return;
-        setFavoritesSnapshot(getExploreFavoritesSnapshot());
-        setLocalRouteAssetRevision((current) => current + 1);
-        delegatedToBuildHandler = true;
-        await handleBuildTripFromRoute(hydratedCandidate.route, {
-          request,
-          routeAlreadyHydrated: true,
-        });
-      } catch (error) {
-        if (!isCurrentExploreRouteIntentRequest(request)) return;
-        const message = error instanceof Error
-          ? error.message
-          : 'Explore route could not be saved before Trip Builder.';
-        reportRecoverableFailure({
-          severity: 'low',
-          issueTitle: 'Explore Trip Builder route save before build unavailable',
-          ecsArea: 'explore',
-          message,
-          signature: `explore_tripbuilder_build_save_unavailable:${candidate.id}`,
-          metadata: {
-            routeId: candidate.route.id,
-            routeName: candidate.route.name,
-            sourceKind: candidate.sourceKind,
-          },
-        });
-        Alert.alert('Build unavailable', message);
-      } finally {
-        if (!delegatedToBuildHandler) finishExploreRouteIntentRequest(request);
-      }
+      handleBuildTripFromRoute(candidate.route);
     },
-    [
-      beginExploreRouteIntentRequest,
-      finishExploreRouteIntentRequest,
-      guardGuidanceReadyRouteHandoff,
-      handleBuildTripFromRoute,
-      hydrateExploreWizardCandidateForPlanning,
-      isCurrentExploreRouteIntentRequest,
-      pushSingleFlight,
-      stageTripBuilderItineraryHandoff,
-    ],
+    [handleBuildTripFromRoute],
   );
 
   const handleStartExploreWizardCandidate = useCallback(
@@ -7544,8 +7391,8 @@ function DiscoverScreenInner() {
           onCacheOffline={() => {
             if (trailPackPreview) handleCacheTrailPackOffline(trailPackPreview);
           }}
-          detailLoading={trailPackPreviewDetailStatus === 'loading'}
-          detailError={trailPackPreviewDetailError}
+          detailLoading={false}
+          detailError={null}
         />
 
         <TrailPackSubmissionModal

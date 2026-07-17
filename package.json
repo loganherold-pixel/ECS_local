@@ -462,6 +462,8 @@
     "test:trip-builder-camp-suggestion-pins": "node ./scripts/test-trip-builder-camp-suggestion-pins.js",
     "test:trip-builder-reference-pins": "node ./scripts/test-trip-builder-reference-pins.js",
     "test:trip-builder-core": "node ./scripts/test-trip-builder-core.js",
+    "test:trip-builder-route-preparation": "node ./scripts/test-trip-builder-route-preparation.js",
+    "test:trip-builder-route-handoff-itinerary": "node ./scripts/test-trip-builder-route-handoff-itinerary.js",
     "test:trip-builder-ui": "node ./scripts/test-trip-builder-ui.js",
     "test:trip-builder-e2e-hardening": "node ./scripts/test-trip-builder-e2e-hardening.js",
     "test:smart-resupply-planner": "node ./scripts/test-smart-resupply-planner.js",

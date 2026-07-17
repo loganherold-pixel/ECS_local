@@ -31,6 +31,7 @@ import type {
   ResupplyPoint,
 } from './tripBuilderTypes';
 import { buildSmartResupplyPlan } from './smartResupplyPlanner';
+import { APPROACH_RESUPPLY_POLICY } from './approachResupplyPlanner';
 
 const DEFAULT_TRAIL_SPEED_MPH = 18;
 const MAX_SCENIC_WAYPOINT_STOPS = 3;
@@ -88,6 +89,11 @@ function clamp(value: number, min: number, max: number): number {
 function normalizeConfidence(value: unknown): TripBuilderConfidence {
   if (value === 'high' || value === 'medium' || value === 'low' || value === 'unknown') return value;
   return 'unknown';
+}
+
+function normalizeResupplyAccessStatus(value: unknown): ResupplyPoint['accessStatus'] {
+  if (value === 'accessible' || value === 'inaccessible' || value === 'unknown') return value;
+  return null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -784,6 +790,7 @@ function resupplyPointFromRecord(value: unknown, index: number): ResupplyPoint |
     distanceFromEndMiles: finiteNumber(record.distanceFromEndMiles),
     reliability: normalizeConfidence(record.reliability ?? record.confidence),
     source: sourceFromRecord(record, 'route_support_metadata'),
+    accessStatus: normalizeResupplyAccessStatus(record.accessStatus ?? record.access_status),
     notes: Array.isArray(record.notes) ? record.notes.map(String) : null,
   };
 }
@@ -894,28 +901,37 @@ function buildSupportStops(
     })
     .filter((stop): stop is TripPlanStop => stop != null);
 
-  const resupplyStops = suppliedResupplyPoints.map((point, index): TripPlanStop => {
-    const type =
-      point.category === 'fuel' ? 'fuel' :
-      point.category === 'water' ? 'water' :
-      point.category === 'food_supplies' ? 'supply' :
-      point.category === 'repair' ? 'repair' :
-      point.category === 'medical' ? 'medical' :
-      'exit';
-    return {
-      id: `${routeId}-resupply-${point.id || index + 1}`,
-      type,
-      title: routePointStopTitle(type, point.name),
-      sequence: 1,
-      plannedDay: 1,
-      coordinate: point.location ?? null,
-      routeMileMarker: finiteNumber(point.routeMileMarker),
-      etaOffsetHours: null,
-      source: point.source ?? 'resupply_point',
-      confidence: normalizeConfidence(point.reliability),
-      notes: point.notes ?? ['Support point supplied by route planning data. Verify current availability before departure.'],
-    };
-  });
+  const resupplyStops = suppliedResupplyPoints
+    .filter((point) => point.accessStatus !== 'inaccessible')
+    .filter((point) => point.approachEvidence?.beforeTrailhead !== false)
+    .filter((point) => point.approachEvidence?.beforeRemoteEntry !== false)
+    .filter((point) => point.approachEvidence?.operatingStatus !== 'closed' &&
+      point.approachEvidence?.operatingStatus !== 'temporarily_closed')
+    .filter((point) => point.approachEvidence?.detourDistanceMiles == null ||
+      point.approachEvidence.detourDistanceMiles <= APPROACH_RESUPPLY_POLICY.maximumRouteDetourMiles)
+    .map((point, index): TripPlanStop => {
+      const type =
+        point.category === 'fuel' ? 'fuel' :
+        point.category === 'water' ? 'water' :
+        point.category === 'food_supplies' ? 'supply' :
+        point.category === 'repair' ? 'repair' :
+        point.category === 'medical' ? 'medical' :
+        'exit';
+      return {
+        id: `${routeId}-resupply-${point.id || index + 1}`,
+        type,
+        title: routePointStopTitle(type, point.name),
+        sequence: 1,
+        plannedDay: 1,
+        coordinate: point.location ?? null,
+        routeMileMarker: finiteNumber(point.routeMileMarker),
+        etaOffsetHours: null,
+        source: point.source ?? 'resupply_point',
+        confidence: normalizeConfidence(point.reliability),
+        approachProgressRatio: finiteNumber(point.approachEvidence?.progressRatio),
+        notes: point.notes ?? ['Support point supplied by route planning data. Verify current availability before departure.'],
+      };
+    });
 
   const seen = new Set<string>();
   return [...waypointStops, ...resupplyStops]
@@ -1081,12 +1097,6 @@ function isRequiredGuidanceStop(stop: TripPlanStop): boolean {
 
 function isPreRouteSupportStop(stop: TripPlanStop): boolean {
   return (stop.type === 'fuel' || stop.type === 'supply') && (stop.routeMileMarker ?? 0) <= 0;
-}
-
-function preRouteSupportStopOrder(stop: TripPlanStop): number {
-  if (stop.type === 'fuel') return 0;
-  if (stop.type === 'supply') return 1;
-  return 2;
 }
 
 function riskFromInputs(route: TripPlanRouteSummary, priorities: TripPriority[]): TripPlanSegment['riskLevel'] {
@@ -1340,7 +1350,12 @@ export function buildTripPlan(args: BuildTripPlanArgs): TripPlan {
     const leftPreRouteSupport = isPreRouteSupportStop(left);
     const rightPreRouteSupport = isPreRouteSupportStop(right);
     if (leftPreRouteSupport && rightPreRouteSupport) {
-      return preRouteSupportStopOrder(left) - preRouteSupportStopOrder(right) || left.sequence - right.sequence;
+      const leftProgress = finiteNumber(left.approachProgressRatio);
+      const rightProgress = finiteNumber(right.approachProgressRatio);
+      if (leftProgress != null && rightProgress != null && leftProgress !== rightProgress) {
+        return leftProgress - rightProgress;
+      }
+      return left.sequence - right.sequence;
     }
     if (leftPreRouteSupport && right.type === 'start') return -1;
     if (rightPreRouteSupport && left.type === 'start') return 1;

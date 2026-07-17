@@ -107,20 +107,50 @@ assert.ok(
   'Missing GPS should not crash and should remain visible in confidence data.',
 );
 
+const summaryOnlyHandoff = buildTripBuilderSuggestedRouteHandoff({
+  id: 'summary-only-route',
+  name: 'Summary Only Route',
+  description: 'Explore summary metadata without detail geometry.',
+  startLat: 38,
+  startLng: -110,
+  routeMetadata: {
+    source: 'trail_pack',
+    trailPackId: 'summary-only-route',
+    routeGeometryMode: 'omitted',
+  },
+}, {
+  deferItineraryBuild: true,
+  createdAt: '2026-07-16T12:00:00.000Z',
+});
+
+assert.strictEqual(
+  summaryOnlyHandoff.draftItinerary,
+  null,
+  'Explore summary handoff must not prebuild an itinerary or detailed geometry.',
+);
+assert.strictEqual(summaryOnlyHandoff.route.itinerary, undefined);
+assert.strictEqual(
+  summaryOnlyHandoff.route.routeMetadata.tripBuilderDraftItineraryId,
+  null,
+  'The existing persisted handoff should carry summary identity without claiming a prepared itinerary.',
+);
+
 assert.ok(
   discoverSource.includes('stageTripBuilderItineraryHandoff(op);') &&
     discoverSource.includes('setAnalysisVisible(true);'),
   'Opening an Explore suggested route should stage the Trip Builder itinerary draft while preserving the analysis modal.',
 );
 assert.ok(
-  discoverSource.includes('stageTripBuilderItineraryHandoff(route);') &&
+  discoverSource.includes('deferItineraryBuild: true') &&
+    discoverSource.includes('stageTripBuilderItineraryHandoff(route);') &&
     discoverSource.includes("pathname: '/explore-trip-builder'"),
-  'Build Trip should keep the existing Trip Builder navigation while staging the itinerary draft.',
+  'Build Trip should keep the existing persisted handoff while deferring geometry preparation.',
 );
 assert.ok(
-  discoverSource.includes('await saveNavigationHandoffPayload(confirmedPayload);') &&
-    discoverSource.includes("router.push('/navigate');"),
-  'Explore route preview/guidance handoff should still stage Navigate exactly through the existing flow.',
+  tripBuilderSource.includes('continueTripBuilderRoutePreparation(started, selectedRoute') &&
+    tripBuilderSource.includes('saveTripBuilderRouteHandoff(ready.canonicalRoute') &&
+    tripBuilderSource.includes("routePreparationState.status === 'awaiting_trailhead_selection'"),
+  'Trip Builder should own detail loading, canonical persistence, and trailhead confirmation.',
 );
 assert.ok(
   tripBuilderSource.includes('handoffDraftItinerary') &&

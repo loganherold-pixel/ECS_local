@@ -87,10 +87,10 @@ const nearVsFar = rankPreTrailStops({
 
 assert.strictEqual(statusFor(nearVsFar, 'fuel').status, 'ranked');
 assert.strictEqual(nearVsFar.preTrailStops.fuel[0].id, 'near-fuel');
+assert.strictEqual(nearVsFar.preTrailStops.fuel.length, 1);
 assert.ok(
-  nearVsFar.preTrailStops.fuel[0].metadata.distanceFromTrailheadMiles <
-    nearVsFar.preTrailStops.fuel[1].metadata.distanceFromTrailheadMiles,
-  'Closer fuel should rank ahead of far fuel when other data is comparable.',
+  nearVsFar.warnings.some((warning) => /Far Fuel.*behind the trip origin/i.test(warning)),
+  'A candidate behind the approach origin should be excluded with a truthful diagnostic.',
 );
 assert.strictEqual(nearVsFar.preTrailStops.fuel[0].metadata.distanceBasis, 'trailhead_start');
 assert.strictEqual(nearVsFar.preTrailStops.fuel[0].metadata.providerPlaceId, 'mapbox-near-fuel');
@@ -125,10 +125,10 @@ const approachPreferred = rankPreTrailStops({
 });
 
 assert.strictEqual(approachPreferred.preTrailStops.fuel[0].id, 'approach-low-detour');
+assert.strictEqual(approachPreferred.preTrailStops.fuel.length, 1);
 assert.ok(
-  approachPreferred.preTrailStops.fuel[0].metadata.routeDeviationMiles <
-    approachPreferred.preTrailStops.fuel[1].metadata.routeDeviationMiles,
-  'Stops along the approach route should beat a near stop with a large detour.',
+  approachPreferred.warnings.some((warning) => /Nearest Off Approach.*deviation exceeds/i.test(warning)),
+  'A provider-routed detour beyond the centralized limit should be excluded with evidence.',
 );
 assert.strictEqual(approachPreferred.preTrailStops.fuel[0].metadata.beforeTrailEntry, true);
 
@@ -201,9 +201,10 @@ const closedVsOpen = rankPreTrailStops({
 });
 
 assert.strictEqual(closedVsOpen.preTrailStops.fuel[0].id, 'open-farther');
+assert.strictEqual(closedVsOpen.preTrailStops.fuel.length, 1);
 assert.ok(
-  closedVsOpen.preTrailStops.fuel[1].notes.some((note) => note.includes('closed')),
-  'Closed provider status should be preserved as a warning, not treated as open.',
+  closedVsOpen.warnings.some((warning) => /Closed Fuel.*marks it closed/i.test(warning)),
+  'Known-closed provider status should exclude the stop and remain visible in diagnostics.',
 );
 
 const duplicateRemoval = rankPreTrailStops({
@@ -360,7 +361,8 @@ const routeContextResolved = resolvePreTrailStops({
 assert.strictEqual(routeContextResolved.preTrailStops.fuel[0].id, 'route-gas');
 assert.strictEqual(routeContextResolved.preTrailStops.grocery[0].id, 'route-market');
 assert.strictEqual(statusFor(routeContextResolved, 'fuel').status, 'ranked');
-assert.strictEqual(statusFor(routeContextResolved, 'fuel').metadata.routeContextCandidateCount, 2);
+assert.strictEqual(statusFor(routeContextResolved, 'fuel').metadata.routeContextCandidateCount, 1);
+assert.strictEqual(statusFor(routeContextResolved, 'grocery').metadata.routeContextCandidateCount, 1);
 assert.strictEqual(routeContextResolved.preTrailStops.fuel[0].metadata.providerPlaceId, 'provider-route-gas');
 
 const itinerary = buildTripItineraryFromSuggestedRoute({

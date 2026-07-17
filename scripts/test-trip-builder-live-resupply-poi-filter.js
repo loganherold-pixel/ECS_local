@@ -21,6 +21,9 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 const {
   isLiveSmartResupplyPoiCandidate,
 } = require(path.join(root, 'lib', 'tripBuilder', 'liveSmartResupplyPoiFilter.ts'));
+const {
+  interleaveApproachSearchResults,
+} = require(path.join(root, 'lib', 'tripBuilder', 'approachResupplyPlanner.ts'));
 
 function candidate(category, title, subtitle = '', raw = {}) {
   return isLiveSmartResupplyPoiCandidate({
@@ -76,11 +79,8 @@ assert.ok(
   'Trip Builder live resupply conversion should call the live POI filter before creating candidate stops.',
 );
 assert.ok(
-  screen.includes("const SMART_RESUPPLY_FUEL_QUERY = 'gas station'") &&
-    screen.includes("const SMART_RESUPPLY_SUPPLY_QUERY = 'market'") &&
-    screen.includes('forwardGeocodeFallback: allowForwardGeocodeFallback') &&
-    screen.includes('}).slice(0, 1);'),
-  'Trip Builder should use provider-native POI queries and spend expanded-radius requests only near trail entry.',
+  JSON.stringify(interleaveApproachSearchResults([[1, 2, 3], [4], [5, 6]]).slice(0, 4)) === JSON.stringify([1, 4, 5, 2]),
+  'Provider detail retrieval should represent multiple approach anchors before consuming one anchor backlog.',
 );
 
 console.log('Trip Builder live resupply POI filter checks passed.');

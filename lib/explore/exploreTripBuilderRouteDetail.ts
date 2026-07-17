@@ -25,6 +25,7 @@ export type ExploreTripBuilderRouteDetailResult =
       route: ExpeditionOpportunity;
       safeErrorCode:
         | 'ROUTE_CATALOG_DETAIL_IDENTITY_MISSING'
+        | 'ROUTE_CATALOG_DETAIL_EMPTY'
         | 'ROUTE_CATALOG_DETAIL_INVALID_GEOMETRY'
         | 'ROUTE_CATALOG_DETAIL_REJECTED'
         | 'ROUTE_CATALOG_DETAIL_TIMEOUT'
@@ -38,10 +39,10 @@ export type ExploreTripBuilderRouteDetailResult =
       retryEligible: true;
     };
 
-type RouteDetailFetcher = (
+export type RouteDetailFetcher = (
   trailPack: ECSTrailPack | string,
   options?: LiveTrailPackCatalogRefreshOptions,
-) => Promise<ECSTrailPack>;
+) => Promise<ECSTrailPack | null>;
 
 export type ResolveExploreTripBuilderRouteDetailOptions = {
   signal?: AbortSignal;
@@ -58,6 +59,9 @@ function failureCode(
   error: unknown,
 ): Extract<ExploreTripBuilderRouteDetailResult, { status: 'error' }>['safeErrorCode'] {
   const message = error instanceof Error ? error.message : String(error ?? '');
+  if (/no usable route detail|empty route detail/i.test(message)) {
+    return 'ROUTE_CATALOG_DETAIL_EMPTY';
+  }
   if (/timeout/i.test(message)) return 'ROUTE_CATALOG_DETAIL_TIMEOUT';
   if (/geometry/i.test(message)) return 'ROUTE_CATALOG_DETAIL_INVALID_GEOMETRY';
   return 'ROUTE_CATALOG_DETAIL_UNAVAILABLE';
@@ -122,6 +126,14 @@ export async function resolveExploreTripBuilderRouteDetail(
         retryEligible: true,
       };
     }
+    if (!detail) {
+      return {
+        status: 'error',
+        route: selectedSummary,
+        safeErrorCode: 'ROUTE_CATALOG_DETAIL_EMPTY',
+        retryEligible: true,
+      };
+    }
     const hydratedBase = trailPackToExpeditionOpportunity(detail) as ExpeditionOpportunity;
     const hydrated = {
       ...hydratedBase,
@@ -183,7 +195,7 @@ export async function resolveExploreTripBuilderRouteDetail(
       retryEligible: false,
     };
   } catch (error) {
-    if (options.signal?.aborted) {
+    if (options.signal?.aborted || (error instanceof Error && error.name === 'AbortError')) {
       return {
         status: 'cancelled',
         route: selectedSummary,

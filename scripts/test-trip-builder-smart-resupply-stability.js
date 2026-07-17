@@ -61,7 +61,62 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'smartResupplyLoading === \'fuel\' && smartResupplyFuelOptions.length === 0',
+  'buildApproachResupplyRouteFingerprint(points)',
+  'Smart resupply request identity should include the full canonical approach geometry rather than sampled vertices',
+);
+assertIncludes(
+  screen,
+  'loadSmartResupplyOptionsSingleFlight(searchSignature, {',
+  'Identical concurrent provider lookups should share one in-flight execution',
+);
+assertIncludes(
+  screen,
+  'smartResupplyFuelTerminalRef',
+  'A same-fingerprint rerender should preserve the truthful fuel terminal result instead of inferring success from retained cards',
+);
+assertIncludes(
+  screen,
+  'smartResupplyFuelProviderRef',
+  'Fuel provider results should stay separate from Route Context evidence and keyed to the active request fingerprint',
+);
+assertIncludes(
+  screen,
+  'smartResupplySupplyProviderRef',
+  'Supply provider results should stay separate from Route Context evidence and keyed to the active request fingerprint',
+);
+assertIncludes(
+  screen,
+  'smartResupplyFuelProviderRef.current = null;',
+  'Fuel errors and invalidations should clear stale provider results instead of preserving a false ready list',
+);
+assertIncludes(
+  screen,
+  'smartResupplySupplyProviderRef.current = null;',
+  'Supply errors and invalidations should clear stale provider results instead of preserving a false ready list',
+);
+assertIncludes(
+  screen,
+  'Prior results are read-only until this request finishes.',
+  'A retry with last-good cards should label them as read-only until the terminal response arrives',
+);
+assertIncludes(
+  screen,
+  'if (smartResupplyPending) return false;',
+  'Trip finalization should remain disabled while retained provider evidence is being refreshed',
+);
+assert(
+  !screen.includes('setSmartResupplyFuelRequest((current) => ({ ...current, error: null }))') &&
+    !screen.includes('setSmartResupplySupplyRequest((current) => ({ ...current, error: null }))'),
+  'Selecting a fallback option must not erase the provider error or partial-coverage explanation.',
+);
+assertIncludes(
+  screen,
+  'setLiveApproachRouteRetryGeneration((generation) => generation + 1);',
+  'Retry should reissue failed canonical approach preparation before falling back to trailhead-only ranking',
+);
+assertIncludes(
+  screen,
+  "smartResupplyFuelRequest.status === 'loading' && smartResupplyFuelOptions.length === 0",
   'Fuel picker should only show blocking loading state before options exist',
 );
 assert(
@@ -100,7 +155,7 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'smartResupplyLoading === \'supplies\' && smartResupplySupplyOptions.length === 0',
+  "smartResupplySupplyRequest.status === 'loading' && smartResupplySupplyOptions.length === 0",
   'Supply picker should only show blocking loading state before options exist',
 );
 assert(
@@ -188,13 +243,8 @@ assertIncludes(
 }
 assertIncludes(
   screen,
-  'mergeSmartResupplyOptions(routeContextFuelOptions, options, smartResupplyFuelOptionsRef.current)',
-  'Fuel picker should merge new discoveries into the current list instead of replacing it',
-);
-assertIncludes(
-  screen,
-  'mergeSmartResupplyOptions(routeContextSupplyOptions, options, smartResupplySupplyOptionsRef.current)',
-  'Supply picker should merge new discoveries into the current list instead of replacing it',
+  'mergeAndRankSmartResupplyOptions({',
+  'Fuel and supply discoveries should be merged and reranked through the canonical approach model',
 );
 assertIncludes(
   screen,
@@ -213,8 +263,23 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'selectedRouteRemoteEntryProgressRatio',
+  'selectedRouteRemoteEntry',
   'Smart resupply refresh signatures should include the selected route remote-entry boundary',
+);
+assertIncludes(
+  screen,
+  "smartResupplyFuelRequest.status === 'deferred' && liveApproachRouteStatus === 'loading'",
+  'Fuel discovery should wait for an initializing canonical approach instead of issuing a trailhead-only request first',
+);
+assertIncludes(
+  screen,
+  "onPress={() => handleRetrySmartResupply('fuel')}",
+  'Fuel provider errors should expose an actual retry action',
+);
+assertIncludes(
+  screen,
+  "onPress={() => handleRetrySmartResupply('supplies')}",
+  'Supply provider errors should expose an actual retry action',
 );
 assertIncludes(
   screen,
@@ -273,13 +338,13 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'return rightProgress - leftProgress || left - right;',
-  'Smart resupply fallback radius passes should prioritize remote-entry and trailhead-side anchors before home-side anchors.',
+  "anchors[index]?.basis === 'approach_corridor'",
+  'Smart resupply fallback radius passes should retain the remote-side corridor anchor before trailhead-only fallback.',
 );
 assertIncludes(
   screen,
-  '}).slice(0, 1);',
-  'Expanded-radius passes should query only the highest-priority trail-entry-side anchor to bound Mapbox traffic.',
+  'interleaveApproachSearchResults(',
+  'Provider detail requests should be shared across approach anchors instead of exhausting the budget at one proximity.',
 );
 assert(
   !screen.includes("if (option.fallbackState === 'trailhead_only') return true;"),

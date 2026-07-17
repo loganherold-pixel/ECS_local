@@ -9,6 +9,7 @@ import type {
   ItineraryDataSource,
   ItineraryPhase,
   ItineraryPhaseSummary,
+  ItineraryPreTrailProviderState,
   ItineraryPreTrailStopSearchSummary,
   ItineraryPreTrailStops,
   ItineraryRoute,
@@ -38,6 +39,7 @@ import {
   type ResolvedTrailRouteGeometry,
 } from './trailRouteGeometryResolver';
 import { resolveTrailWaypoints } from './trailWaypointIntelligenceResolver';
+import { resupplyPlaceIdentityFromMetadata } from './resupplyPlaceIdentity';
 
 export type BuildTripItineraryFromSuggestedRouteArgs = {
   suggestedRoute: SuggestedRoute;
@@ -46,6 +48,7 @@ export type BuildTripItineraryFromSuggestedRouteArgs = {
   selectedPreTrailOptions?: Partial<Record<PreTrailStopBucket, SelectedPreTrailOption[] | null>> | null;
   preTrailStopCandidates?: PreTrailStopCandidateInput | null;
   preTrailProviderAvailable?: boolean | null;
+  preTrailProviderStates?: Partial<Record<PreTrailStopBucket, ItineraryPreTrailProviderState>> | null;
   vehicleProfile?: TripBuilderVehicleProfile | null;
   telemetry?: TripBuilderFuelTelemetry | Record<string, unknown> | null;
   routeContext?: TripBuilderRouteContextInput | null;
@@ -321,7 +324,12 @@ function confidenceSummary(args: {
   const missingData: string[] = [];
   const reasons: string[] = [];
   const hasMissingPreTrailAnchor = args.preTrailStopStatus.some((summary) => summary.status === 'missing_anchor');
-  const hasUnavailablePreTrailProvider = args.preTrailStopStatus.some((summary) => summary.status === 'provider_unavailable');
+  const hasUnavailablePreTrailProvider = args.preTrailStopStatus.some((summary) => (
+    summary.status !== 'not_requested' && (
+      summary.status === 'provider_unavailable' ||
+      summary.providerState === 'error' || summary.providerState === 'unavailable'
+    )
+  ));
 
   if (!args.userStart) missingData.push('user GPS location');
   if (args.fuelRangeConfidence.fuelStatus === 'unknown') missingData.push('vehicle fuel/range data');
@@ -337,7 +345,7 @@ function confidenceSummary(args: {
     reasons.push('No pre-trail fuel, grocery, water, or supply stops were selected.');
   }
   if (hasUnavailablePreTrailProvider) {
-    reasons.push('Pre-trail POI lookup is not wired yet; empty buckets mean no data yet, not confirmed absence of stops.');
+    reasons.push('Live pre-trail POI lookup is unavailable for one or more requested buckets; empty buckets are not confirmed absence of stops.');
   }
   if (args.fuelRangeConfidence.fuelStatus === 'critical') {
     reasons.push('Fuel range appears insufficient for the estimated itinerary distance.');
@@ -448,7 +456,17 @@ function geometryWarnings(geometryResolution: ResolvedTrailRouteGeometry): TripB
 function preTrailWarnings(preTrailResolution: ResolvedPreTrailStops): TripBuilderWarning[] {
   const warnings: TripBuilderWarning[] = [];
   const hasMissingAnchor = preTrailResolution.bucketSummaries.some((summary) => summary.status === 'missing_anchor');
-  const hasProviderUnavailable = preTrailResolution.bucketSummaries.some((summary) => summary.status === 'provider_unavailable');
+  const hasProviderUnavailable = preTrailResolution.bucketSummaries.some((summary) => (
+    summary.status !== 'not_requested' && (
+      summary.status === 'provider_unavailable' ||
+      summary.providerState === 'error' || summary.providerState === 'unavailable'
+    )
+  ));
+  const hasProviderPending = preTrailResolution.bucketSummaries.some((summary) => (
+    summary.status !== 'not_requested' && (
+      summary.status === 'provider_pending' || summary.providerState === 'pending'
+    )
+  ));
 
   if (hasMissingAnchor) {
     warnings.push({
@@ -462,7 +480,16 @@ function preTrailWarnings(preTrailResolution: ResolvedPreTrailStops): TripBuilde
   if (hasProviderUnavailable) {
     warnings.push({
       id: 'pre_trail_poi_provider_unavailable',
-      message: 'Pre-trail fuel, grocery, water, and supply buckets are scaffolded but live POI lookup is not wired yet.',
+      message: 'Live pre-trail POI lookup is unavailable for one or more requested fuel or supply buckets; retained stops require manual verification.',
+      severity: 'watch',
+      source: 'planning',
+    });
+  }
+
+  if (hasProviderPending) {
+    warnings.push({
+      id: 'pre_trail_poi_provider_pending',
+      message: 'Live pre-trail POI lookup is still pending; empty buckets are not a confirmed no-results state.',
       severity: 'watch',
       source: 'planning',
     });
@@ -515,6 +542,30 @@ function sameWaypointCoordinate(left: GeoPoint | null | undefined, right: GeoPoi
   if (!left || !right) return false;
   return Math.abs(left.latitude - right.latitude) < 0.00001 &&
     Math.abs(left.longitude - right.longitude) < 0.00001;
+}
+
+function uniquePhysicalPreTrailStops(preTrailStops: ItineraryPreTrailStops): ItineraryStop[] {
+  const seen = new Set<string>();
+  return PRE_TRAIL_BUCKETS
+    .flatMap((bucket) => preTrailStops[bucket])
+    .filter((stop) => {
+      const placeIdentity = resupplyPlaceIdentityFromMetadata(stop.metadata);
+      const coordinateKey = stop.coordinate
+        ? `${stop.coordinate.latitude.toFixed(5)},${stop.coordinate.longitude.toFixed(5)}`
+        : 'no-coordinate';
+      const key = placeIdentity ?? `${stop.title.trim().toLowerCase()}:${coordinateKey}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((left, right) => {
+      const leftProgress = finiteNumber(left.metadata?.approachProgressRatio);
+      const rightProgress = finiteNumber(right.metadata?.approachProgressRatio);
+      if (leftProgress != null || rightProgress != null) {
+        return (leftProgress ?? Number.POSITIVE_INFINITY) - (rightProgress ?? Number.POSITIVE_INFINITY);
+      }
+      return left.sequence - right.sequence;
+    });
 }
 
 function phaseTitle(phase: ItineraryPhase): string {
@@ -634,6 +685,7 @@ export function buildTripItineraryFromSuggestedRoute({
   selectedPreTrailOptions = null,
   preTrailStopCandidates = null,
   preTrailProviderAvailable = null,
+  preTrailProviderStates = null,
   vehicleProfile = null,
   telemetry = null,
   routeContext = null,
@@ -679,6 +731,7 @@ export function buildTripItineraryFromSuggestedRoute({
     approachRoute,
     candidates: preTrailStopCandidates,
     providerAvailable: preTrailProviderAvailable,
+    providerStates: preTrailProviderStates,
     selectedPreTrailOptions,
     userPreferences,
     vehicleProfile,
@@ -715,10 +768,11 @@ export function buildTripItineraryFromSuggestedRoute({
     exitRoute: exitRouteValue,
     preTrailFuelStops: preTrailStops.fuel,
   });
+  const scheduledPreTrailStops = uniquePhysicalPreTrailStops(preTrailStops);
   const stops: ItineraryStop[] = [
-    ...PRE_TRAIL_BUCKETS.flatMap((bucket) => preTrailStops[bucket]),
-    ...(trailheadStart ? [{ ...trailheadStart, sequence: PRE_TRAIL_BUCKETS.reduce((count, bucket) => count + preTrailStops[bucket].length, 0) + 1, plannedDay: 1, stopRole: 'trailhead' as const }] : []),
-    ...(trailEnd ? [{ ...trailEnd, sequence: PRE_TRAIL_BUCKETS.reduce((count, bucket) => count + preTrailStops[bucket].length, 0) + (trailheadStart ? 2 : 1), plannedDay: 1, stopRole: 'trail' as const }] : []),
+    ...scheduledPreTrailStops,
+    ...(trailheadStart ? [{ ...trailheadStart, sequence: scheduledPreTrailStops.length + 1, plannedDay: 1, stopRole: 'trailhead' as const }] : []),
+    ...(trailEnd ? [{ ...trailEnd, sequence: scheduledPreTrailStops.length + (trailheadStart ? 2 : 1), plannedDay: 1, stopRole: 'trail' as const }] : []),
   ].map((stop, index) => ({ ...stop, sequence: index + 1 }));
   const waypoints: ItineraryWaypoint[] = [
     ...(trailheadStart ? [trailheadStart] : []),
@@ -820,6 +874,7 @@ export function buildTripItineraryFromSuggestedRoute({
       preTrailStopStatus: preTrailResolution.bucketSummaries.map((summary) => ({
         bucket: summary.bucket,
         status: summary.status,
+        providerState: summary.providerState ?? null,
         stopCount: summary.stopCount,
         provider: summary.provider ?? null,
         searchRadiusMiles: summary.searchRadiusMiles ?? null,

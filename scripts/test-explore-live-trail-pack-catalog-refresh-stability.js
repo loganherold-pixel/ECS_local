@@ -102,6 +102,7 @@ const {
   buildRouteCatalogSearchBody,
   createLiveTrailPackCatalogRefreshKey,
   fetchRouteCatalogTrailPackDetail,
+  getCachedRouteCatalogTrailPackDetail,
   invalidateRouteCatalogTrailPackDetail,
   mergeLiveTrailPackCatalogPageSnapshots,
   refreshLiveTrailPackCatalog,
@@ -1253,6 +1254,11 @@ function searchResponse(records, coverageState, diagnosticRecords = [], metaOver
     invocations.filter((entry) => entry.name === 'route-catalog-detail').length,
     detailRubiconInvocationsBefore + 1,
     'A warm bounded detail cache should avoid an immediate duplicate provider request.',
+  );
+  assert.strictEqual(
+    getCachedRouteCatalogTrailPackDetail('detail-rubicon-route')?.id,
+    'detail-rubicon-route',
+    'Trip Builder must be able to read the reconciled bounded detail cache without issuing a provider call.',
   );
 
   let resolveSharedDetailRequest;

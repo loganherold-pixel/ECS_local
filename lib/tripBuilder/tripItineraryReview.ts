@@ -148,7 +148,16 @@ function missingDataContains(confidence: ItineraryConfidenceSummary | undefined,
 
 function preTrailProviderWarnings(itinerary: TripItinerary): string[] {
   const statusWarnings = (itinerary.preTrailStopStatus ?? [])
-    .filter((summary) => summary.status === 'provider_unavailable' || summary.status === 'provider_pending' || summary.status === 'missing_anchor')
+    .filter((summary) => (
+      summary.status !== 'not_requested' && (
+        summary.status === 'provider_unavailable' ||
+        summary.status === 'provider_pending' ||
+        summary.status === 'missing_anchor' ||
+        summary.providerState === 'error' ||
+        summary.providerState === 'unavailable' ||
+        summary.providerState === 'pending'
+      )
+    ))
     .flatMap((summary) => summary.warnings ?? []);
   const planningWarnings = warningMessages(
     itinerary.warnings,

@@ -13,6 +13,7 @@ import type {
   TripBuilderRouteContextInput,
   TripBuilderRouteInput,
 } from './tripBuilderTypes';
+import { providerResupplyPlaceIdentity } from './resupplyPlaceIdentity';
 
 const METERS_PER_MILE = 1609.344;
 
@@ -101,6 +102,7 @@ function routeContextSupplyCandidatesForItinerary(
     driveDurationToTrailheadSeconds: candidate.driveDurationToTrailheadSeconds ?? null,
     detourDistanceMeters: candidate.detourDistanceMeters ?? null,
     detourDurationSeconds: candidate.detourDurationSeconds ?? null,
+    accessStatus: candidate.accessStatus ?? 'unknown',
     openStatus: candidate.openStatus ?? null,
     rating: candidate.rating ?? null,
     confidence: {
@@ -193,6 +195,16 @@ function orderedSupplyCandidates(context: RouteContext, mode?: SupplyMode | null
 
 export function isUsableRouteContext(context: RouteContext | null | undefined): context is RouteContext {
   return !!context && (context.status === 'ready' || context.status === 'partial' || context.status === 'stale');
+}
+
+export type TripBuilderRouteContextEvidenceState = 'complete' | 'partial' | 'stale';
+
+export function routeContextEvidenceState(
+  context: Pick<RouteContext, 'status'> | null | undefined,
+): TripBuilderRouteContextEvidenceState {
+  if (context?.status === 'ready') return 'complete';
+  if (context?.status === 'stale') return 'stale';
+  return 'partial';
 }
 
 export function routeContextTrailheadCoordinate(context: RouteContext | null | undefined): TripBuilderCoordinate | null {
@@ -294,19 +306,56 @@ export function routeContextSupplyCandidatesToResupplyPoints(
   mode?: SupplyMode | null,
 ): ResupplyPoint[] {
   if (!isUsableRouteContext(context)) return [];
-  return orderedSupplyCandidates(context, mode).map((candidate): ResupplyPoint => ({
+  const evidenceState = routeContextEvidenceState(context);
+  const orderedCandidates = orderedSupplyCandidates(context, mode);
+  const selectedIds = new Set(context.selectedSupplyPlan?.orderedStops.map((stop) => stop.candidateId) ?? []);
+  return orderedCandidates.map((candidate, index): ResupplyPoint => ({
     id: `route-context-${candidate.id}`,
     name: candidate.name,
     category: candidate.category === 'gas' ? 'fuel' : 'food_supplies',
     location: { latitude: candidate.lat, longitude: candidate.lng },
-    routeMileMarker: 0,
-    distanceFromStartMiles: distanceMilesFromMeters(
-      candidate.driveDistanceToTrailheadMeters ?? candidate.distanceToTrailheadMeters,
-    ),
+    routeMileMarker: null,
+    distanceFromRouteMiles: distanceMilesFromMeters(candidate.detourDistanceMeters),
+    distanceFromStartMiles: null,
     reliability: confidenceLabel(candidate.confidence.value),
-    source: 'route_context_engine',
+    source: evidenceState === 'complete' ? 'route_context_engine' : `${evidenceState}_route_context_engine`,
+    accessStatus: candidate.accessStatus ?? 'unknown',
+    placeIdentity: providerResupplyPlaceIdentity(
+      candidate.providerPlaceId,
+      candidate.providerMetadata?.providerId ?? candidate.providerMetadata?.source ?? 'route-context',
+    ) ?? `route-context:${candidate.id}`,
+    categoryCoverage: [candidate.category === 'gas' ? 'fuel' : 'food_supplies'],
+    selectionState: selectedIds.has(candidate.id) ? 'route_context_selected' : 'candidate',
+    approachEvidence: {
+      rank: index + 1,
+      score: candidate.supplyChainScore ?? candidate.approachScore ?? candidate.score ?? null,
+      progressRatio: null,
+      distanceFromOriginMiles: null,
+      distanceBeforeTrailheadMiles: distanceMilesFromMeters(
+        candidate.driveDistanceToTrailheadMeters ?? candidate.distanceToTrailheadMeters,
+      ),
+      distanceBeforeRemoteEntryMiles: null,
+      corridorOffsetMiles: null,
+      detourDistanceMiles: distanceMilesFromMeters(candidate.detourDistanceMeters),
+      detourDurationMinutes: candidate.detourDurationSeconds == null
+        ? null
+        : Math.round((candidate.detourDurationSeconds / 60) * 10) / 10,
+      detourSource: candidate.detourDistanceMeters == null ? 'unavailable' : 'provider_route',
+      routeAwareConfidence: candidate.detourDistanceMeters == null ? 'unknown' : confidenceLabel(candidate.confidence.value),
+      beforeTrailhead: null,
+      beforeRemoteEntry: null,
+      remoteEntrySource: 'unavailable',
+      remoteEntryEstimated: false,
+      operatingStatus: candidate.openStatus === 'open' || candidate.openStatus === 'closed' || candidate.openStatus === 'temporarily_closed'
+        ? candidate.openStatus
+        : 'unknown',
+    },
     notes: [
-      'Suggested by background route context. Verify current hours and access before departure.',
+      evidenceState === 'stale'
+        ? 'Suggested by cached/stale Route Context evidence. Refresh and verify current hours and access before departure.'
+        : evidenceState === 'partial'
+          ? 'Suggested by partial Route Context evidence. Verify current hours and access before departure.'
+          : 'Suggested by background route context. Verify current hours and access before departure.',
       candidate.openStatus && candidate.openStatus !== 'unknown' ? `Open status: ${candidate.openStatus}.` : null,
       candidate.address ? `Address: ${candidate.address}.` : null,
     ].filter((note): note is string => !!note),

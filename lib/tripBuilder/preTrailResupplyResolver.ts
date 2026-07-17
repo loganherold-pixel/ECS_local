@@ -1,7 +1,9 @@
 import { haversineDistanceMiles } from '../map/routeGeometryUtils';
+import { nearestPointOnRoute } from '../routeContext/routeContextGeometry';
 import type {
   GeoPoint,
   ItineraryDataSource,
+  ItineraryPreTrailProviderState,
   ItineraryPreTrailStopBucket,
   ItineraryPreTrailStopSearchSummary,
   ItineraryPreTrailStops,
@@ -15,6 +17,12 @@ import type {
   TripBuilderVehicleProfile,
   WaypointType,
 } from './tripBuilderTypes';
+import {
+  APPROACH_RESUPPLY_POLICY,
+  classifyApproachResupplyRoutePosition,
+  type ApproachResupplyRoutePosition,
+} from './approachResupplyPlanner';
+import { resupplyPlaceIdentityFromMetadata } from './resupplyPlaceIdentity';
 import { ITINERARY_PRE_TRAIL_STOP_BUCKETS } from './tripBuilderTypes';
 
 export type PreTrailStopBucket = ItineraryPreTrailStopBucket;
@@ -70,6 +78,7 @@ export type PreTrailStopCandidate =
       driveDurationToTrailheadSeconds?: number | null;
       detourDistanceMeters?: number | null;
       detourDurationSeconds?: number | null;
+      accessStatus?: 'accessible' | 'inaccessible' | 'unknown' | string | null;
       distanceFromRouteMiles?: number | null;
       distanceFromStartMiles?: number | null;
       distanceFromEndMiles?: number | null;
@@ -109,6 +118,7 @@ export type RankedPreTrailCandidate = {
   routeDeviationMiles: number | null;
   detourDistanceMiles: number | null;
   beforeTrailEntry: boolean | null;
+  approachRoutePosition: ApproachResupplyRoutePosition;
   source: ItineraryDataSource;
 };
 
@@ -120,6 +130,7 @@ export type RankPreTrailStopsArgs = {
   vehicleProfile?: TripBuilderVehicleProfile | null;
   userPreferences?: Record<string, unknown> | null;
   providerAvailable?: boolean | null;
+  providerStates?: Partial<Record<PreTrailStopBucket, ItineraryPreTrailProviderState>> | null;
   routeId?: string | null;
   generatedAt?: string;
   maxStopsPerBucket?: number | null;
@@ -132,6 +143,7 @@ export type RankPreTrailStopsResult = {
   anchorCoordinate: GeoPoint | null;
   anchorBasis: PreTrailRankingAnchorBasis;
   providerAvailable: boolean;
+  providerStates: Record<PreTrailStopBucket, ItineraryPreTrailProviderState>;
   dataUsed: ItineraryDataSource[];
   warnings: string[];
 };
@@ -141,6 +153,7 @@ export type ResolvePreTrailStopsArgs = {
   approachRoute?: ItineraryRoute | GeoPoint[] | null;
   candidates?: PreTrailStopCandidateInput | null;
   providerAvailable?: boolean | null;
+  providerStates?: Partial<Record<PreTrailStopBucket, ItineraryPreTrailProviderState>> | null;
   selectedPreTrailOptions?: Partial<Record<PreTrailStopBucket, SelectedPreTrailOption[] | null>> | null;
   userPreferences?: Record<string, unknown> | null;
   vehicleProfile?: TripBuilderVehicleProfile | null;
@@ -158,6 +171,23 @@ export type ResolvedPreTrailStops = {
 };
 
 const DEFAULT_PRE_TRAIL_SEARCH_RADIUS_MILES = 60;
+
+export type PreTrailProviderRequestStatus =
+  | 'idle'
+  | 'deferred'
+  | 'loading'
+  | 'ready'
+  | 'empty'
+  | 'error';
+
+export function preTrailProviderStateFromRequestStatus(
+  status: PreTrailProviderRequestStatus,
+): ItineraryPreTrailProviderState {
+  if (status === 'ready') return 'ready';
+  if (status === 'empty') return 'empty';
+  if (status === 'error') return 'error';
+  return 'pending';
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === 'object' && !Array.isArray(value);
@@ -566,8 +596,8 @@ function routeDeviationScore(distanceMiles: number | null): number {
   if (distanceMiles == null) return 0.62;
   if (distanceMiles <= 0.6) return 1;
   if (distanceMiles <= 2) return 0.86;
-  if (distanceMiles <= 6) return 0.58;
-  if (distanceMiles <= 12) return 0.32;
+  if (distanceMiles <= APPROACH_RESUPPLY_POLICY.preferredRouteBufferMiles) return 0.58;
+  if (distanceMiles <= APPROACH_RESUPPLY_POLICY.maximumRouteDetourMiles) return 0.32;
   return 0.12;
 }
 
@@ -591,33 +621,32 @@ function vehicleRelevanceScore(bucket: PreTrailStopBucket, vehicleProfile: TripB
   return 0.55;
 }
 
-function nearestRouteIndex(points: GeoPoint[], coordinate: GeoPoint): number | null {
-  if (points.length === 0) return null;
-  let nearestIndex = 0;
-  let nearestDistance = Number.POSITIVE_INFINITY;
-  points.forEach((point, index) => {
-    const distance = haversineDistanceMiles(point, coordinate);
-    if (distance < nearestDistance) {
-      nearestDistance = distance;
-      nearestIndex = index;
-    }
-  });
-  return nearestIndex;
-}
-
 function nearestRouteDistanceMiles(points: GeoPoint[], coordinate: GeoPoint | null): number | null {
-  if (!coordinate || points.length === 0) return null;
-  return roundTenths(points.reduce((nearest, point) => (
-    Math.min(nearest, haversineDistanceMiles(point, coordinate))
-  ), Number.POSITIVE_INFINITY));
+  if (!coordinate || points.length < 2) return null;
+  const projection = nearestPointOnRoute(
+    { lat: coordinate.latitude, lng: coordinate.longitude },
+    points.map((point) => ({ lat: point.latitude, lng: point.longitude })),
+  );
+  return roundTenths(projection ? projection.distanceMeters / 1609.344 : null);
 }
 
-function beforeTrailEntry(points: GeoPoint[], anchor: GeoPoint | null, coordinate: GeoPoint | null): boolean | null {
-  if (!anchor || !coordinate || points.length < 2) return null;
-  const anchorIndex = nearestRouteIndex(points, anchor);
-  const candidateIndex = nearestRouteIndex(points, coordinate);
-  if (anchorIndex == null || candidateIndex == null) return null;
-  return candidateIndex <= anchorIndex;
+function approachRoutePosition(
+  points: GeoPoint[],
+  anchor: GeoPoint | null,
+  coordinate: GeoPoint | null,
+): ApproachResupplyRoutePosition {
+  if (!anchor || !coordinate || points.length < 2) return 'unknown';
+  return classifyApproachResupplyRoutePosition({
+    approachRoute: points,
+    coordinate,
+    origin: points[0],
+    trailhead: anchor,
+  });
+}
+
+function beforeTrailEntry(position: ApproachResupplyRoutePosition): boolean | null {
+  if (position === 'unknown') return null;
+  return position === 'on_approach';
 }
 
 function beforeTrailEntryScore(value: boolean | null): number {
@@ -648,8 +677,8 @@ function candidateRouteDeviationMiles(record: Record<string, unknown>, approachP
 
 function candidateDedupKey(candidate: RankedPreTrailCandidate): string {
   const metadata = candidate.stop.metadata ?? {};
-  const providerPlaceId = String(metadata.providerPlaceId ?? '').trim();
-  if (providerPlaceId) return `${candidate.bucket}:provider:${providerPlaceId}`;
+  const placeIdentity = resupplyPlaceIdentityFromMetadata(metadata);
+  if (placeIdentity) return `${candidate.bucket}:${placeIdentity}`;
   const coordinate = candidate.stop.coordinate;
   const coordinateKey = coordinate
     ? `${coordinate.latitude.toFixed(5)},${coordinate.longitude.toFixed(5)}`
@@ -657,7 +686,13 @@ function candidateDedupKey(candidate: RankedPreTrailCandidate): string {
   return `${candidate.bucket}:${candidate.stop.title.toLowerCase()}:${coordinateKey}`;
 }
 
-function candidateWarnings(record: Record<string, unknown>, openStatus: string, routeDeviationMiles: number | null, beforeTrail: boolean | null): string[] {
+function candidateWarnings(
+  record: Record<string, unknown>,
+  openStatus: string,
+  routeDeviationMiles: number | null,
+  beforeTrail: boolean | null,
+  routePosition: ApproachResupplyRoutePosition,
+): string[] {
   const warnings = Array.isArray(record.warnings)
     ? record.warnings.map((warning) => {
         if (typeof warning === 'string') return warning;
@@ -668,13 +703,46 @@ function candidateWarnings(record: Record<string, unknown>, openStatus: string, 
   if (openStatus === 'closed' || openStatus === 'temporarily_closed') {
     warnings.push('Provider indicates this stop may be closed or unavailable. Verify before relying on it.');
   }
-  if (routeDeviationMiles != null && routeDeviationMiles > 12) {
+  if (routeDeviationMiles != null && routeDeviationMiles > APPROACH_RESUPPLY_POLICY.maximumRouteDetourMiles) {
     warnings.push('Candidate appears to require a large approach-route deviation.');
   }
-  if (beforeTrail === false) {
+  if (routePosition === 'behind_origin') {
+    warnings.push('Candidate lies behind the trip origin on the canonical approach route.');
+  } else if (routePosition === 'after_trailhead') {
+    warnings.push('Candidate occurs after the trailhead on the canonical approach route.');
+  } else if (beforeTrail === false) {
     warnings.push('Candidate may not occur before trail entry based on available approach geometry.');
   }
   return warnings;
+}
+
+function preTrailSchedulingExclusion(candidate: RankedPreTrailCandidate): string | null {
+  const metadata = candidate.stop.metadata ?? {};
+  const openStatus = String(metadata.openStatus ?? '').toLowerCase();
+  if (openStatus === 'closed' || openStatus === 'temporarily_closed') {
+    return `${candidate.stop.title} was excluded because provider operating data marks it ${openStatus.replace('_', ' ')}.`;
+  }
+  const routePosition = String(metadata.approachRoutePosition ?? candidate.approachRoutePosition);
+  if (routePosition === 'behind_origin') {
+    return `${candidate.stop.title} was excluded because it lies behind the trip origin.`;
+  }
+  if (routePosition === 'after_trailhead') {
+    return `${candidate.stop.title} was excluded because it occurs after the trailhead.`;
+  }
+  if (candidate.beforeTrailEntry === false || metadata.beforeTrailEntry === false) {
+    return `${candidate.stop.title} was excluded because it does not occur before trail entry.`;
+  }
+  if (metadata.beforeRemoteEntry === false) {
+    return `${candidate.stop.title} was excluded because it occurs after the service-loss boundary.`;
+  }
+  const routeDeviationMiles = candidate.routeDeviationMiles ?? finiteNumber(metadata.routeDeviationMiles);
+  if (routeDeviationMiles != null && routeDeviationMiles > APPROACH_RESUPPLY_POLICY.maximumRouteDetourMiles) {
+    return `${candidate.stop.title} was excluded because its approach deviation exceeds the configured limit.`;
+  }
+  if (String(metadata.accessStatus ?? '').toLowerCase() === 'inaccessible') {
+    return `${candidate.stop.title} was excluded because provider access data marks it inaccessible.`;
+  }
+  return null;
 }
 
 function rankScore(args: {
@@ -774,7 +842,8 @@ function normalizeRankedCandidate(args: {
   const routeDeviationMiles = candidateRouteDeviationMiles(record, args.approachPoints, coordinate);
   const detourDistanceMiles = candidateDetourMiles(record);
   const detourDurationSeconds = finiteNumber(record.detourDurationSeconds);
-  const beforeTrail = beforeTrailEntry(args.approachPoints, args.anchor, coordinate);
+  const routePosition = approachRoutePosition(args.approachPoints, args.anchor, coordinate);
+  const beforeTrail = beforeTrailEntry(routePosition);
   const openStatus = normalizedOpenStatus(record);
   const sourceValue = candidateSource(record, bucket);
   const score = rankScore({
@@ -791,7 +860,7 @@ function normalizeRankedCandidate(args: {
   const providerPlaceId = String(record.providerPlaceId ?? providerMetadata?.providerPlaceId ?? '').trim() || null;
   const notes = [
     ...(Array.isArray(record.notes) ? record.notes.map(String) : []),
-    ...candidateWarnings(record, openStatus, routeDeviationMiles, beforeTrail),
+    ...candidateWarnings(record, openStatus, routeDeviationMiles, beforeTrail, routePosition),
   ];
 
   return {
@@ -802,6 +871,7 @@ function normalizeRankedCandidate(args: {
     routeDeviationMiles,
     detourDistanceMiles,
     beforeTrailEntry: beforeTrail,
+    approachRoutePosition: routePosition,
     source: sourceValue,
     stop: {
       id: String(record.id ?? `${args.routeId}-${bucket}-candidate-${args.sequence}`),
@@ -825,10 +895,12 @@ function normalizeRankedCandidate(args: {
         detourDistanceMiles,
         detourDurationSeconds,
         beforeTrailEntry: beforeTrail,
+        approachRoutePosition: routePosition,
         rankScore: score.score,
         rankComponents: score.components,
         categoryMatchQuality: categoryMatchQuality(record, bucket),
         openStatus,
+        accessStatus: record.accessStatus ?? metadata.accessStatus ?? null,
         providerPlaceId,
         provider: sourceValue.provider ?? null,
         providerMetadata,
@@ -843,6 +915,7 @@ function sortedUniqueRankedCandidates(candidates: RankedPreTrailCandidate[], max
   const unique: RankedPreTrailCandidate[] = [];
   candidates
     .sort((left, right) => (
+      Number(!isOperatorSelected(left)) - Number(!isOperatorSelected(right)) ||
       right.score - left.score ||
       (left.distanceFromTrailheadMiles ?? Number.POSITIVE_INFINITY) -
         (right.distanceFromTrailheadMiles ?? Number.POSITIVE_INFINITY) ||
@@ -980,13 +1053,15 @@ function bucketSummary(args: {
   stopCount: number;
   selectedCount: number;
   providerCandidateCount: number;
-  providerAvailable: boolean;
+  providerState: ItineraryPreTrailProviderState;
   requested: boolean;
   routeContextCount: number | null;
   generatedAt: string;
   dataUsed: ItineraryDataSource[];
   candidateCountBeforeDedupe: number;
   duplicateCount: number;
+  excludedCount: number;
+  suppressedAlternativeCount: number;
 }): ItineraryPreTrailStopSearchSummary {
   const warnings: string[] = [];
   let status: ItineraryPreTrailStopSearchSummary['status'];
@@ -1001,20 +1076,32 @@ function bucketSummary(args: {
   } else if (!args.anchor) {
     status = 'missing_anchor';
     warnings.push('Trailhead start is unavailable, so pre-trail stops cannot be searched relative to the trailhead.');
-  } else if (args.providerAvailable) {
+  } else if (args.providerState === 'pending') {
+    status = 'provider_pending';
+    warnings.push('Live pre-trail provider search is still pending; empty buckets are not confirmed no-results.');
+  } else if (args.providerState === 'ready' || args.providerState === 'empty') {
     status = 'no_results';
     warnings.push('Pre-trail provider search returned no usable stops for this bucket.');
   } else {
     status = 'provider_unavailable';
-    warnings.push('Live pre-trail POI lookup is unavailable; no provider-backed stops were generated.');
+    warnings.push(args.providerState === 'error'
+      ? 'Live pre-trail POI lookup failed; no provider-backed stops were generated for this bucket.'
+      : 'Live pre-trail POI lookup is unavailable; no provider-backed stops were generated.');
     if (args.routeContextCount != null && args.routeContextCount > 0) {
       warnings.push('Route context reports supply candidates, but no usable candidate coordinates were provided for this bucket.');
     }
   }
 
+  if (args.stopCount > 0 && args.providerState === 'pending') {
+    warnings.push('Cached, selected, or Route Context stops remain visible while live provider refresh is pending.');
+  } else if (args.stopCount > 0 && (args.providerState === 'error' || args.providerState === 'unavailable')) {
+    warnings.push('Cached, selected, or Route Context stops remain visible, but live provider refresh is unavailable.');
+  }
+
   return {
     bucket: args.bucket,
     status,
+    providerState: args.providerState,
     anchorCoordinate: args.anchor,
     stopCount: args.stopCount,
     provider: status === 'selected'
@@ -1026,12 +1113,15 @@ function bucketSummary(args: {
     dataUsed: args.dataUsed,
     metadata: {
       searchAnchor: args.anchorBasis,
-      providerAvailable: args.providerAvailable,
+      providerAvailable: args.providerState === 'ready' || args.providerState === 'empty',
+      providerState: args.providerState,
       requested: args.requested,
       providerCandidateCount: args.providerCandidateCount,
       routeContextCandidateCount: args.routeContextCount,
       candidateCountBeforeDedupe: args.candidateCountBeforeDedupe,
       duplicateCount: args.duplicateCount,
+      excludedCount: args.excludedCount,
+      suppressedAlternativeCount: args.suppressedAlternativeCount,
       providerPipeline: ['route_context', 'mapbox_search', 'manual_selection'],
     },
   };
@@ -1045,6 +1135,7 @@ export function rankPreTrailStops({
   vehicleProfile = null,
   userPreferences = null,
   providerAvailable = null,
+  providerStates = null,
   routeId = 'suggested-route',
   generatedAt = new Date().toISOString(),
   maxStopsPerBucket = 5,
@@ -1060,6 +1151,10 @@ export function rankPreTrailStops({
       'ECS does not invent fuel or grocery stops when provider data is missing.',
     ],
   });
+  const providerPendingSource = source('pre_trail_poi_provider', 'unknown', {
+    provider: null,
+    notes: ['Live pre-trail POI search is pending; no empty result has been confirmed.'],
+  });
   const notRequestedSource = source('pre_trail_poi_planning', 'manual', {
     notes: ['Pre-trail POI planning not requested.'],
   });
@@ -1068,12 +1163,42 @@ export function rankPreTrailStops({
     notes: ['Pre-trail candidate data was ranked relative to the trailhead start.'],
   });
   const candidateItems = candidateEntries(candidates);
-  const providerIsAvailable = providerAvailable ?? candidates != null;
+  const legacyProviderState: ItineraryPreTrailProviderState = providerAvailable == null
+    ? candidates != null ? 'ready' : 'unavailable'
+    : providerAvailable ? 'ready' : 'unavailable';
+  const resolvedProviderStates = Object.fromEntries(
+    ITINERARY_PRE_TRAIL_STOP_BUCKETS.map((bucket) => [
+      bucket,
+      providerStates?.[bucket] ?? legacyProviderState,
+    ]),
+  ) as Record<PreTrailStopBucket, ItineraryPreTrailProviderState>;
+  const providerDataSourceForState = (state: ItineraryPreTrailProviderState): ItineraryDataSource => (
+    state === 'pending'
+      ? providerPendingSource
+      : state === 'ready' || state === 'empty'
+        ? providerResultSource
+        : providerUnavailableSource
+  );
   const anyBucketRequested = ITINERARY_PRE_TRAIL_STOP_BUCKETS.some((bucket) => preTrailBucketRequested(bucket, userPreferences));
+  const requestedProviderStates = ITINERARY_PRE_TRAIL_STOP_BUCKETS
+    .filter((bucket) => preTrailBucketRequested(bucket, userPreferences))
+    .map((bucket) => resolvedProviderStates[bucket]);
+  const providerIsAvailable = requestedProviderStates.length > 0 && requestedProviderStates.every(
+    (state) => state === 'ready' || state === 'empty',
+  );
+  const selectedBuckets = new Set<PreTrailStopBucket>();
   const ranked: RankedPreTrailCandidate[] = [];
+  const schedulingExclusions: { bucket: PreTrailStopBucket; message: string }[] = [];
+  const suppressedAlternativeCounts: Record<PreTrailStopBucket, number> = {
+    fuel: 0,
+    grocery: 0,
+    water: 0,
+    generalSupply: 0,
+  };
 
   ITINERARY_PRE_TRAIL_STOP_BUCKETS.forEach((bucket) => {
     const selectedOptions = selectedPreTrailOptions?.[bucket] ?? [];
+    if (selectedOptions.length > 0) selectedBuckets.add(bucket);
     selectedOptions.forEach((option, index) => {
       const stop = normalizePreTrailOption({
         option,
@@ -1083,8 +1208,15 @@ export function rankPreTrailStops({
         trailheadAnchor: anchor,
         anchorBasis: basis,
       });
-      if (!stop) return;
-      ranked.push({
+      if (!stop?.coordinate) {
+        schedulingExclusions.push({
+          bucket,
+          message: `The selected ${bucket} stop was invalid and must be reselected before it can be scheduled.`,
+        });
+        return;
+      }
+      const selectedRoutePosition = approachRoutePosition(approachPoints, anchor, stop.coordinate);
+      const selectedCandidate: RankedPreTrailCandidate = {
         bucket,
         stop: {
           ...stop,
@@ -1094,6 +1226,8 @@ export function rankPreTrailStops({
             rankComponents: {
               operatorSelected: 1,
             },
+            beforeTrailEntry: beforeTrailEntry(selectedRoutePosition),
+            approachRoutePosition: selectedRoutePosition,
           },
         },
         score: 1,
@@ -1101,9 +1235,16 @@ export function rankPreTrailStops({
         distanceFromTrailheadMiles: stopDistanceFromTrailheadMiles(anchor, stop.coordinate),
         routeDeviationMiles: null,
         detourDistanceMiles: null,
-        beforeTrailEntry: beforeTrailEntry(approachPoints, anchor, stop.coordinate),
+        beforeTrailEntry: beforeTrailEntry(selectedRoutePosition),
+        approachRoutePosition: selectedRoutePosition,
         source: selectedSource,
-      });
+      };
+      const exclusion = preTrailSchedulingExclusion(selectedCandidate);
+      if (exclusion) {
+        schedulingExclusions.push({ bucket, message: exclusion });
+        return;
+      }
+      ranked.push(selectedCandidate);
     });
   });
 
@@ -1118,7 +1259,17 @@ export function rankPreTrailStops({
       approachPoints,
       vehicleProfile,
     });
-    if (normalized) ranked.push(normalized);
+    if (!normalized) return;
+    if (selectedBuckets.has(normalized.bucket)) {
+      suppressedAlternativeCounts[normalized.bucket] += 1;
+      return;
+    }
+    const exclusion = preTrailSchedulingExclusion(normalized);
+    if (exclusion) {
+      schedulingExclusions.push({ bucket: normalized.bucket, message: exclusion });
+      return;
+    }
+    ranked.push(normalized);
   });
 
   const maxPerBucket = Math.max(1, Math.min(finiteNumber(maxStopsPerBucket) ?? 5, 20));
@@ -1130,43 +1281,64 @@ export function rankPreTrailStops({
   const dataUsed = dedupeDataSources([
     ...(rankedCandidates.some((candidate) => candidate.source.label === selectedSource.label) ? [selectedSource] : []),
     ...(!anyBucketRequested ? [notRequestedSource] : []),
-    ...(anyBucketRequested ? (providerIsAvailable ? [providerResultSource] : [providerUnavailableSource]) : []),
+    ...(anyBucketRequested
+      ? ITINERARY_PRE_TRAIL_STOP_BUCKETS
+          .filter((bucket) => preTrailBucketRequested(bucket, userPreferences))
+          .map((bucket) => providerDataSourceForState(resolvedProviderStates[bucket]))
+      : []),
     ...rankedCandidates.map((candidate) => candidate.source),
     ...(userPreferences ? [source('pre_trail_user_preferences', 'manual')] : []),
     ...(vehicleProfile ? [source('pre_trail_vehicle_profile', 'manual', { confidence: vehicleProfile.confidence ?? null })] : []),
   ]);
 
   const bucketSummaries = ITINERARY_PRE_TRAIL_STOP_BUCKETS.map((bucket) => {
-    const selectedCount = selectedPreTrailOptions?.[bucket]?.length ?? 0;
+    const rawSelectedCount = selectedPreTrailOptions?.[bucket]?.length ?? 0;
+    const selectedCount = rankedCandidates.filter((candidate) => (
+      candidate.bucket === bucket && isOperatorSelected(candidate)
+    )).length;
     const requested = preTrailBucketRequested(bucket, userPreferences);
     const providerCandidateCount = candidateItems.filter((item) => (
       item.bucketHint === bucket ||
       (isRecord(item.candidate) && candidateBucket(item.candidate as Record<string, unknown>, item.bucketHint) === bucket)
     )).length;
     const stopCount = preTrailStops[bucket].length;
-    const duplicateCount = Math.max(0, selectedCount + providerCandidateCount - stopCount);
+    const excludedCount = schedulingExclusions.filter((item) => item.bucket === bucket).length;
+    const schedulableBucketCandidates = ranked.filter((candidate) => candidate.bucket === bucket);
+    const duplicateCount = Math.max(
+      0,
+      schedulableBucketCandidates.length - new Set(schedulableBucketCandidates.map(candidateDedupKey)).size,
+    );
+    const providerState = resolvedProviderStates[bucket];
     const bucketDataUsed = dedupeDataSources([
       ...(selectedCount > 0 ? [selectedSource] : []),
-      ...(!requested ? [notRequestedSource] : providerIsAvailable ? [providerResultSource] : [providerUnavailableSource]),
+      ...(!requested ? [notRequestedSource] : [providerDataSourceForState(providerState)]),
       ...rankedCandidates
         .filter((candidate) => candidate.bucket === bucket)
         .map((candidate) => candidate.source),
     ]);
-    return bucketSummary({
+    const summary = bucketSummary({
       bucket,
       anchor,
       anchorBasis: basis,
       stopCount,
       selectedCount,
       providerCandidateCount,
-      providerAvailable: providerIsAvailable,
+      providerState,
       requested,
       routeContextCount: null,
       generatedAt,
       dataUsed: bucketDataUsed,
-      candidateCountBeforeDedupe: selectedCount + providerCandidateCount,
+      candidateCountBeforeDedupe: rawSelectedCount + providerCandidateCount,
       duplicateCount,
+      excludedCount,
+      suppressedAlternativeCount: suppressedAlternativeCounts[bucket],
     });
+    const exclusionWarnings = schedulingExclusions
+      .filter((item) => item.bucket === bucket)
+      .map((item) => item.message);
+    return exclusionWarnings.length > 0
+      ? { ...summary, warnings: [...(summary.warnings ?? []), ...exclusionWarnings] }
+      : summary;
   });
 
   const warnings = [
@@ -1181,6 +1353,7 @@ export function rankPreTrailStops({
     anchorCoordinate: anchor,
     anchorBasis: basis,
     providerAvailable: providerIsAvailable,
+    providerStates: resolvedProviderStates,
     dataUsed,
     warnings,
   };
@@ -1191,6 +1364,7 @@ export function resolvePreTrailStops({
   approachRoute = null,
   candidates = null,
   providerAvailable = null,
+  providerStates = null,
   selectedPreTrailOptions = null,
   userPreferences = null,
   vehicleProfile = null,
@@ -1207,6 +1381,7 @@ export function resolvePreTrailStops({
     userPreferences,
     vehicleProfile,
     providerAvailable: providerAvailable ?? (candidateInput != null ? true : null),
+    providerStates,
     routeId,
     generatedAt,
   });

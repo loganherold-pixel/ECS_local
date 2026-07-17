@@ -18,6 +18,8 @@ import type {
   TripPlan,
   WaterPlan,
 } from './tripBuilderTypes';
+import { normalizeResupplyPlaceIdentity } from './resupplyPlaceIdentity';
+import { APPROACH_RESUPPLY_POLICY } from './approachResupplyPlanner';
 
 type BuildSmartResupplyPlanArgs = {
   route: TripBuilderRouteInput;
@@ -120,6 +122,7 @@ function pointFromWaypoint(waypoint: unknown, index: number): ResupplyPoint | nu
     distanceFromEndMiles: finiteNumber(record.distanceFromEndMiles),
     reliability: normalizeReliability(record.reliability ?? record.confidence),
     source: String(record.source ?? 'route_waypoint'),
+    selectionState: 'route_waypoint',
     notes: Array.isArray(record.notes) ? record.notes.map(String) : null,
   };
 }
@@ -129,13 +132,84 @@ function collectResupplyPoints(args: BuildSmartResupplyPlanArgs): ResupplyPoint[
     ? args.route.waypoints.map(pointFromWaypoint).filter((point): point is ResupplyPoint => point != null)
     : [];
   const supplied = [...(args.resupplyPoints ?? []), ...(args.availablePoiData ?? [])];
-  const seen = new Set<string>();
-  return [...fromRoute, ...supplied].filter((point) => {
-    const key = `${point.category}:${point.id}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
+  const merged = new Map<string, ResupplyPoint>();
+  [...fromRoute, ...supplied].forEach((point) => {
+    const key = normalizeResupplyPlaceIdentity(point.placeIdentity) ?? `${point.category}:${point.id}`;
+    const current = merged.get(key);
+    if (!current) {
+      merged.set(key, point);
+      return;
+    }
+    const preferred = compareOperationalApproachPoints(point, current) < 0 ? point : current;
+    merged.set(key, {
+      ...preferred,
+      accessStatus: [current.accessStatus, point.accessStatus].includes('inaccessible')
+        ? 'inaccessible'
+        : [current.accessStatus, point.accessStatus].includes('accessible')
+          ? 'accessible'
+          : 'unknown',
+      approachEvidence: mergeApproachEvidenceConservatively(
+        preferred.approachEvidence,
+        current.approachEvidence,
+        point.approachEvidence,
+      ),
+      categoryCoverage: Array.from(new Set([
+        ...(current.categoryCoverage ?? [current.category]).filter((category): category is 'fuel' | 'food_supplies' => category === 'fuel' || category === 'food_supplies'),
+        ...(point.categoryCoverage ?? [point.category]).filter((category): category is 'fuel' | 'food_supplies' => category === 'fuel' || category === 'food_supplies'),
+      ])),
+    });
   });
+  return Array.from(merged.values());
+}
+
+function mergeApproachEvidenceConservatively(
+  preferred: ResupplyPoint['approachEvidence'],
+  left: ResupplyPoint['approachEvidence'],
+  right: ResupplyPoint['approachEvidence'],
+): ResupplyPoint['approachEvidence'] {
+  const evidence = [left, right].filter((item): item is NonNullable<ResupplyPoint['approachEvidence']> => !!item);
+  const base = preferred ?? evidence[0] ?? null;
+  if (!base) return null;
+  const trailRejectEvidence = evidence.find((item) => item.beforeTrailhead === false) ?? null;
+  const remoteRejectEvidence = evidence.find((item) => item.beforeRemoteEntry === false) ?? null;
+  const operatingEvidence = evidence.find((item) => item.operatingStatus === 'closed') ??
+    evidence.find((item) => item.operatingStatus === 'temporarily_closed') ??
+    base;
+  const detourEvidence = evidence.reduce<NonNullable<ResupplyPoint['approachEvidence']> | null>((worst, item) => {
+    if (item.detourDistanceMiles == null || !Number.isFinite(item.detourDistanceMiles)) return worst;
+    if (worst?.detourDistanceMiles == null || item.detourDistanceMiles > worst.detourDistanceMiles) return item;
+    return worst;
+  }, null) ?? base;
+  const boundaryEvidence = remoteRejectEvidence ?? trailRejectEvidence ?? base;
+  const confidenceOrder: Record<TripBuilderConfidence, number> = {
+    unknown: 0,
+    low: 1,
+    medium: 2,
+    high: 3,
+  };
+  const routeAwareConfidence = evidence.reduce<TripBuilderConfidence>(
+    (lowest, item) => confidenceOrder[item.routeAwareConfidence] < confidenceOrder[lowest]
+      ? item.routeAwareConfidence
+      : lowest,
+    base.routeAwareConfidence,
+  );
+  return {
+    ...base,
+    progressRatio: boundaryEvidence.progressRatio,
+    distanceFromOriginMiles: boundaryEvidence.distanceFromOriginMiles,
+    distanceBeforeTrailheadMiles: trailRejectEvidence?.distanceBeforeTrailheadMiles ?? base.distanceBeforeTrailheadMiles,
+    distanceBeforeRemoteEntryMiles: remoteRejectEvidence?.distanceBeforeRemoteEntryMiles ?? base.distanceBeforeRemoteEntryMiles,
+    corridorOffsetMiles: detourEvidence.corridorOffsetMiles,
+    detourDistanceMiles: detourEvidence.detourDistanceMiles,
+    detourDurationMinutes: detourEvidence.detourDurationMinutes,
+    detourSource: detourEvidence.detourSource,
+    routeAwareConfidence,
+    beforeTrailhead: trailRejectEvidence ? false : base.beforeTrailhead,
+    beforeRemoteEntry: remoteRejectEvidence ? false : base.beforeRemoteEntry,
+    remoteEntrySource: remoteRejectEvidence?.remoteEntrySource ?? base.remoteEntrySource,
+    remoteEntryEstimated: remoteRejectEvidence?.remoteEntryEstimated ?? base.remoteEntryEstimated,
+    operatingStatus: operatingEvidence.operatingStatus,
+  };
 }
 
 function byNearestDistance(left: ResupplyPoint, right: ResupplyPoint): number {
@@ -156,6 +230,55 @@ function byNearestDistance(left: ResupplyPoint, right: ResupplyPoint): number {
 
 function nearestPoint(points: ResupplyPoint[]): ResupplyPoint | null {
   return [...points].sort(byNearestDistance)[0] ?? null;
+}
+
+function selectionPriority(point: ResupplyPoint): number {
+  if (point.selectionState === 'operator_selected') return 0;
+  if (point.selectionState === 'route_context_selected') return 1;
+  if (point.selectionState === 'route_waypoint') return 2;
+  return 3;
+}
+
+function compareOperationalApproachPoints(left: ResupplyPoint, right: ResupplyPoint): number {
+  const selectionDelta = selectionPriority(left) - selectionPriority(right);
+  if (selectionDelta !== 0) return selectionDelta;
+  const leftEvidence = left.approachEvidence;
+  const rightEvidence = right.approachEvidence;
+  if (!!leftEvidence !== !!rightEvidence) return leftEvidence ? -1 : 1;
+  if (!leftEvidence || !rightEvidence) return byNearestDistance(left, right);
+  const leftViable = left.accessStatus !== 'inaccessible' &&
+    leftEvidence.beforeTrailhead !== false && leftEvidence.beforeRemoteEntry !== false ? 0 : 1;
+  const rightViable = right.accessStatus !== 'inaccessible' &&
+    rightEvidence.beforeTrailhead !== false && rightEvidence.beforeRemoteEntry !== false ? 0 : 1;
+  if (leftViable !== rightViable) return leftViable - rightViable;
+  const rankDelta = (leftEvidence.rank ?? Number.POSITIVE_INFINITY) - (rightEvidence.rank ?? Number.POSITIVE_INFINITY);
+  if (rankDelta !== 0) return rankDelta;
+  const detourDelta = (leftEvidence.detourDistanceMiles ?? Number.POSITIVE_INFINITY) -
+    (rightEvidence.detourDistanceMiles ?? Number.POSITIVE_INFINITY);
+  if (Math.abs(detourDelta) > 0.01) return detourDelta;
+  const remoteDelta = (leftEvidence.distanceBeforeRemoteEntryMiles ?? Number.POSITIVE_INFINITY) -
+    (rightEvidence.distanceBeforeRemoteEntryMiles ?? Number.POSITIVE_INFINITY);
+  if (Math.abs(remoteDelta) > 0.01) return remoteDelta;
+  const scoreDelta = (rightEvidence.score ?? Number.NEGATIVE_INFINITY) -
+    (leftEvidence.score ?? Number.NEGATIVE_INFINITY);
+  if (Math.abs(scoreDelta) > 0.001) return scoreDelta;
+  return left.id.localeCompare(right.id);
+}
+
+function isKnownOperationallyNonviable(point: ResupplyPoint): boolean {
+  if (point.accessStatus === 'inaccessible') return true;
+  const evidence = point.approachEvidence;
+  if (!evidence) return false;
+  return evidence.beforeTrailhead === false ||
+    evidence.beforeRemoteEntry === false ||
+    (evidence.detourDistanceMiles != null &&
+      evidence.detourDistanceMiles > APPROACH_RESUPPLY_POLICY.maximumRouteDetourMiles) ||
+    evidence.operatingStatus === 'closed' ||
+    evidence.operatingStatus === 'temporarily_closed';
+}
+
+function operationalApproachPoint(points: ResupplyPoint[]): ResupplyPoint | null {
+  return points.filter((point) => !isKnownOperationallyNonviable(point)).sort(compareOperationalApproachPoints)[0] ?? null;
 }
 
 function addWarning(
@@ -187,13 +310,21 @@ function buildFuelPlan(args: BuildSmartResupplyPlanArgs, fuelPoints: ResupplyPoi
       : null;
 
   const routeEnd = routeDistance ?? Number.POSITIVE_INFINITY;
-  const nearestFuelBeforeStart =
-    fuelPoints
+  const approachFuelPoints = fuelPoints.filter((point) => point.approachEvidence);
+  const hasRouteAwareFuel = approachFuelPoints.length > 0;
+  const viableFuelPoints = hasRouteAwareFuel
+    ? approachFuelPoints.filter((point) => !isKnownOperationallyNonviable(point))
+    : fuelPoints;
+  const routeAwareFuel = hasRouteAwareFuel
+    ? operationalApproachPoint(viableFuelPoints)
+    : null;
+  const nearestFuelBeforeStart = routeAwareFuel ??
+    viableFuelPoints
       .filter((point) => (point.routeMileMarker ?? 0) <= 0 || point.distanceFromStartMiles != null)
       .sort(byNearestDistance)[0] ??
-    nearestPoint(fuelPoints);
-  const lastReliableFuelBeforeRemoteSection =
-    fuelPoints
+    nearestPoint(viableFuelPoints);
+  const lastReliableFuelBeforeRemoteSection = routeAwareFuel ??
+    viableFuelPoints
       .filter((point) => {
         const mile = finiteNumber(point.routeMileMarker);
         return mile != null && (routeDistance == null || mile <= routeDistance * 0.4);
@@ -201,7 +332,7 @@ function buildFuelPlan(args: BuildSmartResupplyPlanArgs, fuelPoints: ResupplyPoi
       .sort((left, right) => (right.routeMileMarker ?? 0) - (left.routeMileMarker ?? 0))[0] ??
     null;
   const nearestFuelAfterExit =
-    fuelPoints
+    viableFuelPoints
       .filter((point) => (point.routeMileMarker ?? -1) >= routeEnd || point.distanceFromEndMiles != null)
       .sort(byNearestDistance)[0] ??
     null;
@@ -221,7 +352,7 @@ function buildFuelPlan(args: BuildSmartResupplyPlanArgs, fuelPoints: ResupplyPoi
   } else if (rangeMarginMiles != null && rangeMarginMiles < estimatedMinimumRangeMiles * 0.1) {
     status = 'low';
     addWarning(warnings, 'fuel', 'fuel-range-tight', `Fuel range margin appears tight against the ${fuelSource} vehicle range. Verify before departure.`, 'caution');
-  } else if (fuelPoints.length === 0) {
+  } else if (viableFuelPoints.length === 0) {
     status = rangeMarginMiles != null && rangeMarginMiles >= 0 ? 'good' : 'medium';
     if (rangeMarginMiles != null && rangeMarginMiles >= 0) {
       recommendations.push(recommendation(
@@ -238,7 +369,17 @@ function buildFuelPlan(args: BuildSmartResupplyPlanArgs, fuelPoints: ResupplyPoi
     status = 'medium';
   }
 
-  const point = nearestFuelBeforeStart ?? nearestFuelAfterExit ?? lastReliableFuelBeforeRemoteSection;
+  if (hasRouteAwareFuel && viableFuelPoints.length === 0) {
+    addWarning(
+      warnings,
+      'fuel',
+      'fuel-no-viable-approach-stop',
+      'No viable fuel stop remains before the trailhead and service-loss boundary; verify an alternative before departure.',
+      'caution',
+    );
+  }
+
+  const point = routeAwareFuel ?? nearestFuelBeforeStart ?? lastReliableFuelBeforeRemoteSection ?? nearestFuelAfterExit;
   if (point) {
     recommendations.push(recommendation(
       'fuel',
@@ -275,11 +416,20 @@ function buildPointBackedPlan<TCategory extends 'water' | 'food_supplies' | 'rep
   manualSupport?: { available: boolean; message: string; source?: string | null },
 ): ResupplyCategoryPlanFor<TCategory> {
   const warnings: ResupplyWarning[] = [];
-  const point = nearestPoint(points);
-  const status: ResupplyStatus = points.length === 0
+  const approachPoints = category === 'food_supplies'
+    ? points.filter((candidate) => candidate.approachEvidence)
+    : [];
+  const hasOperationalApproachEvidence = approachPoints.length > 0;
+  const point = hasOperationalApproachEvidence
+    ? operationalApproachPoint(approachPoints)
+    : nearestPoint(points);
+  const missingMessage = hasOperationalApproachEvidence && !point
+    ? 'No viable food or supply stop remains before the trailhead and service-loss boundary.'
+    : labels.missing;
+  const status: ResupplyStatus = !point
     ? manualSupport?.available ? 'good' : 'unknown'
     : statusFromSupportDistance(point?.distanceFromRouteMiles ?? null);
-  if (!point && !manualSupport?.available) addWarning(warnings, category, `${category}-unknown`, labels.missing, 'watch');
+  if (!point && !manualSupport?.available) addWarning(warnings, category, `${category}-unknown`, missingMessage, 'watch');
   const recommendations = [
     recommendation(
       category,
@@ -288,7 +438,7 @@ function buildPointBackedPlan<TCategory extends 'water' | 'food_supplies' | 'rep
         ? `${labels.action}: ${point.name}.`
         : manualSupport?.available
           ? manualSupport.message
-          : labels.missing,
+          : missingMessage,
       point?.id,
     ),
   ];
@@ -391,7 +541,10 @@ function worstStatus(plans: { status: ResupplyStatus }[]): ResupplyStatus {
 export function buildSmartResupplyPlan(args: BuildSmartResupplyPlanArgs): SmartResupplyPlan {
   const generatedAt = args.capturedAt ?? args.tripPlan.generatedAt;
   const points = collectResupplyPoints(args);
-  const byCategory = (category: ResupplyCategory) => points.filter((point) => point.category === category);
+  const byCategory = (category: ResupplyCategory) => points.filter((point) => (
+    point.category === category ||
+    ((category === 'fuel' || category === 'food_supplies') && point.categoryCoverage?.includes(category))
+  ));
   const fuel = buildFuelPlan(args, byCategory('fuel'));
   const support = args.vehicleProfile?.supportReadiness ?? null;
   const waterGallons = finiteNumber(args.vehicleProfile?.currentWaterGallons) ?? finiteNumber(args.vehicleProfile?.waterCapacityGal);

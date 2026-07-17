@@ -540,6 +540,77 @@ async function main() {
   assert.strictEqual(closedCandidates[0].id, 'open-farther');
   assert.ok(closedCandidates[1].warnings.some((warning) => warning.code === 'closed_supply_candidate'));
 
+  const providerInaccessibleCandidates = await discoverSupplyCandidates({
+    placesAdapter: placesAdapterFor([
+      place('provider-inaccessible-fuel', 'gas', 38.002, -110.002, {
+        name: 'Provider Inaccessible Fuel',
+        providerMetadata: { accessStatus: 'inaccessible' },
+      }),
+    ]),
+    request: {
+      trailId: 'provider-inaccessible-trail',
+      trailheadAnchor,
+      mode: 'gas',
+    },
+  });
+  assert.strictEqual(
+    providerInaccessibleCandidates[0].accessStatus,
+    'inaccessible',
+    'Structured provider access evidence must survive supply discovery normalization.',
+  );
+
+  const matrixInaccessibleCandidates = await discoverSupplyCandidates({
+    placesAdapter: placesAdapterFor([
+      place('matrix-inaccessible-fuel', 'gas', 38.01, -110.01, { name: 'Matrix Inaccessible Fuel' }),
+    ]),
+    routingAdapter: {
+      id: 'unreachable-matrix',
+      isAvailable: () => true,
+      async computeRoute() {
+        return { coordinates: [], distanceMeters: 0, durationSeconds: 0 };
+      },
+      async computeRouteMatrix(input) {
+        const trailheadDestinationIndex = input.destinations.length - 1;
+        return {
+          cells: [
+            {
+              originIndex: 0,
+              destinationIndex: trailheadDestinationIndex,
+              distanceMeters: 10000,
+              durationSeconds: 1200,
+              status: 'ok',
+            },
+            {
+              originIndex: 0,
+              destinationIndex: 0,
+              distanceMeters: null,
+              durationSeconds: null,
+              status: 'unreachable',
+            },
+            {
+              originIndex: 1,
+              destinationIndex: trailheadDestinationIndex,
+              distanceMeters: 2000,
+              durationSeconds: 300,
+              status: 'ok',
+            },
+          ],
+        };
+      },
+    },
+    request: {
+      trailId: 'matrix-inaccessible-trail',
+      trailheadAnchor,
+      origin: { lat: 37.9, lng: -110.1 },
+      mode: 'gas',
+    },
+  });
+  assert.strictEqual(
+    matrixInaccessibleCandidates[0].accessStatus,
+    'inaccessible',
+    'An unreachable approach matrix leg must mark the candidate inaccessible instead of treating proximity as route viability.',
+  );
+
   const unavailableContext = await generateRouteContext({
     trail: {
       id: 'unavailable-supply',

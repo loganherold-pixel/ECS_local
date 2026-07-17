@@ -38,6 +38,8 @@ export type BuildTripBuilderSuggestedRouteHandoffOptions = {
   telemetry?: TripBuilderFuelTelemetry | Record<string, unknown> | null;
   routeContext?: TripBuilderRouteContextInput | null;
   createdAt?: string;
+  /** Explore summary handoffs defer itinerary/geometry work to Trip Builder. */
+  deferItineraryBuild?: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -115,15 +117,17 @@ export function buildTripBuilderSuggestedRouteHandoff(
     activeVehicleId: options.vehicleProfile?.id ?? currentLifecycle?.activeVehicleId ?? null,
     updatedAt: createdAt,
   });
-  const draftItinerary = buildTripItineraryFromSuggestedRoute({
-    suggestedRoute,
-    userLocation: options.userLocation ?? null,
-    userPreferences: options.userPreferences ?? null,
-    vehicleProfile: options.vehicleProfile ?? null,
-    telemetry: options.telemetry ?? null,
-    routeContext: options.routeContext ?? null,
-    generatedAt: createdAt,
-  });
+  const draftItinerary = options.deferItineraryBuild
+    ? null
+    : buildTripItineraryFromSuggestedRoute({
+        suggestedRoute,
+        userLocation: options.userLocation ?? null,
+        userPreferences: options.userPreferences ?? null,
+        vehicleProfile: options.vehicleProfile ?? null,
+        telemetry: options.telemetry ?? null,
+        routeContext: options.routeContext ?? null,
+        generatedAt: createdAt,
+      });
 
   return {
     schemaVersion: TRIP_BUILDER_HANDOFF_SCHEMA_VERSION,

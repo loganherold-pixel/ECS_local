@@ -15,6 +15,8 @@ const visibilityDiagnostics = read(path.join('lib', 'routeCatalogVisibilityDiagn
 const viewportClient = read(path.join('lib', 'routeCatalogViewportClient.ts'));
 const supabaseClient = read(path.join('lib', 'supabase.ts'));
 const discover = read(path.join('app', '(tabs)', 'discover.tsx'));
+const tripBuilder = read(path.join('app', 'explore-trip-builder.tsx'));
+const tripBuilderPreparation = read(path.join('lib', 'tripBuilder', 'tripBuilderRoutePreparation.ts'));
 
 for (const table of [
   'route_sources',
@@ -369,9 +371,11 @@ assert(
     discover.includes('stageTripBuilderItineraryHandoff(routeForHandoff)') &&
     discover.includes('saveOfflinePrepPackHandoff({') &&
     discover.includes('route: routeForHandoff as any') &&
-    discover.includes('trailPackPreviewDetailStatus') &&
-    discover.includes('trailPackPreviewRequestRef'),
-  'Explore should surface honest partial-coverage copy, broad-search the current radius, refine locally, enrich selected Trail Pack previews, and hydrate route-catalog handoffs through route-catalog-detail',
+    !discover.includes('trailPackPreviewDetailStatus') &&
+    !discover.includes('trailPackPreviewRequestRef') &&
+    tripBuilder.includes('continueTripBuilderRoutePreparation(started, selectedRoute') &&
+    tripBuilderPreparation.includes('resolveExploreTripBuilderRouteDetail(route, {'),
+  'Explore should surface honest partial coverage, refine summary results locally, keep previews summary-only, and leave selected detail preparation to Trip Builder while retaining explicit guidance/offline hydration actions',
 );
 const guidanceInventoryBlock = discover
   .split('const exploreGuidanceReadyInventory = useMemo')[1]

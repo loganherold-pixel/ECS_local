@@ -1687,6 +1687,27 @@ async function fetchRouteCatalogTrailPacks(
   };
 }
 
+export function getCachedRouteCatalogTrailPackDetail(
+  trailPack: ECSTrailPack | string,
+  options: LiveTrailPackCatalogRefreshOptions = {},
+): ECSTrailPack | null {
+  const routeId = String(typeof trailPack === 'string' ? trailPack : trailPack.id).trim();
+  if (!routeId || options.signal?.aborted) return null;
+  const sourceVersion = detailSourceVersion(trailPack, options);
+  const detailKey = routeCatalogDetailKey(routeId, sourceVersion);
+  const reconciliationTarget = captureRouteCatalogDetailReconciliationTarget(routeId, sourceVersion);
+  const nowMs = Date.now();
+  const cached = routeCatalogDetailCache.get(detailKey);
+  if (cached && nowMs - cached.storedAtMs <= ROUTE_CATALOG_DETAIL_CACHE_TTL_MS) {
+    routeCatalogDetailCache.delete(detailKey);
+    routeCatalogDetailCache.set(detailKey, cached);
+    reconcileRouteCatalogDetail(reconciliationTarget, cached.trailPack);
+    return cached.trailPack;
+  }
+  if (cached) routeCatalogDetailCache.delete(detailKey);
+  return null;
+}
+
 export async function fetchRouteCatalogTrailPackDetail(
   trailPack: ECSTrailPack | string,
   options: LiveTrailPackCatalogRefreshOptions = {},
@@ -1698,15 +1719,8 @@ export async function fetchRouteCatalogTrailPackDetail(
   const detailKey = routeCatalogDetailKey(routeId, sourceVersion);
   const reconciliationTarget = captureRouteCatalogDetailReconciliationTarget(routeId, sourceVersion);
 
-  const nowMs = Date.now();
-  const cached = routeCatalogDetailCache.get(detailKey);
-  if (cached && nowMs - cached.storedAtMs <= ROUTE_CATALOG_DETAIL_CACHE_TTL_MS) {
-    routeCatalogDetailCache.delete(detailKey);
-    routeCatalogDetailCache.set(detailKey, cached);
-    reconcileRouteCatalogDetail(reconciliationTarget, cached.trailPack);
-    return cached.trailPack;
-  }
-  if (cached) routeCatalogDetailCache.delete(detailKey);
+  const cached = getCachedRouteCatalogTrailPackDetail(trailPack, options);
+  if (cached) return cached;
 
   const pending = pendingDetailRequestsByKey.get(detailKey);
   if (pending && !pending.controller.signal.aborted) {
@@ -1746,7 +1760,7 @@ export async function fetchRouteCatalogTrailPackDetail(
         typeof trailPack === 'string' ? undefined : trailPack,
       );
       if (!normalized) {
-        throw new Error('Verified route detail unavailable.');
+        throw new Error('Route catalog returned no usable route detail.');
       }
       if (normalized.id !== routeId) {
         throw new Error('Verified route detail identity mismatch.');

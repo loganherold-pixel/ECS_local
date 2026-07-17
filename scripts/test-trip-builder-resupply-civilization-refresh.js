@@ -20,10 +20,12 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 
 const {
   buildApproachResupplySearchAnchors,
+  evaluateApproachResupplyOptions,
   rankApproachResupplyOptions,
 } = require(path.join(root, 'lib', 'tripBuilder', 'approachResupplyPlanner.ts'));
-
-const screen = fs.readFileSync(path.join(root, 'app', 'explore-trip-builder.tsx'), 'utf8').replace(/\r\n/g, '\n');
+const {
+  retainEquivalentResupplyOptions,
+} = require(path.join(root, 'lib', 'tripBuilder', 'resupplyPlaceIdentity.ts'));
 
 const origin = { latitude: 39.0, longitude: -121.4 };
 const trailhead = { latitude: 40.0, longitude: -121.4 };
@@ -55,7 +57,7 @@ assert.strictEqual(
   'Remote-entry search anchors should still keep the trailhead as the final fallback.',
 );
 
-const ranked = rankApproachResupplyOptions({
+const trailEdgeInventory = evaluateApproachResupplyOptions({
   category: 'fuel',
   origin,
   trailhead,
@@ -91,6 +93,7 @@ const ranked = rankApproachResupplyOptions({
   ],
   limit: 3,
 });
+const ranked = trailEdgeInventory.ranked;
 
 assert.strictEqual(
   ranked[0].id,
@@ -98,15 +101,15 @@ assert.strictEqual(
   'Smart Resupply should prefer the last civilization-side stop before trail entry over a POI sitting at the remote trailhead edge.',
 );
 assert.ok(
-  ranked.find((option) => option.id === 'remote-trailhead-edge-fuel')?.warnings.some((warning) => /trail-entry edge|civilization-side/i.test(warning)),
-  'Fuel candidates at the trail-entry edge should remain visible only with explicit civilization-side verification copy.',
+  trailEdgeInventory.excluded.find((option) => option.id === 'remote-trailhead-edge-fuel')?.exclusionReasons.includes('after_remote_entry'),
+  'Fuel candidates beyond the estimated service boundary should not remain selectable as pre-remote stops.',
 );
 assert.ok(
   ranked.find((option) => option.id === 'mid-corridor-fuel')?.rank > ranked.find((option) => option.id === 'last-town-fuel-before-entry')?.rank,
   'Earlier civilization stops should not beat the last viable pre-entry stop when both are close to the approach route.',
 );
 
-const remoteBoundaryRanked = rankApproachResupplyOptions({
+const remoteBoundaryInventory = evaluateApproachResupplyOptions({
   category: 'fuel',
   origin,
   trailhead,
@@ -145,16 +148,16 @@ const remoteBoundaryRanked = rankApproachResupplyOptions({
 });
 
 assert.strictEqual(
-  remoteBoundaryRanked[0].id,
+  remoteBoundaryInventory.ranked[0].id,
   'civilization-exit-fuel',
   'High-remoteness Smart Resupply should prefer the last civilization-side stop before the inferred remote-entry boundary.',
 );
 assert.ok(
-  remoteBoundaryRanked.find((option) => option.id === 'beyond-remote-entry-fuel')?.warnings.some((warning) => /remote-entry edge|civilization-side/i.test(warning)),
-  'Fuel candidates beyond the inferred remote-entry boundary should remain visible only with explicit civilization-side verification copy.',
+  remoteBoundaryInventory.excluded.find((option) => option.id === 'beyond-remote-entry-fuel')?.exclusionReasons.includes('after_remote_entry'),
+  'Fuel candidates beyond the inferred remote-entry boundary should be excluded from the pre-remote recommendation.',
 );
 assert.ok(
-  remoteBoundaryRanked.find((option) => option.id === 'early-city-fuel')?.rank > remoteBoundaryRanked.find((option) => option.id === 'civilization-exit-fuel')?.rank,
+  remoteBoundaryInventory.ranked.find((option) => option.id === 'early-city-fuel')?.rank > remoteBoundaryInventory.ranked.find((option) => option.id === 'civilization-exit-fuel')?.rank,
   'Early city stops should not beat the last viable pre-remote-entry stop when both are close to the approach route.',
 );
 
@@ -214,33 +217,104 @@ assert.ok(
   'High provider confidence alone should not pull Smart Resupply hundreds of miles before the remote-entry corridor.',
 );
 
-assert.ok(
-  screen.includes('SMART_RESUPPLY_APPROACH_SIGNATURE_MAX_POINTS'),
-  'Smart Resupply refresh signatures should cap sampled approach-route points.',
+const refreshEvidence = (option) => ({
+  stableKey: option.stableKey,
+  title: option.title,
+  subtitle: option.subtitle,
+  coordinate: option.coordinate,
+  distanceFromRouteStartMiles: option.distanceFromRouteStartMiles,
+  distanceFromOriginMiles: option.distanceFromOriginMiles,
+  distanceFromTrailheadMiles: option.distanceFromTrailheadMiles,
+  distanceFromApproachRouteMiles: option.distanceFromApproachRouteMiles,
+  routeDeviationMiles: option.routeDeviationMiles,
+  detourDurationMinutes: option.detourDurationMinutes,
+  remainingApproachMilesToTrailhead: option.remainingApproachMilesToTrailhead,
+  distanceBeforeRemoteEntryMiles: option.distanceBeforeRemoteEntryMiles,
+  approachProgressRatio: option.approachProgressRatio,
+  approachScore: option.approachScore,
+  rank: option.rank,
+  beforeTrailEntry: option.beforeTrailEntry,
+  beforeRemoteEntry: option.beforeRemoteEntry,
+  fallbackState: option.fallbackState,
+  routeEvidenceState: option.routeEvidenceState,
+  routeAwareConfidence: option.routeAwareConfidence,
+  remoteEntrySource: option.remoteEntrySource,
+  remoteEntryConfidence: option.remoteEntryConfidence,
+  remoteEntryEstimated: option.remoteEntryEstimated,
+  remoteEntryLabel: option.remoteEntryLabel,
+  categoryCoverage: option.categoryCoverage,
+  operatingStatus: option.operatingStatus,
+  providerConfidence: option.providerConfidence,
+  coordinateConfidence: option.coordinateConfidence,
+  accessStatus: option.accessStatus,
+  providerScore: option.providerScore,
+  providerId: option.providerId,
+  providerResultState: option.providerResultState,
+  warnings: option.warnings,
+  diesel: option.diesel,
+  sourceType: option.sourceType,
+  suggestionId: option.suggestionId,
+  mapboxId: option.mapboxId,
+});
+const originalRefreshOption = {
+  stableKey: 'fuel:mapbox:stable-place',
+  title: 'Stable Fuel',
+  subtitle: 'Old approach road',
+  coordinate: { latitude: 39.5, longitude: -121.4 },
+  distanceFromRouteStartMiles: 30,
+  distanceFromOriginMiles: 32,
+  distanceFromTrailheadMiles: 30,
+  distanceFromApproachRouteMiles: 0.2,
+  routeDeviationMiles: 0.4,
+  detourDurationMinutes: 2,
+  remainingApproachMilesToTrailhead: 30,
+  distanceBeforeRemoteEntryMiles: 20,
+  approachProgressRatio: 0.5,
+  approachScore: 0.8,
+  rank: 1,
+  beforeTrailEntry: true,
+  beforeRemoteEntry: true,
+  fallbackState: 'approach_route',
+  routeEvidenceState: 'provider_route',
+  routeAwareConfidence: 'high',
+  remoteEntrySource: 'route_metadata',
+  remoteEntryConfidence: 'medium',
+  remoteEntryEstimated: false,
+  remoteEntryLabel: 'Route metadata service boundary',
+  categoryCoverage: ['fuel'],
+  operatingStatus: 'unknown',
+  providerConfidence: 'high',
+  coordinateConfidence: 'high',
+  accessStatus: 'accessible',
+  providerScore: 0.9,
+  providerId: 'mapbox_search',
+  providerResultState: 'complete',
+  warnings: ['Hours unknown.'],
+  diesel: false,
+  sourceType: 'mapbox_search',
+  suggestionId: 'stable-place',
+  mapboxId: 'stable-place',
+};
+const equivalentRefresh = [{ ...originalRefreshOption, coordinate: { ...originalRefreshOption.coordinate } }];
+assert.strictEqual(
+  retainEquivalentResupplyOptions([originalRefreshOption], equivalentRefresh, refreshEvidence)[0],
+  originalRefreshOption,
+  'Semantically identical refresh evidence should retain card identity.',
 );
-assert.ok(
-  screen.includes('SMART_RESUPPLY_APPROACH_SIGNATURE_DECIMALS'),
-  'Smart Resupply refresh signatures should coarsen live-route coordinate precision to avoid jitter refreshes.',
-);
-assert.ok(
-  screen.includes('function smartResupplyApproachSignature(approachRoute: TripMapCoordinate[] = []): string'),
-  'Smart Resupply should centralize approach-route refresh signature building.',
-);
-assert.ok(
-  screen.includes('smartResupplyApproachSignature(approachRoute)'),
-  'Smart Resupply search signatures should use the stable approach-route signature helper.',
-);
-assert.ok(
-  screen.includes('function remoteEntryProgressRatioForResupply(route: TripBuilderRouteInput | null): number | null'),
-  'Trip Builder should derive Smart Resupply remote-entry ranking boundaries from the selected route remoteness score.',
-);
-assert.ok(
-  screen.includes('selectedRouteRemoteEntryProgressRatio'),
-  'Trip Builder should carry the selected route remote-entry boundary through Smart Resupply ranking.',
-);
-assert.ok(
-  screen.includes('remoteEntryProgressRatio: params.remoteEntryProgressRatio'),
-  'Smart Resupply should pass remote-entry boundaries into the approach ranking funnel.',
+const correctedRefreshOption = {
+  ...originalRefreshOption,
+  coordinate: { latitude: 39.62, longitude: -121.39 },
+  accessStatus: 'unknown',
+  providerConfidence: 'low',
+  providerResultState: 'partial',
+  warnings: ['Provider refresh is partial; verify access.'],
+};
+const correctedRefresh = [correctedRefreshOption];
+const acceptedRefresh = retainEquivalentResupplyOptions([originalRefreshOption], correctedRefresh, refreshEvidence);
+assert.strictEqual(
+  acceptedRefresh[0],
+  correctedRefreshOption,
+  'A same-ID correction to geometry, access, confidence, freshness, or warnings must replace stale visible and selected evidence.',
 );
 
 console.log('Trip Builder resupply civilization refresh checks passed.');

@@ -41,6 +41,9 @@ const {
   resolveRoadDestination,
   searchRoadDestinations,
 } = require(path.join(root, 'lib', 'mapboxRoadNavigation.ts'));
+const {
+  classifyApproachResupplyProviderCoverage,
+} = require(path.join(root, 'lib', 'tripBuilder', 'approachResupplyPlanner.ts'));
 
 const billingGuardPath = path.join(root, 'lib', 'mapboxSearchBillingGuard.ts');
 assert.ok(
@@ -286,6 +289,51 @@ async function runQuotaFallbackRegression() {
   assertBillingPass(events, 'Navigate quota fallback');
 }
 
+async function runSearchboxFailureSurfaceContract() {
+  global.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes('/search/searchbox/v1/suggest')) {
+      return jsonResponse({ message: 'Provider unavailable' }, 503);
+    }
+    throw new Error(`Unexpected fallback request: ${url}`);
+  };
+
+  let failedAnchorCount = 0;
+  let coveredAnchorCount = 0;
+  try {
+    await searchRoadDestinations({
+      accessToken: 'mapbox-token',
+      query: 'fuel',
+      sessionToken: 'resupply-provider-failure',
+      proximity: { lat: 38.56, lng: -109.54 },
+      forwardGeocodeFallback: false,
+      throwOnSearchboxError: true,
+      billingContext: {
+        flow: 'trip_builder_smart_resupply',
+        surface: 'Trip Builder',
+        operatorAction: 'provider failure fixture',
+      },
+    });
+    coveredAnchorCount += 1;
+  } catch (error) {
+    failedAnchorCount += 1;
+    assert.match(String(error), /suggestion request failed/i);
+  }
+
+  assert.strictEqual(coveredAnchorCount, 0, 'A failed Search Box request must not count as valid empty anchor coverage.');
+  assert.strictEqual(failedAnchorCount, 1);
+  assert.strictEqual(
+    classifyApproachResupplyProviderCoverage({
+      expectedAnchorCount: 1,
+      coveredAnchorCount,
+      failedAnchorCount,
+      resultCount: 0,
+    }),
+    'retryable_error',
+    'Search Box failure with no fallback results must remain provider error, not no-results.',
+  );
+}
+
 function runFlowLevelRiskFixtureRegression() {
   const risky = analyzeMapboxSearchBillingEvents([
     {
@@ -382,6 +430,7 @@ function runFlowLevelRiskFixtureRegression() {
   runBillingReadinessGateContract();
   await runAdapterSessionReuseRegression();
   await runQuotaFallbackRegression();
+  await runSearchboxFailureSurfaceContract();
   runFlowLevelRiskFixtureRegression();
   console.log('Mapbox Search Box session reuse regression passed.');
 })().catch((error) => {

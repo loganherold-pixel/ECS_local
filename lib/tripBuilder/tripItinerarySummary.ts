@@ -4,6 +4,7 @@ import type {
   ItineraryPreTrailStopBucketStatus,
   TripItinerary,
 } from './tripBuilderTypes';
+import { resupplyPlaceIdentityFromMetadata } from './resupplyPlaceIdentity';
 
 export const TRIP_ITINERARY_SUMMARY_MESSAGES = {
   full_itinerary_available:
@@ -90,7 +91,15 @@ function routeHasGeometry(route: TripItinerary['approachRoute']): boolean {
 function preTrailStopCount(itinerary: TripItinerary): number {
   const stops = itinerary.preTrailStops;
   if (!stops) return 0;
-  return PRE_TRAIL_BUCKETS.reduce((count, bucket) => count + (stops[bucket]?.length ?? 0), 0);
+  const identities = new Set<string>();
+  PRE_TRAIL_BUCKETS.flatMap((bucket) => stops[bucket] ?? []).forEach((stop) => {
+    const placeIdentity = resupplyPlaceIdentityFromMetadata(stop.metadata);
+    const coordinateIdentity = stop.coordinate
+      ? `${stop.coordinate.latitude.toFixed(5)},${stop.coordinate.longitude.toFixed(5)}`
+      : 'no-coordinate';
+    identities.add(placeIdentity ?? `${stop.title.trim().toLowerCase()}:${coordinateIdentity}`);
+  });
+  return identities.size;
 }
 
 function hasPreTrailPoiUnavailable(itinerary: TripItinerary, stopCount: number): boolean {
@@ -126,6 +135,14 @@ function dataNotes(args: {
 }): string[] {
   if (!args.itinerary) return [];
   const notes: string[] = [];
+  const providerRefreshUnavailable = (args.itinerary.preTrailStopStatus ?? []).some((summary) => (
+    summary.status !== 'not_requested' && (
+      summary.providerState === 'error' || summary.providerState === 'unavailable'
+    )
+  ));
+  const providerRefreshPending = (args.itinerary.preTrailStopStatus ?? []).some((summary) => (
+    summary.status !== 'not_requested' && summary.providerState === 'pending'
+  ));
 
   if (!args.hasUserStart) notes.push('GPS start is pending; approach routing remains incomplete.');
   if (!args.hasApproachRoute) notes.push('Approach geometry is unavailable or has not been resolved yet.');
@@ -133,6 +150,11 @@ function dataNotes(args: {
   if (args.preTrailState === 'provider_unavailable') notes.push('POI provider unavailable for pre-trail fuel and supply planning.');
   if (args.preTrailState === 'pending') notes.push('Pre-trail POI planning is still updating.');
   if (args.preTrailState === 'no_results') notes.push('No nearby refuel or resupply candidates were found.');
+  if (args.preTrailState === 'available' && providerRefreshUnavailable) {
+    notes.push('Retained pre-trail stops are shown, but live provider refresh is unavailable; verify them manually.');
+  } else if (args.preTrailState === 'available' && providerRefreshPending) {
+    notes.push('Retained pre-trail stops are shown while live provider refresh is pending.');
+  }
   if (!args.hasTrailRoute) notes.push('True trail geometry is unavailable; approach guidance was not promoted to trail navigation.');
   if (!args.hasTrailWaypoints) notes.push('No verified camp, scenic, bailout, hazard, or user waypoint data has been added yet.');
   if (!args.hasTrailEnd) notes.push('Trail end is unavailable and was not inferred from the approach route.');

@@ -12,6 +12,7 @@ import {
   type ExploreRouteCampMarker,
 } from './exploreRouteCampHandoff';
 import { classifyExploreRouteAuthority } from './exploreRouteAuthority';
+import { orientGuidanceRouteFromStart } from './navigation/guidanceRouteProjection';
 
 const STORAGE_KEY = 'ecs_hybrid_navigation_handoff_v1';
 const nativeNavigationHandoffCache = createPersistedKeyValueCache('ecs_navigation_handoff');
@@ -647,18 +648,6 @@ function endpointDistanceMeters(
   return haversineMiles(anchor, endpoint) * 1609.344;
 }
 
-function orientTrailGeometryFromEndpoint(
-  points: RoadNavCoordinate[],
-  preferredStart: RoadNavCoordinate | null,
-): RoadNavCoordinate[] {
-  if (points.length < 2 || !preferredStart) return points;
-  const first = points[0];
-  const last = points[points.length - 1];
-  const firstDistanceM = endpointDistanceMeters(preferredStart, first);
-  const lastDistanceM = endpointDistanceMeters(preferredStart, last);
-  return lastDistanceM < firstDistanceM ? [...points].reverse() : points;
-}
-
 export function classifyNavigationHandoff(
   payload: Pick<
     NavigationHandoffPayload,
@@ -724,25 +713,38 @@ export function buildExploreNavigationPayload(
       ? (routeRecord.routeMetadata as Record<string, unknown>)
       : {};
   const routeAuthority = classifyExploreRouteAuthority(route);
-  const declaredTrailheadCoordinate =
+  const storedSelectedTrailhead = sourceRouteMetadata.tripBuilderSelectedTrailhead &&
+    typeof sourceRouteMetadata.tripBuilderSelectedTrailhead === 'object'
+    ? sourceRouteMetadata.tripBuilderSelectedTrailhead as Record<string, unknown>
+    : {};
+  const canonicalTripBuilderRoute =
+    sourceRouteMetadata.tripBuilderCanonicalState === 'ready' &&
+    typeof sourceRouteMetadata.tripBuilderCanonicalGeometryFingerprint === 'string';
+  const declaredTrailheadCoordinate = normalizeCoordinate(
+    routeRecord.trailheadStart ?? storedSelectedTrailhead.coordinate,
+  ) ?? (
     Number.isFinite(Number(route.startLat)) && Number.isFinite(Number(route.startLng))
       ? { lat: Number(route.startLat), lng: Number(route.startLng) }
-      : null;
+      : null
+  );
   const approachOriginCoordinate = normalizeCoordinate(options.approachOriginCoordinate);
-  const preferredTrailStart = approachOriginCoordinate ?? declaredTrailheadCoordinate;
+  const preferredTrailStart = canonicalTripBuilderRoute
+    ? declaredTrailheadCoordinate
+    : approachOriginCoordinate ?? declaredTrailheadCoordinate;
   const trailGeometryResult = extractTrailGeometryResult(route, {
     preferredStart: preferredTrailStart,
     allowLoop: isExplicitLoopRoute(route),
     approachOriginCoordinate,
     declaredTrailheadCoordinate,
   });
-  const trailGeometry = orientTrailGeometryFromEndpoint(
+  const trailGeometry = orientGuidanceRouteFromStart(
     trailGeometryResult.points,
     preferredTrailStart,
   );
   const trailGeometrySegments = trailGeometryResult.segments;
-  const trailheadCoordinate =
-    trailGeometry.length > 1
+  const trailheadCoordinate = canonicalTripBuilderRoute && declaredTrailheadCoordinate
+    ? declaredTrailheadCoordinate
+    : trailGeometry.length > 1
       ? trailGeometry[0]
       : declaredTrailheadCoordinate;
   const finalTrailCoordinate = trailGeometry.length > 1

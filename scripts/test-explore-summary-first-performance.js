@@ -135,9 +135,10 @@ assert(
 const tripBuilder = fs.readFileSync(tripBuilderPath, 'utf8');
 const routeDetail = fs.readFileSync(routeDetailPath, 'utf8');
 assert(
-  tripBuilder.includes('resolveExploreTripBuilderRouteDetail(selectedRoute, {') &&
-    tripBuilder.includes('trip_builder_selected_route_detail'),
-  'Trip Builder should own the selected-route detail lifecycle.',
+  tripBuilder.includes('continueTripBuilderRoutePreparation(started, selectedRoute, {') &&
+    tripBuilder.includes('routePreparationState.status === \'awaiting_trailhead_selection\'') &&
+    tripBuilder.includes('saveTripBuilderRouteHandoff(ready.canonicalRoute'),
+  'Trip Builder should own selected-route detail loading, trailhead confirmation, and canonical persistence.',
 );
 assert(
   routeDetail.includes('fetchRouteCatalogTrailPackDetail') &&

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import type {
-  NavigationHandoffPayload,
-  NavigationTrailDecisionPoint,
-  NavigationTrailWaypoint,
+import {
+  getNavigationHandoffActiveGuidanceUnavailableReason,
+  type NavigationHandoffPayload,
+  type NavigationTrailDecisionPoint,
+  type NavigationTrailWaypoint,
 } from './navigationHandoffStore';
 import {
   buildTrailCumulativeDistances,
@@ -297,6 +298,21 @@ export function useTrailNavigation(params: {
   const startNavigation = useCallback(async () => {
     setSession((prev) => {
       if (!prev.payload) return prev;
+      const unavailableReason = getNavigationHandoffActiveGuidanceUnavailableReason(prev.payload);
+      if (unavailableReason) {
+        const next: TrailNavigationSessionState = {
+          ...prev,
+          status: 'error',
+          routeStatusLabel: 'Trail route unavailable',
+          promptTitle: 'Trail route unavailable',
+          promptDetail: unavailableReason,
+          promptBadge: null,
+          error: unavailableReason,
+          updatedAt: new Date().toISOString(),
+        };
+        void persist(next);
+        return next;
+      }
       const next: TrailNavigationSessionState = {
         ...prev,
         status: 'navigation_active_trail',

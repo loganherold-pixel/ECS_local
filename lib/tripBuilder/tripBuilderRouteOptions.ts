@@ -38,7 +38,7 @@ function normalizedRouteSource(route: ExpeditionOpportunity): string {
     .replace(/[\s-]+/g, '_');
 }
 
-function routeIdentity(route: ExpeditionOpportunity): string {
+export function getTripBuilderRouteIdentity(route: ExpeditionOpportunity): string {
   const metadata = metadataRecord(route);
   return String(
     metadata.trailPackId ??
@@ -47,6 +47,27 @@ function routeIdentity(route: ExpeditionOpportunity): string {
       metadata.runAssetId ??
       route.id,
   ).trim().toLowerCase();
+}
+
+function routeCatalogVersion(route: ExpeditionOpportunity): string | null {
+  const value = metadataRecord(route).routeCatalogSourceVersion;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function isCurrentLiveCatalogRoute(route: ExpeditionOpportunity): boolean {
+  const metadata = metadataRecord(route);
+  const sourceState = String(
+    metadata.routeCatalogSourceState ?? metadata.trailPackDataState ?? '',
+  ).trim().toLowerCase();
+  return sourceState === 'live' && /trail_pack|route_catalog/.test(normalizedRouteSource(route));
+}
+
+function isCatalogRoute(route: ExpeditionOpportunity): boolean {
+  return /trail_pack|route_catalog/.test(normalizedRouteSource(route));
+}
+
+function isPreparedCanonicalRoute(route: ExpeditionOpportunity): boolean {
+  return metadataRecord(route).tripBuilderCanonicalState === 'ready';
 }
 
 export function isTripBuilderEligibleRouteOption(route: ExpeditionOpportunity | null | undefined): route is ExpeditionOpportunity {
@@ -77,31 +98,61 @@ export function mergeTripBuilderRouteDetail(
   summary: ExpeditionOpportunity,
   hydrated: ExpeditionOpportunity,
 ): ExpeditionOpportunity {
-  if (routeIdentity(summary) !== routeIdentity(hydrated)) return summary;
+  if (getTripBuilderRouteIdentity(summary) !== getTripBuilderRouteIdentity(hydrated)) return summary;
+  if (isPreparedCanonicalRoute(summary) && isCurrentLiveCatalogRoute(hydrated)) {
+    const currentVersion = routeCatalogVersion(hydrated);
+    if (currentVersion) {
+      if (currentVersion === routeCatalogVersion(summary)) return summary;
+      return { ...hydrated, id: summary.id };
+    }
+  }
   if (routeOptionQuality(hydrated) <= routeOptionQuality(summary)) return summary;
+  const summaryMetadata = metadataRecord(summary);
+  const summaryTrailheadLat = Number(summary.startLat);
+  const summaryTrailheadLng = Number(summary.startLng);
+  const summaryTrailhead =
+    summaryMetadata.routeCatalogSummaryAnchorKind === 'trailhead' &&
+    Number.isFinite(summaryTrailheadLat) &&
+    Number.isFinite(summaryTrailheadLng) &&
+    Math.abs(summaryTrailheadLat) <= 90 &&
+    Math.abs(summaryTrailheadLng) <= 180
+      ? { lat: summaryTrailheadLat, lng: summaryTrailheadLng }
+      : null;
   return {
     ...summary,
     ...hydrated,
     id: summary.id,
     distanceFromUserMiles: summary.distanceFromUserMiles ?? hydrated.distanceFromUserMiles,
     routeMetadata: {
-      ...metadataRecord(summary),
+      ...summaryMetadata,
       ...metadataRecord(hydrated),
+      tripBuilderSummaryTitle: summary.name,
+      tripBuilderSummaryDescription: summary.description ?? null,
+      ...(summaryTrailhead
+        ? { tripBuilderSummaryTrailheadCandidate: summaryTrailhead }
+        : null),
     },
   };
 }
 
 export function mergeRealTripBuilderRouteOptions(
   routeGroups: Array<Array<ExpeditionOpportunity | null | undefined>>,
+  options: { blockedRouteIdentities?: Iterable<string> } = {},
 ): ExpeditionOpportunity[] {
   const routes: ExpeditionOpportunity[] = [];
   const routeIndexByIdentity = new Map<string, number>();
+  const blockedRouteIdentities = new Set(
+    Array.from(options.blockedRouteIdentities ?? [])
+      .map((identity) => String(identity).trim().toLowerCase())
+      .filter(Boolean),
+  );
 
   routeGroups.forEach((group) => {
     group.forEach((route) => {
       if (!isTripBuilderEligibleRouteOption(route)) return;
-      const identity = routeIdentity(route);
+      const identity = getTripBuilderRouteIdentity(route);
       if (!identity) return;
+      if (blockedRouteIdentities.has(identity) && isCatalogRoute(route)) return;
       const existingIndex = routeIndexByIdentity.get(identity);
       if (existingIndex != null) {
         routes[existingIndex] = mergeTripBuilderRouteDetail(routes[existingIndex], route);

@@ -139,6 +139,7 @@ export type SupplyCandidate = {
   driveDurationToRefuelSeconds?: number | null;
   detourDistanceMeters?: number | null;
   detourDurationSeconds?: number | null;
+  accessStatus?: 'accessible' | 'inaccessible' | 'unknown' | null;
   approachScore?: number | null;
   trailheadProximityScore?: number | null;
   refuelAdjacencyScore?: number | null;

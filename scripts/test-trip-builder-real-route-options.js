@@ -115,6 +115,44 @@ const hydratedCatalogDetail = route('trail-pack:summary-route-hydrated', 'trail_
     catalogVerification: { publicRecommendation: true, blockers: [], status: 'normal' },
   },
 });
+const storedCanonicalV1 = route('trail-pack:versioned-route', 'trail_pack', {
+  routeMetadata: {
+    source: 'trail_pack',
+    trailPackId: 'versioned-route',
+    trailPackDataState: 'cached',
+    reviewStatus: 'approved',
+    routeGeometryMode: 'full',
+    isTrailGeometry: true,
+    routeCatalogSourceVersion: 'v1',
+    tripBuilderCanonicalState: 'ready',
+    catalogVerification: { publicRecommendation: true, blockers: [], status: 'normal' },
+  },
+});
+const liveSummaryV2 = {
+  ...deferredCatalogSummary,
+  id: storedCanonicalV1.id,
+  routeMetadata: {
+    ...deferredCatalogSummary.routeMetadata,
+    trailPackId: 'versioned-route',
+    routeCatalogSourceState: 'live',
+    routeCatalogSourceVersion: 'v2',
+  },
+};
+const liveSummaryV1 = {
+  ...liveSummaryV2,
+  routeMetadata: {
+    ...liveSummaryV2.routeMetadata,
+    routeCatalogSourceVersion: 'v1',
+  },
+};
+const cachedSummaryV2 = {
+  ...liveSummaryV2,
+  routeMetadata: {
+    ...liveSummaryV2.routeMetadata,
+    trailPackDataState: 'cached',
+    routeCatalogSourceState: 'cached',
+  },
+};
 
 assert.strictEqual(isRealTripBuilderRouteOption(medanoSeed), false, 'Medano seed data must not appear in Trip Builder.');
 assert.strictEqual(isRealTripBuilderRouteOption(ouachitaSeed), false, 'Ouachita seed data must not appear in Trip Builder.');
@@ -153,12 +191,56 @@ assert.deepStrictEqual(
   'Trip Builder route merging should preserve priority, upgrade same-identity summaries, deduplicate, and omit fixtures.',
 );
 
+const invalidatedCanonical = mergeRealTripBuilderRouteOptions([
+  [storedCanonicalV1],
+  [liveSummaryV2],
+])[0];
+assert.strictEqual(invalidatedCanonical.routeGeometry, undefined);
+assert.strictEqual(invalidatedCanonical.routeMetadata.routeCatalogSourceVersion, 'v2');
+assert.notStrictEqual(
+  invalidatedCanonical.routeMetadata.tripBuilderCanonicalState,
+  'ready',
+  'A current live catalog version must invalidate older prepared geometry for the same identity.',
+);
+assert.strictEqual(
+  mergeRealTripBuilderRouteOptions([[storedCanonicalV1], [liveSummaryV1]])[0],
+  storedCanonicalV1,
+  'A current live summary with the same version should retain the prepared canonical session.',
+);
+assert.strictEqual(
+  mergeRealTripBuilderRouteOptions([[storedCanonicalV1], [cachedSummaryV2]])[0],
+  storedCanonicalV1,
+  'Cached or stale catalog metadata cannot revoke a stored canonical session.',
+);
+assert.deepStrictEqual(
+  mergeRealTripBuilderRouteOptions([[storedCanonicalV1]], {
+    blockedRouteIdentities: ['versioned-route'],
+  }),
+  [],
+  'An authoritative live typed exclusion must block the matching stored canonical session.',
+);
+assert.strictEqual(
+  mergeRealTripBuilderRouteOptions([[storedCanonicalV1]], {
+    blockedRouteIdentities: ['unrelated-route'],
+  })[0],
+  storedCanonicalV1,
+  'An unrelated diagnostic must not revoke a stored canonical session.',
+);
+const localIdentityCollision = route('versioned-route', 'trip_builder_import');
+assert.strictEqual(
+  mergeRealTripBuilderRouteOptions([[localIdentityCollision]], {
+    blockedRouteIdentities: ['versioned-route'],
+  })[0],
+  localIdentityCollision,
+  'A provider diagnostic must not block an independent operator-imported route with the same raw id.',
+);
+
 const screen = fs.readFileSync(path.join(root, 'app', 'explore-trip-builder.tsx'), 'utf8');
 assert.ok(
   screen.includes('mergeRealTripBuilderRouteOptions([') &&
     screen.includes('routeStore.getAll()') &&
     screen.includes('runStore.getAll()') &&
-    screen.includes('liveTrailPackCatalogStore.getSnapshot().trailPacks') &&
+    screen.includes('tripBuilderCatalogMergeInput(liveTrailPackCatalogStore.getSnapshot())') &&
     !screen.includes('loadOpportunitiesWithCompatibility(null)'),
   'Trip Builder should populate from handoff, local assets, saved runs, and live catalog state without discoverEngine fixtures.',
 );
