@@ -38,6 +38,7 @@ require.extensions['.ts'] = function compileTypeScript(mod, filename) {
 const liveEventsSource = fs.readFileSync(path.join(process.cwd(), 'lib/dispatchLiveEvents.ts'), 'utf8');
 const commandCenterSource = fs.readFileSync(path.join(process.cwd(), 'components/dispatch/DispatchCadCommandCenter.tsx'), 'utf8');
 const convoyPanelSource = fs.readFileSync(path.join(process.cwd(), 'components/dispatch/DispatchConvoyCommandPanel.tsx'), 'utf8');
+const convoyWorkspaceSlotSource = fs.readFileSync(path.join(process.cwd(), 'components/dispatch/DispatchConvoyWorkspaceSlot.tsx'), 'utf8');
 const convoyMapSource = fs.readFileSync(path.join(process.cwd(), 'components/convoy/ConvoyCommandMap.tsx'), 'utf8');
 const alertTabSource = fs.readFileSync(path.join(process.cwd(), 'app/(tabs)/alert.tsx'), 'utf8');
 const serviceAdaptersSource = fs.readFileSync(path.join(process.cwd(), 'lib/dispatchServiceAdapters.ts'), 'utf8');
@@ -541,10 +542,12 @@ assert.ok(commandCenterSource.includes('Team sync unavailable') || teamStoreSour
 assert.ok(convoyPanelSource.includes('InactiveConvoySurface'), 'Dispatch convoy panel should render an intentional inactive convoy surface.');
 assert.ok(convoyPanelSource.includes('No Active Convoy'), 'Inactive convoy state should explicitly tell the user no convoy is active.');
 assert.ok(
-  convoyPanelSource.includes('hasActiveConvoy ?') &&
-    convoyPanelSource.includes('<ConvoySignalSurface') &&
-    convoyPanelSource.includes('<InactiveConvoySurface'),
-  'Dispatch convoy panel should preserve active signal status and only swap to standby presentation when no convoy is active.',
+  convoyPanelSource.includes('selectConvoyCommandWorkspacePresentation') &&
+    convoyPanelSource.includes('<DispatchConvoyWorkspaceSlot') &&
+    convoyWorkspaceSlotSource.includes('presentation.showSignalSurface') &&
+    convoyWorkspaceSlotSource.includes('presentation.showStandbySurface') &&
+    convoyWorkspaceSlotSource.includes('presentation.showCommandSurface'),
+  'Dispatch convoy panel should use one presentation decision to unmount standby whenever command content is active.',
 );
 assert.ok(commandCenterSource.includes('tokenizeDispatchAdvisoryCoordinateLinks'), 'Dispatch advisory banner should tokenize GPS coordinates into linkable spans.');
 assert.ok(commandCenterSource.includes('handleDispatchAdvisoryCoordinatePress'), 'Dispatch advisory coordinate links should have a click handler.');

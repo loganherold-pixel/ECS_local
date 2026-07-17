@@ -19,8 +19,8 @@ assert.match(
 );
 assert.match(
   recoveryPanel,
-  /onPress=\{\(\) => openCommand\('hazard'\)\}/,
-  'Recovery report button should open the hazard/recovery CAD event flow directly from the header.',
+  /onPress=\{\(\) => \([\s\S]*missionCommandEnabled[\s\S]*\? openMissionCommandComposer\('recovery'\)[\s\S]*: openCommand\('hazard'\)[\s\S]*\)\}/,
+  'Recovery report should open Mission Command when enabled and preserve the local hazard/recovery CAD flow when disabled.',
 );
 assert.match(
   recoveryPanel,

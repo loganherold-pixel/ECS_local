@@ -19,7 +19,8 @@ const CONVOY_MEMBER_SELECT_WITH_IDENTITY =
   'id, convoy_id, user_id, vehicle_id, callsign, display_name, expedition_badge_title, role, joined_at, revoked_at';
 const CONVOY_MEMBER_SELECT_BASE =
   'id, convoy_id, user_id, vehicle_id, callsign, role, joined_at, revoked_at';
-const ACTIVE_CONVOY_CACHE_KEY = 'active';
+const LEGACY_ACTIVE_CONVOY_CACHE_KEY = 'active';
+const ACTIVE_CONVOY_CACHE_KEY_PREFIX = 'active:';
 const MAX_CONVOY_NAME_LENGTH = 80;
 const MAX_CALLSIGN_LENGTH = 40;
 const MAX_EXPEDITION_BADGE_TITLE_LENGTH = 48;
@@ -96,6 +97,7 @@ export interface ConvoyInviteRecord {
 }
 
 export interface ActiveConvoyContext {
+  ownerId: string;
   convoyId: string;
   memberId: string;
   role: ConvoyRole;
@@ -211,11 +213,15 @@ export interface ConvoyMembershipBackend {
     body: Record<string, unknown>,
   ): Promise<ConvoyMembershipServiceResult<T>>;
   saveActiveContext(context: ActiveConvoyContext): Promise<void>;
-  readActiveContext(): Promise<ActiveConvoyContext | null>;
-  clearActiveContext(convoyId?: string): Promise<void>;
+  readActiveContext(ownerId: string): Promise<ActiveConvoyContext | null>;
+  clearActiveContext(ownerId: string, convoyId?: string): Promise<void>;
 }
 
 const activeConvoyCache = createPersistedKeyValueCache('ecs_convoy_membership_state');
+
+export function getActiveConvoyCacheKey(ownerId: string): string {
+  return `${ACTIVE_CONVOY_CACHE_KEY_PREFIX}${encodeURIComponent(ownerId)}`;
+}
 
 function toError(
   code: ConvoyMembershipServiceErrorCode,
@@ -416,8 +422,8 @@ async function readFunctionErrorBody(error: unknown, response?: unknown): Promis
 export class ConvoyMembershipService {
   constructor(private readonly backend: ConvoyMembershipBackend) {}
 
-  private async clearStaleActiveContext(activeConvoys: ConvoyListItem[]): Promise<void> {
-    const activeContext = await this.backend.readActiveContext();
+  private async clearStaleActiveContext(activeConvoys: ConvoyListItem[], ownerId: string): Promise<void> {
+    const activeContext = await this.backend.readActiveContext(ownerId);
     if (!activeContext?.convoyId || !activeContext.memberId) return;
 
     const stillActive = activeConvoys.some((item) => (
@@ -428,7 +434,7 @@ export class ConvoyMembershipService {
     ));
     if (stillActive) return;
 
-    await this.backend.clearActiveContext(activeContext.convoyId);
+    await this.backend.clearActiveContext(ownerId, activeContext.convoyId);
     await stopConvoyLocationSharing('Convoy is no longer active. Live sharing stopped.');
   }
 
@@ -466,6 +472,7 @@ export class ConvoyMembershipService {
       }
 
       await this.backend.saveActiveContext({
+        ownerId: user.data.id,
         convoyId: created.convoy.id,
         memberId: created.membership.id,
         role: created.membership.role,
@@ -489,6 +496,7 @@ export class ConvoyMembershipService {
         expeditionBadgeTitle,
       });
       await this.backend.saveActiveContext({
+        ownerId: user.data.id,
         convoyId: localPending.convoy.id,
         memberId: localPending.membership.id,
         role: localPending.membership.role,
@@ -519,6 +527,7 @@ export class ConvoyMembershipService {
         expeditionBadgeTitle,
       });
       await this.backend.saveActiveContext({
+        ownerId: user.data.id,
         convoyId: localPending.convoy.id,
         memberId: localPending.membership.id,
         role: localPending.membership.role,
@@ -550,6 +559,7 @@ export class ConvoyMembershipService {
         expeditionBadgeTitle,
       });
       await this.backend.saveActiveContext({
+        ownerId: user.data.id,
         convoyId: localPending.convoy.id,
         memberId: localPending.membership.id,
         role: localPending.membership.role,
@@ -562,6 +572,7 @@ export class ConvoyMembershipService {
     if (!membership.ok) return membership;
 
     await this.backend.saveActiveContext({
+      ownerId: user.data.id,
       convoyId: convoy.data.id,
       memberId: membership.data.id,
       role: membership.data.role,
@@ -619,6 +630,7 @@ export class ConvoyMembershipService {
     if (!joined.ok) return joined;
 
     await this.backend.saveActiveContext({
+      ownerId: user.data.id,
       convoyId: joined.data.convoy.id,
       memberId: joined.data.member.id,
       role: joined.data.member.role,
@@ -661,7 +673,7 @@ export class ConvoyMembershipService {
 
     const result = await this.backend.invokeMembershipFunction<ConvoyMemberRecord>('leave_convoy', { convoyId });
     if (result.ok) {
-      await this.backend.clearActiveContext(convoyId);
+      await this.backend.clearActiveContext(user.data.id, convoyId);
       await stopConvoyLocationSharing('You left the convoy. Live sharing stopped.');
     }
     return result;
@@ -676,7 +688,7 @@ export class ConvoyMembershipService {
 
     const result = await this.backend.invokeMembershipFunction<ConvoyRecord>('end_convoy', { convoyId });
     if (result.ok) {
-      await this.backend.clearActiveContext(convoyId);
+      await this.backend.clearActiveContext(user.data.id, convoyId);
       await stopConvoyLocationSharing('Convoy ended. Live sharing stopped.');
     }
     return result;
@@ -687,7 +699,7 @@ export class ConvoyMembershipService {
     if (!user.ok) return user;
     const activeConvoys = await this.backend.listActiveMemberships(user.data.id);
     if (activeConvoys.ok) {
-      await this.clearStaleActiveContext(activeConvoys.data);
+      await this.clearStaleActiveContext(activeConvoys.data, user.data.id);
     }
     return activeConvoys;
   }
@@ -725,7 +737,9 @@ export class ConvoyMembershipService {
   }
 
   async getActiveConvoyContext(): Promise<ActiveConvoyContext | null> {
-    return this.backend.readActiveContext();
+    const user = await this.backend.getCurrentUser();
+    if (!user?.id) return null;
+    return this.backend.readActiveContext(user.id);
   }
 }
 
@@ -919,33 +933,42 @@ function createSupabaseConvoyMembershipBackend(client: SupabaseClient = supabase
 
     async saveActiveContext(context) {
       await activeConvoyCache.waitForHydration();
-      activeConvoyCache.set(ACTIVE_CONVOY_CACHE_KEY, JSON.stringify(context));
+      activeConvoyCache.set(getActiveConvoyCacheKey(context.ownerId), JSON.stringify(context));
       await activeConvoyCache.flush();
     },
 
-    async readActiveContext() {
+    async readActiveContext(ownerId) {
       await activeConvoyCache.waitForHydration();
-      const raw = activeConvoyCache.get(ACTIVE_CONVOY_CACHE_KEY);
+      if (activeConvoyCache.get(LEGACY_ACTIVE_CONVOY_CACHE_KEY)) {
+        activeConvoyCache.delete(LEGACY_ACTIVE_CONVOY_CACHE_KEY);
+        await activeConvoyCache.flush();
+      }
+      const cacheKey = getActiveConvoyCacheKey(ownerId);
+      const raw = activeConvoyCache.get(cacheKey);
       if (!raw) return null;
 
       try {
         const parsed = JSON.parse(raw) as ActiveConvoyContext;
-        return parsed?.convoyId && parsed?.memberId ? parsed : null;
+        if (parsed?.ownerId === ownerId && parsed.convoyId && parsed.memberId) return parsed;
       } catch {
-        return null;
+        // Invalid or owner-mismatched records are removed below.
       }
+      activeConvoyCache.delete(cacheKey);
+      await activeConvoyCache.flush();
+      return null;
     },
 
-    async clearActiveContext(convoyId) {
+    async clearActiveContext(ownerId, convoyId) {
       await activeConvoyCache.waitForHydration();
-      const raw = activeConvoyCache.get(ACTIVE_CONVOY_CACHE_KEY);
+      const cacheKey = getActiveConvoyCacheKey(ownerId);
+      const raw = activeConvoyCache.get(cacheKey);
       if (convoyId && raw) {
         try {
           const parsed = JSON.parse(raw) as ActiveConvoyContext;
           if (parsed.convoyId !== convoyId) return;
         } catch {}
       }
-      activeConvoyCache.delete(ACTIVE_CONVOY_CACHE_KEY);
+      activeConvoyCache.delete(cacheKey);
       await activeConvoyCache.flush();
     },
   };

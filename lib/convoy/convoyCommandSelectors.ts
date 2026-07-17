@@ -21,6 +21,60 @@ export type ConvoyCommandPanelSelectorInput = ConvoyCommandInput & {
   regroupGapMiles?: number | null;
 };
 
+export type ConvoyCommandPanelPresentation = 'full' | 'feed' | 'signals' | 'summary';
+export type ConvoyCommandContextAuthority = 'pending' | 'resolved' | 'unavailable';
+
+export type ConvoyCommandWorkspacePresentation = {
+  primarySurface: 'active' | 'standby' | 'none';
+  activeSource: 'membership' | 'command_data' | null;
+  standbyReason: 'idle' | 'awaiting_setup' | 'disconnected' | 'unavailable' | null;
+  showSignalSurface: boolean;
+  showCommandSurface: boolean;
+  showStandbySurface: boolean;
+};
+
+export type ConvoyCommandWorkspacePresentationInput = {
+  activeConvoyId?: string | null;
+  commandData: Pick<ConvoyCommandData, 'dataState' | 'convoySize' | 'members' | 'isOffline'>;
+  membershipAvailability?: 'pending' | 'ready' | 'unavailable';
+  presentation: ConvoyCommandPanelPresentation;
+};
+
+export function selectConvoyCommandActiveContext<T>(input: {
+  parentContext?: T | null;
+  parentAuthority?: ConvoyCommandContextAuthority;
+  hydratedContext: T | null;
+}): T | null {
+  if (input.parentAuthority === 'resolved') {
+    return input.parentContext ?? null;
+  }
+  return input.parentContext ?? input.hydratedContext;
+}
+
+export function selectConvoyCommandContextForOwner<T extends { ownerId: string }>(
+  context: T | null,
+  ownerId: string | null | undefined,
+): T | null {
+  if (!context || !ownerId || context.ownerId !== ownerId) return null;
+  return context;
+}
+
+export function selectScopedConvoyCommandLastGoodContext<T extends { convoyId: string }>(input: {
+  lastGoodContext: T | null;
+  observedContext: T | null;
+  lastGoodOwnerId: string | null;
+  currentOwnerId: string | null;
+}): T | null {
+  if (!input.lastGoodContext || input.lastGoodOwnerId !== input.currentOwnerId) return null;
+  if (
+    input.observedContext?.convoyId &&
+    input.observedContext.convoyId !== input.lastGoodContext.convoyId
+  ) {
+    return null;
+  }
+  return input.lastGoodContext;
+}
+
 const DEFAULT_STALE_AFTER_MINUTES = 15;
 const DEFAULT_LOST_SIGNAL_AFTER_MINUTES = 45;
 const DEFAULT_REGROUP_GAP_MILES = 5;
@@ -148,8 +202,71 @@ function resolveWidestGapMiles(members: ConvoyMember[]): number | null {
   return Math.max(...gaps);
 }
 
-function hasActiveConvoy(data: ConvoyCommandData): boolean {
+function hasActiveConvoy(
+  data: Pick<ConvoyCommandData, 'dataState' | 'convoySize' | 'members'>,
+): boolean {
   return data.dataState !== 'setupNeeded' && (data.convoySize > 0 || data.members.length > 0);
+}
+
+/**
+ * Selects the single visual owner for the Dispatch convoy slot.
+ *
+ * Membership proves that an active convoy exists, while normalized command
+ * data can still support a planned, check-in, cached, or degraded workspace.
+ * A compact landscape summary is secondary, so it stays unmounted when there
+ * is no active workspace instead of competing with the primary standby slot.
+ */
+export function selectConvoyCommandWorkspacePresentation(
+  input: ConvoyCommandWorkspacePresentationInput,
+): ConvoyCommandWorkspacePresentation {
+  const hasMembership = Boolean(input.activeConvoyId?.trim());
+  const hasCommandData = hasActiveConvoy(input.commandData);
+  const activeSource = hasMembership
+    ? 'membership'
+    : hasCommandData
+      ? 'command_data'
+      : null;
+  const hasActiveWorkspace = activeSource !== null;
+
+  if (hasActiveWorkspace) {
+    return {
+      primarySurface: 'active',
+      activeSource,
+      standbyReason: null,
+      showSignalSurface: input.presentation !== 'summary',
+      showCommandSurface: input.presentation !== 'signals',
+      showStandbySurface: false,
+    };
+  }
+
+  if (input.membershipAvailability === 'pending') {
+    return {
+      primarySurface: 'none',
+      activeSource: null,
+      standbyReason: null,
+      showSignalSurface: false,
+      showCommandSurface: false,
+      showStandbySurface: false,
+    };
+  }
+
+  const standbyReason = input.membershipAvailability === 'unavailable'
+    ? 'unavailable'
+    : input.commandData.isOffline
+      ? 'disconnected'
+      : input.commandData.dataState === 'setupNeeded'
+        ? 'awaiting_setup'
+        : 'idle';
+  const showStandbySurface = input.presentation !== 'summary';
+
+  return {
+    primarySurface: showStandbySurface ? 'standby' : 'none',
+    activeSource: null,
+    standbyReason,
+    showSignalSurface: false,
+    showCommandSurface: false,
+    showStandbySurface,
+  };
 }
 
 function visualStateForData(params: {

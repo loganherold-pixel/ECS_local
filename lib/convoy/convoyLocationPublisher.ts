@@ -43,6 +43,7 @@ export type ConvoyLocationPublisherResult<T> =
   | { ok: false; code: ConvoyLocationPublisherErrorCode; error: string };
 
 export interface ConvoyLocationSharingState {
+  ownerId: string | null;
   status: ConvoyLocationSharingStatus;
   enabled: boolean;
   convoyId: string | null;
@@ -58,6 +59,7 @@ export interface ConvoyLocationSharingState {
 }
 
 export interface StartConvoyLocationSharingInput {
+  expectedOwnerId?: string | null;
   convoyId: string;
   memberId: string;
   publishIntervalMs?: number;
@@ -114,6 +116,7 @@ export interface ConvoyLocationPublisherBackend {
 const stateCache = createPersistedKeyValueCache('ecs_convoy_location_sharing_state');
 
 const initialState: ConvoyLocationSharingState = {
+  ownerId: null,
   status: 'disabled',
   enabled: false,
   convoyId: null,
@@ -177,10 +180,25 @@ function parseState(raw: string | null): ConvoyLocationSharingState | null {
   }
 }
 
+export function selectConvoyLocationSharingStateForOwner(
+  state: ConvoyLocationSharingState | null,
+  ownerId: string | null | undefined,
+): ConvoyLocationSharingState | null {
+  if (!state) return null;
+  const isNeutralDisabledState = state.ownerId === null &&
+    state.enabled === false &&
+    state.convoyId === null &&
+    state.memberId === null;
+  if (isNeutralDisabledState) return state;
+  if (!ownerId || state.ownerId !== ownerId) return null;
+  return state;
+}
+
 export class ConvoyLocationPublisher {
   private state: ConvoyLocationSharingState = { ...initialState };
   private subscription: LocationSubscription | null = null;
   private lastPublishAttemptMs = 0;
+  private lifecycleGeneration = 0;
 
   constructor(private readonly backend: ConvoyLocationPublisherBackend) {}
 
@@ -189,6 +207,7 @@ export class ConvoyLocationPublisher {
   ): Promise<ConvoyLocationPublisherResult<ConvoyLocationSharingState>> {
     const convoyId = normalizeId(input.convoyId);
     const memberId = normalizeId(input.memberId);
+    const expectedOwnerId = normalizeId(input.expectedOwnerId);
     const publishIntervalMs = normalizePublishInterval(input.publishIntervalMs);
 
     if (!convoyId || !memberId) {
@@ -200,6 +219,13 @@ export class ConvoyLocationPublisher {
       });
       return toError('validation_error', 'Active convoy and member identifiers are required.');
     }
+
+    const startGeneration = ++this.lifecycleGeneration;
+    this.removeSubscription();
+    const cancelledStart = () => toError(
+      'tracking_disabled',
+      'Location sharing start was cancelled.',
+    );
 
     if (!this.backend.isAvailable()) {
       const guidance = getConvoyBackendReadinessGuidance('supabase_unconfigured');
@@ -218,6 +244,7 @@ export class ConvoyLocationPublisher {
     try {
       user = await this.backend.getCurrentUser();
     } catch (error) {
+      if (startGeneration !== this.lifecycleGeneration) return cancelledStart();
       const message = error instanceof Error && error.message.trim()
         ? error.message
         : 'Unable to verify the current user before enabling convoy location sharing.';
@@ -231,6 +258,7 @@ export class ConvoyLocationPublisher {
       });
       return toError('backend_error', message);
     }
+    if (startGeneration !== this.lifecycleGeneration) return cancelledStart();
 
     if (!user?.id) {
       await this.setState({
@@ -244,9 +272,14 @@ export class ConvoyLocationPublisher {
       return toError('auth_required', 'Sign in before enabling convoy location sharing.');
     }
 
-    await this.stopConvoyLocationSharing();
+    if (expectedOwnerId && user.id !== expectedOwnerId) {
+      await this.resetConvoyLocationSharingForAccountChange();
+      return toError('auth_required', 'The active account changed before convoy location sharing could start.');
+    }
+
     await this.setState({
       ...initialState,
+      ownerId: user.id,
       status: 'starting',
       enabled: false,
       convoyId,
@@ -255,11 +288,13 @@ export class ConvoyLocationPublisher {
       movementStatusOverride: input.movementStatusOverride ?? null,
       lastStopReason: null,
     });
+    if (startGeneration !== this.lifecycleGeneration) return cancelledStart();
 
     let permission: 'granted' | 'denied' | 'undetermined' = 'undetermined';
     try {
       permission = await this.backend.requestForegroundPermission();
     } catch (error) {
+      if (startGeneration !== this.lifecycleGeneration) return cancelledStart();
       const message = error instanceof Error && error.message.trim()
         ? error.message
         : 'Location permission request failed.';
@@ -272,6 +307,7 @@ export class ConvoyLocationPublisher {
       });
       return toError('backend_error', message);
     }
+    if (startGeneration !== this.lifecycleGeneration) return cancelledStart();
 
     if (permission !== 'granted') {
       await this.setState({
@@ -285,7 +321,7 @@ export class ConvoyLocationPublisher {
     }
 
     try {
-      this.subscription = await this.backend.watchPosition(
+      const subscription = await this.backend.watchPosition(
         {
           accuracy: this.backend.getHighAccuracySetting(),
           distanceInterval: 10,
@@ -293,9 +329,17 @@ export class ConvoyLocationPublisher {
           mayShowUserSettingsDialog: true,
         },
         (location) => {
+          if (startGeneration !== this.lifecycleGeneration) return;
           void this.handleLocation(location);
         },
       );
+      if (startGeneration !== this.lifecycleGeneration) {
+        try {
+          subscription.remove();
+        } catch {}
+        return cancelledStart();
+      }
+      this.subscription = subscription;
 
       await this.setState({
         ...this.state,
@@ -306,10 +350,16 @@ export class ConvoyLocationPublisher {
         lastError: null,
         lastStopReason: null,
       });
+      if (startGeneration !== this.lifecycleGeneration) {
+        if (this.subscription === subscription) this.removeSubscription();
+        return cancelledStart();
+      }
 
       return { ok: true, data: this.state };
     } catch (error) {
-      await this.stopConvoyLocationSharing();
+      if (startGeneration !== this.lifecycleGeneration) return cancelledStart();
+      this.lifecycleGeneration += 1;
+      this.removeSubscription();
       const message = error instanceof Error ? error.message : 'Unable to start convoy location sharing.';
       await this.setState({
         ...this.state,
@@ -322,12 +372,8 @@ export class ConvoyLocationPublisher {
   }
 
   async stopConvoyLocationSharing(reason?: string): Promise<ConvoyLocationPublisherResult<ConvoyLocationSharingState>> {
-    if (this.subscription) {
-      try {
-        this.subscription.remove();
-      } catch {}
-      this.subscription = null;
-    }
+    this.lifecycleGeneration += 1;
+    this.removeSubscription();
 
     await this.setState({
       ...this.state,
@@ -340,6 +386,27 @@ export class ConvoyLocationPublisher {
     });
 
     return { ok: true, data: this.state };
+  }
+
+  async resetConvoyLocationSharingForAccountChange(
+    reason = 'Account changed. Live sharing stopped.',
+  ): Promise<ConvoyLocationPublisherResult<ConvoyLocationSharingState>> {
+    this.lifecycleGeneration += 1;
+    this.removeSubscription();
+
+    await this.setState({
+      ...initialState,
+      lastStopReason: reason,
+    });
+    return { ok: true, data: this.state };
+  }
+
+  private removeSubscription(): void {
+    if (!this.subscription) return;
+    try {
+      this.subscription.remove();
+    } catch {}
+    this.subscription = null;
   }
 
   async getConvoyLocationSharingState(): Promise<ConvoyLocationSharingState> {
@@ -398,6 +465,10 @@ export class ConvoyLocationPublisher {
     if (!user?.id) {
       await this.stopConvoyLocationSharing('Auth session ended. Live sharing stopped.');
       return toError('auth_required', 'Sign in before sharing convoy location.');
+    }
+    if (!state.ownerId || state.ownerId !== user.id) {
+      await this.resetConvoyLocationSharingForAccountChange();
+      return toError('auth_required', 'The active account changed. Live sharing stopped.');
     }
 
     const eligibility = await this.backend.validateSharingAllowed(state.convoyId, state.memberId, user.id);
@@ -531,6 +602,10 @@ export function startConvoyLocationSharing(input: StartConvoyLocationSharingInpu
 
 export function stopConvoyLocationSharing(reason?: string) {
   return convoyLocationPublisher.stopConvoyLocationSharing(reason);
+}
+
+export function resetConvoyLocationSharingForAccountChange(reason?: string) {
+  return convoyLocationPublisher.resetConvoyLocationSharingForAccountChange(reason);
 }
 
 export function getConvoyLocationSharingState() {

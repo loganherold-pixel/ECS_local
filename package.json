@@ -230,6 +230,7 @@
     "test:dispatch-live": "node ./scripts/test-dispatch-live-hard-conversion.js",
     "test:dispatch-scenarios": "node ./scripts/test-dispatch-scenarios.js",
     "test:dispatch-landscape-layout": "node ./scripts/test-dispatch-landscape-layout.js",
+    "test:dispatch-convoy-workspace-layout": "node ./scripts/test-dispatch-convoy-workspace-layout.js",
     "test:convoy-command": "node ./scripts/test-convoy-command.js",
     "test:convoy-command-v1-5-readiness": "node ./scripts/test-convoy-command-v1-5-readiness.js",
     "test:convoy-command-v1-5-foundation": "node ./scripts/test-convoy-command-v1-5-foundation.js",

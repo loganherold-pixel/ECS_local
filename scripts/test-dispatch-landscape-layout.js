@@ -79,12 +79,17 @@ assert.ok(
 );
 
 assert.ok(
-  commandCenterSource.includes('presentation="summary"') &&
+  commandCenterSource.includes('const showLandscapeConvoySummary = Boolean(') &&
+    commandCenterSource.includes("missionCommandView !== 'team'") &&
+    commandCenterSource.includes('{showLandscapeConvoySummary ? (') &&
+    commandCenterSource.includes('presentation="summary"') &&
     commandCenterSource.includes("presentation={isLandscapeDispatch ? 'signals' : 'feed'}") &&
+    commandCenterSource.includes('activeConvoyContext={dispatchConvoyPresentationContext}') &&
+    commandCenterSource.includes('activeConvoyContextAuthority={activeConvoyContextAuthority}') &&
     commandCenterSource.includes('<LandscapeShellControls') &&
     commandCenterSource.includes('onRevealDock={handleRevealDispatchDock}') &&
     dockSource.includes("expandedChromeTab === 'dispatch'"),
-  'Dispatch landscape should keep shell controls and render a signal-only Convoy Command lower panel.',
+  'Dispatch landscape should keep shell controls, conditionally render one secondary summary, and use the lower signal panel as the Team/local-CAD workspace.',
 );
 
 assert.ok(

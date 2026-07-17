@@ -18,13 +18,18 @@ import {
 } from '../../lib/convoy/convoyMembershipService';
 import {
   getConvoyLocationSharingState,
+  selectConvoyLocationSharingStateForOwner,
   startConvoyLocationSharing,
   stopConvoyLocationSharing,
   type ConvoyLocationSharingState,
 } from '../../lib/convoy/convoyLocationPublisher';
 import {
   formatConvoyDistanceMiles,
+  selectConvoyCommandActiveContext,
+  selectConvoyCommandContextForOwner,
   selectConvoyCommandPanelViewModel,
+  selectConvoyCommandWorkspacePresentation,
+  type ConvoyCommandContextAuthority,
 } from '../../lib/convoy/convoyCommandSelectors';
 import type { ConvoyCommandPanelViewModel } from '../../lib/convoy/convoyCommandTypes';
 import type {
@@ -48,6 +53,7 @@ import {
   useConvoyTrackingStore,
 } from '../../stores/convoyTrackingStore';
 import ConvoyRegroupPlannerSheet from './ConvoyRegroupPlannerSheet';
+import DispatchConvoyWorkspaceSlot from './DispatchConvoyWorkspaceSlot';
 
 type DispatchConvoyCommandPanelProps = {
   connectionLabel: string;
@@ -63,6 +69,9 @@ type DispatchConvoyCommandPanelProps = {
   onEmergencyPing: () => void;
   onOpenEmergencyEvent: (event: DispatchEvent) => void;
   presentation?: 'full' | 'feed' | 'signals' | 'summary';
+  activeConvoyContext?: ActiveConvoyContext | null;
+  activeConvoyContextAuthority?: ConvoyCommandContextAuthority;
+  activeConvoyContextOwnerKey?: string | null;
   showEmergencyOverlay?: boolean;
   convoyLifecycleRevision?: number;
   regroupPlannerEnabled?: boolean;
@@ -196,6 +205,9 @@ export default function DispatchConvoyCommandPanel({
   onEmergencyPing,
   onOpenEmergencyEvent,
   presentation = 'full',
+  activeConvoyContext,
+  activeConvoyContextAuthority,
+  activeConvoyContextOwnerKey,
   showEmergencyOverlay,
   convoyLifecycleRevision = 0,
   regroupPlannerEnabled = false,
@@ -224,28 +236,44 @@ export default function DispatchConvoyCommandPanel({
     return `dispatch-convoy-command-panel:${dispatchConvoySubscriptionOwnerSequence}`;
   });
   const [activeContext, setActiveContext] = useState<ActiveConvoyContext | null>(null);
+  const activeContextOwnerKeyRef = useRef<string | null | undefined>(activeConvoyContextOwnerKey);
+  const [membershipAvailability, setMembershipAvailability] = useState<'pending' | 'ready' | 'unavailable'>('pending');
+  const [membershipErrorNote, setMembershipErrorNote] = useState<string | null>(null);
+  const [sharingErrorNote, setSharingErrorNote] = useState<string | null>(null);
   const [sharingState, setSharingState] = useState<ConvoyLocationSharingState | null>(null);
   const [sharingBusy, setSharingBusy] = useState(false);
   const sharingBusyRef = useRef(false);
   const [trackingNote, setTrackingNote] = useState<string | null>(null);
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [regroupPlannerVisible, setRegroupPlannerVisible] = useState(false);
+  const resolvedActiveContext = selectConvoyCommandActiveContext({
+    parentContext: activeConvoyContext,
+    parentAuthority: activeConvoyContextAuthority,
+    hydratedContext: activeContextOwnerKeyRef.current === activeConvoyContextOwnerKey
+      ? activeContext
+      : null,
+  });
+  const resolvedMembershipAvailability = activeConvoyContextAuthority === 'unavailable'
+    ? 'unavailable'
+    : activeConvoyContextAuthority === 'resolved'
+      ? 'ready'
+      : membershipAvailability;
   const isCompact = windowWidth < 820;
   const viewModel = useMemo(
     () => selectConvoyCommandPanelViewModel({ commandData }),
     [commandData],
   );
   const fallbackMapMembers = useMemo(() => fallbackVehiclesFromSharedCommandData(commandData), [commandData]);
-  const hasActiveConvoy = Boolean(activeContext?.convoyId);
+  const hasActiveConvoy = Boolean(resolvedActiveContext?.convoyId);
   const liveMapMembers = useMemo(
     () => hasActiveConvoy &&
       positionSharingRolloutEnabled &&
       memberLocationPermissionAllowed &&
-      trackingSnapshot.convoyId === activeContext?.convoyId
+      trackingSnapshot.convoyId === resolvedActiveContext?.convoyId
       ? trackingSnapshot.members
       : [],
     [
-      activeContext?.convoyId,
+      resolvedActiveContext?.convoyId,
       hasActiveConvoy,
       memberLocationPermissionAllowed,
       positionSharingRolloutEnabled,
@@ -254,12 +282,12 @@ export default function DispatchConvoyCommandPanel({
     ],
   );
   const routeSessionLocalMapMember = useMemo(
-    () => localVehicleFromSharedRouteSession(routeSession, activeContext),
-    [activeContext, routeSession],
+    () => localVehicleFromSharedRouteSession(routeSession, resolvedActiveContext),
+    [resolvedActiveContext, routeSession],
   );
   const gpsLocalMapMember = useMemo(
-    () => localVehicleFromSharedUserLocation(userLocation, activeContext),
-    [activeContext, userLocation],
+    () => localVehicleFromSharedUserLocation(userLocation, resolvedActiveContext),
+    [resolvedActiveContext, userLocation],
   );
   const localMapMember = routeSessionLocalMapMember ?? gpsLocalMapMember;
   const mapMembers = useMemo(
@@ -280,13 +308,13 @@ export default function DispatchConvoyCommandPanel({
     hasActiveConvoy &&
     positionSharingRolloutEnabled &&
     memberLocationPermissionAllowed &&
-    trackingSnapshot.convoyId === activeContext?.convoyId
+    trackingSnapshot.convoyId === resolvedActiveContext?.convoyId
       ? trackingSnapshot.connectionStatus
       : hasActiveConvoy && fallbackMapMembers.length > 0
         ? 'disconnected'
         : 'idle';
   const activeConvoyRawMemberCount =
-    hasActiveConvoy && trackingSnapshot.convoyId === activeContext?.convoyId
+    hasActiveConvoy && trackingSnapshot.convoyId === resolvedActiveContext?.convoyId
       ? trackingSnapshot.rawMembers.filter((member) => !member.revoked_at).length
       : 0;
   const regroupLocalContextRefreshKey = [
@@ -317,7 +345,7 @@ export default function DispatchConvoyCommandPanel({
       enabled: regroupPlannerEnabled,
       positionSharingEnabled: positionSharingRolloutEnabled,
       memberLocationPermissionAllowed: regroupPlannerPermissionAllowed,
-      activeConvoyId: activeContext?.convoyId,
+      activeConvoyId: resolvedActiveContext?.convoyId,
       routeSession,
       trackingConnectionStatus: mapConnectionStatus,
       members: liveMapMembers,
@@ -326,7 +354,7 @@ export default function DispatchConvoyCommandPanel({
       vehicleConstraints,
     }),
     [
-      activeContext?.convoyId,
+      resolvedActiveContext?.convoyId,
       expeditionId,
       liveMapMembers,
       mapConnectionStatus,
@@ -347,14 +375,14 @@ export default function DispatchConvoyCommandPanel({
   const panelViewModel = useMemo(
     () => buildSharedActiveConvoyPanelViewModel({
       baseViewModel: viewModel,
-      activeContext,
+      activeContext: resolvedActiveContext,
       mapMembers,
       rawMemberCount: activeConvoyRawMemberCount,
       trackingLastUpdated: trackingSnapshot.lastUpdated,
       trackingConnectionStatus: mapConnectionStatus,
     }),
     [
-      activeContext,
+      resolvedActiveContext,
       activeConvoyRawMemberCount,
       mapConnectionStatus,
       mapMembers,
@@ -362,11 +390,20 @@ export default function DispatchConvoyCommandPanel({
       viewModel,
     ],
   );
+  const workspacePresentation = useMemo(
+    () => selectConvoyCommandWorkspacePresentation({
+      activeConvoyId: resolvedActiveContext?.convoyId ?? null,
+      commandData,
+      membershipAvailability: resolvedMembershipAvailability,
+      presentation,
+    }),
+    [commandData, presentation, resolvedActiveContext?.convoyId, resolvedMembershipAvailability],
+  );
   const selectedMapMember = mapMembers.find((member) => member.memberId === selectedMemberId) ?? null;
   const widestGapLabel = formatConvoyDistanceMiles(panelViewModel.widestGapMiles) ?? '--';
   const hasConvoyData = panelViewModel.vehicleCount > 0 || panelViewModel.members.length > 0;
   const canShareLiveLocation = Boolean(
-    positionSharingRolloutEnabled && activeContext?.convoyId && activeContext?.memberId,
+    positionSharingRolloutEnabled && resolvedActiveContext?.convoyId && resolvedActiveContext?.memberId,
   );
   const isSharingLiveLocation = Boolean(sharingState?.enabled);
   const truthLine = !positionSharingRolloutEnabled
@@ -398,66 +435,166 @@ export default function DispatchConvoyCommandPanel({
     showEmergencyOverlay ?? (!isFeedPresentation && !isSignalOnlyPresentation && !isSummaryOnlyPresentation);
   const visibleTrackingNote =
     trackingNote ??
+    (activeConvoyContextAuthority === 'unavailable'
+      ? 'Convoy membership could not be reverified. Saved convoy context remains available.'
+      : null) ??
+    membershipErrorNote ??
+    sharingErrorNote ??
     (!hasActiveConvoy ? sharingState?.lastStopReason : null) ??
     (hasActiveConvoy && isConvoyLifecycleStopMessage(sharingState?.lastError) ? null : sharingState?.lastError) ??
-    (hasActiveConvoy && trackingSnapshot.convoyId === activeContext?.convoyId ? trackingSnapshot.error : null);
+    (hasActiveConvoy && trackingSnapshot.convoyId === resolvedActiveContext?.convoyId ? trackingSnapshot.error : null);
   const showCommandFooterFacts = !summaryCompact;
   const showSummaryConvoySignals = isSummaryOnlyPresentation && panelViewModel.isUsingLiveData && panelViewModel.members.length > 0;
 
   const refreshLiveSharingControls = useCallback(async () => {
-    const [context, state] = await Promise.all([
+    const requestOwnerKey = activeConvoyContextOwnerKey;
+    const [membershipResult, sharingResult] = await Promise.allSettled([
       convoyMembershipService.getActiveConvoyContext(),
       getConvoyLocationSharingState(),
     ]);
-    setActiveContext(context);
-    setSharingState(state);
+    if (activeContextOwnerKeyRef.current !== requestOwnerKey) {
+      return { context: null, state: null };
+    }
+
+    let context = resolvedActiveContext;
+    let state = sharingState;
+
+    if (membershipResult.status === 'fulfilled') {
+      const ownedContext = selectConvoyCommandContextForOwner(
+        membershipResult.value,
+        requestOwnerKey,
+      );
+      const ownerMismatch = membershipResult.value !== null && ownedContext === null;
+      setActiveContext(ownedContext);
+      if (ownerMismatch) {
+        setMembershipAvailability('unavailable');
+        setMembershipErrorNote('Convoy membership owner could not be verified.');
+        context = null;
+      } else {
+        setMembershipAvailability('ready');
+        setMembershipErrorNote(null);
+        if (activeConvoyContextAuthority !== 'resolved') {
+          context = ownedContext;
+        }
+      }
+    } else if (activeConvoyContext?.convoyId) {
+      setMembershipAvailability('ready');
+      setMembershipErrorNote(null);
+    } else {
+      setMembershipAvailability('unavailable');
+      setMembershipErrorNote('Convoy membership state could not be refreshed.');
+    }
+
+    if (sharingResult.status === 'fulfilled') {
+      const ownedSharingState = selectConvoyLocationSharingStateForOwner(
+        sharingResult.value,
+        requestOwnerKey,
+      );
+      state = ownedSharingState;
+      setSharingState(ownedSharingState);
+      setSharingErrorNote(ownedSharingState
+        ? null
+        : 'Live sharing state belongs to a different or unverified account.');
+    } else {
+      setSharingErrorNote('Live sharing state could not be refreshed.');
+    }
+
     return { context, state };
-  }, []);
+  }, [
+    activeConvoyContext,
+    activeConvoyContextAuthority,
+    activeConvoyContextOwnerKey,
+    resolvedActiveContext,
+    sharingState,
+  ]);
+
+  useEffect(() => {
+    if (activeContextOwnerKeyRef.current === activeConvoyContextOwnerKey) return;
+    activeContextOwnerKeyRef.current = activeConvoyContextOwnerKey;
+    setActiveContext(null);
+    setMembershipAvailability('pending');
+    setMembershipErrorNote(null);
+    setSharingErrorNote(null);
+    setSharingState(null);
+    sharingBusyRef.current = false;
+    setSharingBusy(false);
+    setTrackingNote(null);
+    setSelectedMemberId(null);
+  }, [activeConvoyContextOwnerKey]);
 
   useEffect(() => {
     let mounted = true;
+    const requestOwnerKey = activeConvoyContextOwnerKey;
     void navigateRouteSessionStore.hydrateFromPersistence();
     void (async () => {
-      try {
-        const [context, state] = await Promise.all([
-          convoyMembershipService.getActiveConvoyContext(),
-          getConvoyLocationSharingState(),
-        ]);
-        if (!mounted) return;
-        setActiveContext(context);
-        setSharingState(state);
-      } catch {
-        if (mounted) setTrackingNote('Live sharing state could not be refreshed.');
+      const [membershipResult, sharingResult] = await Promise.allSettled([
+        convoyMembershipService.getActiveConvoyContext(),
+        getConvoyLocationSharingState(),
+      ]);
+      if (!mounted) return;
+
+      if (membershipResult.status === 'fulfilled') {
+        const ownedContext = selectConvoyCommandContextForOwner(
+          membershipResult.value,
+          requestOwnerKey,
+        );
+        setActiveContext(ownedContext);
+        if (membershipResult.value !== null && ownedContext === null) {
+          setMembershipAvailability('unavailable');
+          setMembershipErrorNote('Convoy membership owner could not be verified.');
+        } else {
+          setMembershipAvailability('ready');
+          setMembershipErrorNote(null);
+        }
+      } else if (activeConvoyContext?.convoyId) {
+        setMembershipAvailability('ready');
+        setMembershipErrorNote(null);
+      } else {
+        setMembershipAvailability('unavailable');
+        setMembershipErrorNote('Convoy membership state could not be refreshed.');
+      }
+
+      if (sharingResult.status === 'fulfilled') {
+        const ownedSharingState = selectConvoyLocationSharingStateForOwner(
+          sharingResult.value,
+          requestOwnerKey,
+        );
+        setSharingState(ownedSharingState);
+        setSharingErrorNote(ownedSharingState
+          ? null
+          : 'Live sharing state belongs to a different or unverified account.');
+      } else {
+        setSharingErrorNote('Live sharing state could not be refreshed.');
       }
     })();
     return () => {
       mounted = false;
     };
-  }, [convoyLifecycleRevision]);
+  }, [activeConvoyContext, activeConvoyContextOwnerKey, convoyLifecycleRevision]);
 
   useEffect(() => {
     if (
-      !activeContext?.convoyId ||
+      !resolvedActiveContext?.convoyId ||
       !positionSharingRolloutEnabled ||
       !memberLocationPermissionAllowed
     ) {
       return undefined;
     }
-    void subscribeToConvoyLocations(activeContext.convoyId, subscriptionOwnerId);
+    void subscribeToConvoyLocations(resolvedActiveContext.convoyId, subscriptionOwnerId);
     return () => {
       stopConvoyLocationSubscription(subscriptionOwnerId);
     };
-  }, [activeContext?.convoyId, memberLocationPermissionAllowed, positionSharingRolloutEnabled, subscriptionOwnerId]);
+  }, [resolvedActiveContext?.convoyId, memberLocationPermissionAllowed, positionSharingRolloutEnabled, subscriptionOwnerId]);
 
   useEffect(() => {
-    if (!activeContext?.convoyId) return undefined;
+    if (!resolvedActiveContext?.convoyId) return undefined;
     const timer = setInterval(() => {
       refreshConvoyTrackingStaleness();
     }, CONVOY_TRACKING_STALENESS_REFRESH_MS);
     return () => {
       clearInterval(timer);
     };
-  }, [activeContext?.convoyId]);
+  }, [resolvedActiveContext?.convoyId]);
 
   async function handleStartLiveSharing() {
     if (sharingBusyRef.current) return;
@@ -468,12 +605,13 @@ export default function DispatchConvoyCommandPanel({
     }
 
     sharingBusyRef.current = true;
+    const requestOwnerKey = activeConvoyContextOwnerKey;
     setSharingBusy(true);
     setTrackingNote(null);
 
     try {
-      const refreshed = activeContext?.convoyId && activeContext.memberId
-        ? { context: activeContext, state: sharingState }
+      const refreshed = resolvedActiveContext?.convoyId && resolvedActiveContext.memberId
+        ? { context: resolvedActiveContext, state: sharingState }
         : await refreshLiveSharingControls();
       const context = refreshed.context;
 
@@ -483,23 +621,29 @@ export default function DispatchConvoyCommandPanel({
       }
 
       const result = await startConvoyLocationSharing({
+        expectedOwnerId: requestOwnerKey,
         convoyId: context.convoyId,
         memberId: context.memberId,
       });
       const nextState = result.ok ? result.data : await getConvoyLocationSharingState();
+      if (activeContextOwnerKeyRef.current !== requestOwnerKey) return;
       setActiveContext(context);
-      setSharingState(nextState);
+      setSharingState(selectConvoyLocationSharingStateForOwner(nextState, requestOwnerKey));
       setTrackingNote(result.ok ? null : result.error);
       if (result.ok && memberLocationPermissionAllowed) {
         void subscribeToConvoyLocations(context.convoyId, subscriptionOwnerId);
       }
     } catch (error) {
+      if (activeContextOwnerKeyRef.current !== requestOwnerKey) return;
       const message = error instanceof Error && error.message.trim()
         ? error.message
         : 'Live sharing could not be updated.';
       setTrackingNote(message);
       try {
-        setSharingState(await getConvoyLocationSharingState());
+        setSharingState(selectConvoyLocationSharingStateForOwner(
+          await getConvoyLocationSharingState(),
+          requestOwnerKey,
+        ));
       } catch {}
     } finally {
       sharingBusyRef.current = false;
@@ -511,20 +655,27 @@ export default function DispatchConvoyCommandPanel({
     if (sharingBusyRef.current) return;
 
     sharingBusyRef.current = true;
+    const requestOwnerKey = activeConvoyContextOwnerKey;
     setSharingBusy(true);
     setTrackingNote(null);
 
     try {
       const result = await stopConvoyLocationSharing('Live sharing stopped by user.');
-      setSharingState(result.ok ? result.data : await getConvoyLocationSharingState());
+      const nextState = result.ok ? result.data : await getConvoyLocationSharingState();
+      if (activeContextOwnerKeyRef.current !== requestOwnerKey) return;
+      setSharingState(selectConvoyLocationSharingStateForOwner(nextState, requestOwnerKey));
       setTrackingNote(result.ok ? null : result.error);
     } catch (error) {
+      if (activeContextOwnerKeyRef.current !== requestOwnerKey) return;
       const message = error instanceof Error && error.message.trim()
         ? error.message
         : 'Live sharing could not be stopped.';
       setTrackingNote(message);
       try {
-        setSharingState(await getConvoyLocationSharingState());
+        setSharingState(selectConvoyLocationSharingStateForOwner(
+          await getConvoyLocationSharingState(),
+          requestOwnerKey,
+        ));
       } catch {}
     } finally {
       sharingBusyRef.current = false;
@@ -586,32 +737,41 @@ export default function DispatchConvoyCommandPanel({
         isSummaryOnlyPresentation ? styles.summaryOnlyShell : null,
       ]}
     >
-      {!isSummaryOnlyPresentation ? (
-      <View style={[styles.panelStage, isFeedPresentation || isSignalOnlyPresentation ? styles.feedPanelStage : null]}>
-        {hasActiveConvoy ? (
-          <ConvoySignalSurface
-            compact={isFeedPresentation || isSignalOnlyPresentation}
-            panelViewModel={panelViewModel}
-            members={liveMapMembers}
-            connectionStatus={mapConnectionStatus}
-            selectedMemberId={selectedMemberId}
-            onSelectMemberId={setSelectedMemberId}
-            emergencyEvents={emergencyEvents}
-            onOpenEmergencyEvent={onOpenEmergencyEvent}
-          />
-        ) : (
-          <InactiveConvoySurface
-            compact={isFeedPresentation || isSignalOnlyPresentation}
-            connectionLabel={connectionLabel}
-            hasActiveTeam={hasActiveTeam}
-            teamStatusLabel={teamStatusLabel}
-          />
+      <DispatchConvoyWorkspaceSlot
+        presentation={workspacePresentation}
+        signalSurface={(
+          <View
+            style={[styles.panelStage, isFeedPresentation || isSignalOnlyPresentation ? styles.feedPanelStage : null]}
+            testID={workspacePresentation.showCommandSurface
+              ? 'dispatch-convoy-signal-status'
+              : 'dispatch-convoy-active-workspace'}
+          >
+            <ConvoySignalSurface
+              compact={isFeedPresentation || isSignalOnlyPresentation}
+              panelViewModel={panelViewModel}
+              members={liveMapMembers}
+              connectionStatus={mapConnectionStatus}
+              selectedMemberId={selectedMemberId}
+              onSelectMemberId={setSelectedMemberId}
+              emergencyEvents={emergencyEvents}
+              onOpenEmergencyEvent={onOpenEmergencyEvent}
+            />
+          </View>
         )}
-      </View>
-      ) : null}
-
-      {!isSignalOnlyPresentation ? (
-      <View
+        standbySurface={(
+          <View style={[styles.panelStage, isFeedPresentation || isSignalOnlyPresentation ? styles.feedPanelStage : null]}>
+            <InactiveConvoySurface
+              compact={isFeedPresentation || isSignalOnlyPresentation}
+              connectionLabel={connectionLabel}
+              hasActiveTeam={hasActiveTeam}
+              teamStatusLabel={teamStatusLabel}
+              standbyReason={workspacePresentation.standbyReason}
+            />
+          </View>
+        )}
+        commandSurface={(
+          <View
+        testID="dispatch-convoy-active-workspace"
         style={[
           styles.commandSummary,
           isFeedPresentation ? styles.feedCommandSummary : null,
@@ -888,8 +1048,9 @@ export default function DispatchConvoyCommandPanel({
             </TouchableOpacity>
           </View>
         ) : null}
-      </View>
-      ) : null}
+          </View>
+        )}
+      />
       {regroupPlannerEnabled ? (
         <ConvoyRegroupPlannerSheet
           visible={regroupPlannerVisible}
@@ -927,15 +1088,39 @@ function InactiveConvoySurface({
   compact,
   connectionLabel,
   hasActiveTeam,
+  standbyReason,
   teamStatusLabel,
 }: {
   compact: boolean;
   connectionLabel: string;
   hasActiveTeam: boolean;
+  standbyReason: 'idle' | 'awaiting_setup' | 'disconnected' | 'unavailable' | null;
   teamStatusLabel: string;
 }) {
+  const unavailable = standbyReason === 'unavailable';
+  const disconnected = standbyReason === 'disconnected';
+  const eyebrow = unavailable
+    ? 'CONVOY TRACKING UNAVAILABLE'
+    : disconnected
+      ? 'CONVOY TRACKING OFFLINE'
+      : 'CONVOY TRACKING STANDBY';
+  const title = unavailable
+    ? 'Convoy Status Unavailable'
+    : disconnected
+      ? 'No Cached Convoy'
+      : 'No Active Convoy';
+  const body = unavailable
+    ? 'ECS could not verify convoy membership. Local Dispatch CAD and Recovery reporting remain available.'
+    : disconnected
+      ? 'No saved active convoy is available offline. Reconnect or open Convoy setup when service returns.'
+      : 'Create or join a convoy to enable live member tracking. Dispatch, Profile, Recovery, and Convoy actions remain available.';
+
   return (
-    <View style={[styles.inactiveConvoySurface, compact ? styles.inactiveConvoySurfaceCompact : null]}>
+    <View
+      style={[styles.inactiveConvoySurface, compact ? styles.inactiveConvoySurfaceCompact : null]}
+      testID="dispatch-convoy-standby-panel"
+      accessibilityLabel={`${eyebrow}. ${title}. ${body}`}
+    >
       <View pointerEvents="none" style={styles.inactiveGridLayer}>
         {[0, 1, 2, 3].map((line) => (
           <View
@@ -957,16 +1142,16 @@ function InactiveConvoySurface({
 
       <View style={[styles.inactiveConvoyContent, compact ? styles.inactiveConvoyContentCompact : null]}>
         <Text style={[styles.inactiveConvoyEyebrow, compact ? styles.inactiveConvoyEyebrowCompact : null]}>
-          CONVOY TRACKING STANDBY
+          {eyebrow}
         </Text>
         <Text style={[styles.inactiveConvoyTitle, compact ? styles.inactiveConvoyTitleCompact : null]}>
-          No Active Convoy
+          {title}
         </Text>
         <Text
           style={[styles.inactiveConvoyBody, compact ? styles.inactiveConvoyBodyCompact : null]}
           numberOfLines={compact ? 2 : 3}
         >
-          Create or join a convoy to enable live member tracking. Dispatch, Share, Profile, and Convoy actions remain available.
+          {body}
         </Text>
         <View style={styles.inactiveConvoyMetaRow}>
           <View style={styles.inactiveConvoyMeta}>

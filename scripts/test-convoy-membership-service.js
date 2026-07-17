@@ -82,13 +82,16 @@ function makeMember(overrides = {}) {
 
 function createMockBackend(options = {}) {
   const calls = [];
-  let activeContext = options.initialActiveContext ?? null;
+  const activeContexts = new Map();
+  if (options.initialActiveContext?.ownerId) {
+    activeContexts.set(options.initialActiveContext.ownerId, options.initialActiveContext);
+  }
   const functionResponses = options.functionResponses || {};
 
   return {
     calls,
     isAvailable: () => options.available !== false,
-    getCurrentUser: async () => options.user || { id: 'user-1' },
+    getCurrentUser: async () => options.getCurrentUser?.() || options.user || { id: 'user-1' },
     insertConvoy: async (row) => {
       calls.push(['insertConvoy', row]);
       if (options.insertConvoyResponse) return options.insertConvoyResponse;
@@ -111,12 +114,13 @@ function createMockBackend(options = {}) {
     },
     saveActiveContext: async (context) => {
       calls.push(['saveActiveContext', context]);
-      activeContext = context;
+      activeContexts.set(context.ownerId, context);
     },
-    readActiveContext: async () => activeContext,
-    clearActiveContext: async (convoyId) => {
-      calls.push(['clearActiveContext', convoyId]);
-      if (!convoyId || activeContext?.convoyId === convoyId) activeContext = null;
+    readActiveContext: async (ownerId) => activeContexts.get(ownerId) ?? null,
+    clearActiveContext: async (ownerId, convoyId) => {
+      calls.push(['clearActiveContext', ownerId, convoyId]);
+      const activeContext = activeContexts.get(ownerId) ?? null;
+      if (!convoyId || activeContext?.convoyId === convoyId) activeContexts.delete(ownerId);
     },
   };
 }
@@ -124,6 +128,7 @@ function createMockBackend(options = {}) {
 async function main() {
   const {
     ConvoyMembershipService,
+    getActiveConvoyCacheKey,
   } = require(servicePath);
 
   const createBackend = createMockBackend({
@@ -344,12 +349,15 @@ async function main() {
     'endConvoy should invoke the leader-only Edge Function action.',
   );
   assert.ok(
-    endBackend.calls.some((call) => call[0] === 'clearActiveContext' && call[1] === 'convoy-1'),
+    endBackend.calls.some((call) => (
+      call[0] === 'clearActiveContext' && call[1] === 'user-1' && call[2] === 'convoy-1'
+    )),
     'endConvoy should clear the local active convoy context.',
   );
 
   const staleMemberBackend = createMockBackend({
     initialActiveContext: {
+      ownerId: 'user-1',
       convoyId: 'convoy-ended',
       memberId: 'member-ended',
       role: 'member',
@@ -363,13 +371,52 @@ async function main() {
   assert.strictEqual(staleMemberRefresh.ok, true, 'stale member active convoy refresh should still succeed.');
   assert.deepStrictEqual(staleMemberRefresh.data, [], 'stale member active convoy refresh should return no active convoys.');
   assert.ok(
-    staleMemberBackend.calls.some((call) => call[0] === 'clearActiveContext' && call[1] === 'convoy-ended'),
+    staleMemberBackend.calls.some((call) => (
+      call[0] === 'clearActiveContext' && call[1] === 'user-1' && call[2] === 'convoy-ended'
+    )),
     'when backend returns no active memberships, listMyActiveConvoys should clear stale local active context left after leader end.',
   );
   assert.strictEqual(
     await staleMemberService.getActiveConvoyContext(),
     null,
     'stale member active context should be gone after backend reconciliation.',
+  );
+
+  let currentOwnerId = 'user-a';
+  const ownerScopedContext = {
+    ownerId: 'user-a',
+    convoyId: 'convoy-a',
+    memberId: 'member-a',
+    role: 'lead',
+    callsign: 'A1',
+    storedAt: '2026-07-16T12:00:00.000Z',
+  };
+  const ownerScopedBackend = createMockBackend({
+    getCurrentUser: () => ({ id: currentOwnerId }),
+    initialActiveContext: ownerScopedContext,
+  });
+  const ownerScopedService = new ConvoyMembershipService(ownerScopedBackend);
+  assert.strictEqual(
+    await ownerScopedService.getActiveConvoyContext(),
+    ownerScopedContext,
+    'the owning account should receive its saved active convoy context',
+  );
+  currentOwnerId = 'user-b';
+  assert.strictEqual(
+    await ownerScopedService.getActiveConvoyContext(),
+    null,
+    'an account switch must not expose the prior account active convoy context',
+  );
+  currentOwnerId = 'user-a';
+  assert.strictEqual(
+    await ownerScopedService.getActiveConvoyContext(),
+    ownerScopedContext,
+    'returning to the owning account should restore only that account context',
+  );
+  assert.notStrictEqual(
+    getActiveConvoyCacheKey('user-a'),
+    getActiveConvoyCacheKey('user-b'),
+    'persisted active convoy cache keys must be owner scoped',
   );
 
   const source = fs.readFileSync(edgeFunctionPath, 'utf8');

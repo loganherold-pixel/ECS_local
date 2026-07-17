@@ -324,8 +324,8 @@ assert(
     !dispatchCommandCenterSource.includes('Active convoy roster') &&
     !dispatchCommandCenterSource.includes('>DISPATCH</Text>') &&
     !dispatchCommandCenterSource.includes('styles.headerCopy') &&
-    dispatchPanelSource.includes('const hasActiveConvoy = Boolean(activeContext?.convoyId)') &&
-    dispatchPanelSource.includes('activeContext?.convoyId') &&
+    dispatchPanelSource.includes('const hasActiveConvoy = Boolean(resolvedActiveContext?.convoyId)') &&
+    dispatchPanelSource.includes('selectConvoyCommandActiveContext') &&
     dispatchPanelSource.includes('Tracking disabled. Active convoy roster is available.'),
   'Dispatch header should center actions without the Dispatch/active-roster text while panel copy still uses active Convoy context.',
 );

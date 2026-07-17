@@ -344,7 +344,10 @@ assert.strictEqual(isProductionConvoyInviteAuthority({
 
 assert.ok(membershipSource.includes('listActiveMemberships(user.data.id)'), 'Membership list should be scoped to current user.');
 assert.ok(membershipSource.includes(".eq('convoy_id', convoyId)"), 'Roster and invite lookups should be convoy scoped.');
-assert.ok(membershipSource.includes('clearActiveContext(convoyId)'), 'Leave/end should clear the active convoy context for the same convoy.');
+assert.ok(
+  membershipSource.includes('this.backend.clearActiveContext(user.data.id, convoyId)'),
+  'Leave/end should clear only the authenticated owner active convoy context for the same convoy.',
+);
 assert.ok(
   membershipSource.includes('clearStaleActiveContext') &&
     membershipSource.includes("stopConvoyLocationSharing('Convoy is no longer active. Live sharing stopped.')"),

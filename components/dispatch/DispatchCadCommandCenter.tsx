@@ -224,6 +224,11 @@ import {
   type ActiveConvoyContext,
   type ConvoyListItem,
 } from '../../lib/convoy/convoyMembershipService';
+import { resetConvoyLocationSharingForAccountChange } from '../../lib/convoy/convoyLocationPublisher';
+import {
+  selectConvoyCommandContextForOwner,
+  selectScopedConvoyCommandLastGoodContext,
+} from '../../lib/convoy/convoyCommandSelectors';
 import type {
   ConvoyRegroupProposal,
   ConvoyRegroupVehicleConstraints,
@@ -450,6 +455,14 @@ type ConvoyLifecycleControlState = {
   role: ActiveConvoyContext['role'];
   isLeader: boolean;
   memberUserIds: string[];
+  activeContext: ActiveConvoyContext;
+};
+
+type ConvoyLifecycleControlLoadResult = {
+  authority: 'resolved' | 'unavailable';
+  control: ConvoyLifecycleControlState | null;
+  observedContext: ActiveConvoyContext | null;
+  ownerId: string | null;
 };
 
 const FALLBACK_DISPATCH_OPERATOR_NAME = 'ECS Operator';
@@ -2172,6 +2185,7 @@ function resolveConvoyLifecycleControl(
       activeItem.membership.user_id,
       ...memberUserIds,
     ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0))),
+    activeContext: context,
   };
 }
 
@@ -2312,7 +2326,16 @@ export default function DispatchCadCommandCenter() {
   const [dismissedAdvisoryId, setDismissedAdvisoryId] = useState<string | null>(null);
   const [channelRevision, setChannelRevision] = useState(0);
   const [recoveryAssistSubmitting, setRecoveryAssistSubmitting] = useState(false);
-  const [activeConvoyControl, setActiveConvoyControl] = useState<ConvoyLifecycleControlState | null>(null);
+  const [storedActiveConvoyControl, setActiveConvoyControl] = useState<ConvoyLifecycleControlState | null>(null);
+  const [storedObservedActiveConvoyContext, setObservedActiveConvoyContext] = useState<ActiveConvoyContext | null>(null);
+  const [activeConvoyContextAuthority, setActiveConvoyContextAuthority] = useState<'pending' | 'resolved' | 'unavailable'>('pending');
+  const activeConvoyLoadGenerationRef = useRef(0);
+  const activeConvoyControlOwnerRef = useRef<string | null>(user?.id ?? null);
+  const activeConvoyOwnerMatchesCurrentUser = activeConvoyControlOwnerRef.current === (user?.id ?? null);
+  const activeConvoyControl = activeConvoyOwnerMatchesCurrentUser ? storedActiveConvoyControl : null;
+  const observedActiveConvoyContext = activeConvoyOwnerMatchesCurrentUser
+    ? storedObservedActiveConvoyContext
+    : null;
   const [convoyLifecycleBusy, setConvoyLifecycleBusy] = useState(false);
   const [convoyLifecycleRevision, setConvoyLifecycleRevision] = useState(0);
   const [pulsingAdvisoryId, setPulsingAdvisoryId] = useState<string | null>(null);
@@ -2374,46 +2397,106 @@ export default function DispatchCadCommandCenter() {
   });
   const dispatchChannelSignatureRef = useRef<string | null>(null);
 
-  const loadConvoyLifecycleControl = useCallback(async (): Promise<ConvoyLifecycleControlState | null> => {
-    const context = await convoyMembershipService.getActiveConvoyContext();
-    if (!context?.convoyId) return null;
+  const loadConvoyLifecycleControl = useCallback(async (): Promise<ConvoyLifecycleControlLoadResult> => {
+    let observedContext: ActiveConvoyContext | null = null;
+    const ownerId = user?.id ?? null;
+    try {
+      const returnedContext = await convoyMembershipService.getActiveConvoyContext();
+      observedContext = selectConvoyCommandContextForOwner(returnedContext, ownerId);
+      if (returnedContext && !observedContext) {
+        return { authority: 'unavailable', control: null, observedContext: null, ownerId };
+      }
+      if (!observedContext?.convoyId) {
+        return { authority: 'resolved', control: null, observedContext: null, ownerId };
+      }
 
-    const activeConvoys = await convoyMembershipService.listMyActiveConvoys();
-    if (!activeConvoys.ok) return null;
+      const activeConvoys = await convoyMembershipService.listMyActiveConvoys();
+      if (!activeConvoys.ok) {
+        return { authority: 'unavailable', control: null, observedContext, ownerId };
+      }
 
-    const roster = await convoyMembershipService.listConvoyRoster(context.convoyId);
-    const memberUserIds = roster.ok
-      ? roster.data.members.map((member) => member.user_id)
-      : [];
+      const roster = await convoyMembershipService.listConvoyRoster(observedContext.convoyId);
+      const memberUserIds = roster.ok
+        ? roster.data.members.map((member) => member.user_id)
+        : [];
 
-    return resolveConvoyLifecycleControl(context, activeConvoys.data, user?.id, memberUserIds);
+      return {
+        authority: 'resolved',
+        control: resolveConvoyLifecycleControl(observedContext, activeConvoys.data, user?.id, memberUserIds),
+        observedContext,
+        ownerId,
+      };
+    } catch {
+      return { authority: 'unavailable', control: null, observedContext, ownerId };
+    }
+  }, [user?.id]);
+
+  const applyConvoyLifecycleControlLoad = useCallback((
+    result: ConvoyLifecycleControlLoadResult,
+    generation: number,
+  ): boolean => {
+    if (generation !== activeConvoyLoadGenerationRef.current) return false;
+    if (result.authority === 'resolved') {
+      setActiveConvoyControl(result.control);
+      setObservedActiveConvoyContext(result.control?.activeContext ?? null);
+    } else {
+      const lastGoodOwnerId = activeConvoyControlOwnerRef.current;
+      setActiveConvoyControl((current) => {
+        const preservedContext = selectScopedConvoyCommandLastGoodContext({
+          lastGoodContext: current?.activeContext ?? null,
+          observedContext: result.observedContext,
+          lastGoodOwnerId,
+          currentOwnerId: result.ownerId,
+        });
+        return preservedContext ? current : null;
+      });
+      setObservedActiveConvoyContext(result.observedContext);
+    }
+    activeConvoyControlOwnerRef.current = result.ownerId;
+    setActiveConvoyContextAuthority(result.authority);
+    return true;
+  }, []);
+
+  useEffect(() => {
+    const ownerId = user?.id ?? null;
+    if (activeConvoyControlOwnerRef.current === ownerId) return;
+    activeConvoyLoadGenerationRef.current += 1;
+    activeConvoyControlOwnerRef.current = ownerId;
+    setActiveConvoyControl(null);
+    setObservedActiveConvoyContext(null);
+    setActiveConvoyContextAuthority('pending');
+    stopConvoyLocationSubscription();
+    void resetConvoyLocationSharingForAccountChange();
   }, [user?.id]);
 
   useEffect(() => {
     let mounted = true;
-    void loadConvoyLifecycleControl().then((nextControl) => {
-      if (mounted) setActiveConvoyControl(nextControl);
+    const generation = ++activeConvoyLoadGenerationRef.current;
+    void loadConvoyLifecycleControl().then((result) => {
+      if (!mounted) return;
+      applyConvoyLifecycleControlLoad(result, generation);
     });
     return () => {
       mounted = false;
     };
-  }, [loadConvoyLifecycleControl, convoyLifecycleRevision]);
+  }, [applyConvoyLifecycleControlLoad, loadConvoyLifecycleControl, convoyLifecycleRevision]);
 
   useFocusEffect(
     useCallback(() => {
       let mounted = true;
+      const generation = ++activeConvoyLoadGenerationRef.current;
       void Promise.all([
         loadConvoyLifecycleControl(),
         navigateRouteSessionStore.hydrateFromPersistence(),
-      ]).then(([nextControl]) => {
+      ]).then(([result]) => {
         if (!mounted) return;
-        setActiveConvoyControl(nextControl);
+        applyConvoyLifecycleControlLoad(result, generation);
         setConvoyLifecycleRevision((current) => current + 1);
       });
       return () => {
         mounted = false;
       };
-    }, [loadConvoyLifecycleControl]),
+    }, [applyConvoyLifecycleControlLoad, loadConvoyLifecycleControl]),
   );
 
   useEffect(() => {
@@ -4013,11 +4096,18 @@ export default function DispatchCadCommandCenter() {
   });
   const teamStatusLabel = teamSyncState.label;
   const hasDispatchConvoyContext = Boolean(activeConvoyControl?.convoyId);
+  const dispatchConvoyPresentationContext = activeConvoyControl?.activeContext ?? observedActiveConvoyContext;
   const dispatchTeamStatusLabel = hasDispatchConvoyContext ? activeConvoyControl?.convoyName ?? 'Active convoy' : teamStatusLabel;
   const dispatchTeamMemberCount = hasActiveTeam
     ? teamMemberCount
     : activeConvoyControl?.memberUserIds.length ?? 0;
   const hasDispatchTeamContext = hasActiveTeam || hasDispatchConvoyContext;
+  const showLandscapeConvoySummary = Boolean(
+    isLandscapeDispatch &&
+    missionCommandEnabled &&
+    missionCommandView !== 'team' &&
+    hasDispatchTeamContext,
+  );
   const channelSnapshots = useMemo(
     () => {
       if (channelRevision < 0) {
@@ -4409,10 +4499,13 @@ export default function DispatchCadCommandCenter() {
       return;
     }
 
-    const nextConvoyControl = await loadConvoyLifecycleControl();
-    setActiveConvoyControl(nextConvoyControl);
-    if (!nextConvoyControl && activeConvoyControl?.convoyId) {
-      stopConvoyLocationSubscription();
+    const convoyLoadGeneration = ++activeConvoyLoadGenerationRef.current;
+    const convoyLoadResult = await loadConvoyLifecycleControl();
+    const convoyLoadApplied = applyConvoyLifecycleControlLoad(convoyLoadResult, convoyLoadGeneration);
+    if (convoyLoadApplied && convoyLoadResult.authority === 'resolved') {
+      if (!convoyLoadResult.control && activeConvoyControl?.convoyId) {
+        stopConvoyLocationSubscription();
+      }
     }
     setConvoyLifecycleRevision((current) => current + 1);
 
@@ -4472,6 +4565,7 @@ export default function DispatchCadCommandCenter() {
   }, [
     events,
     activeConvoyControl?.convoyId,
+    applyConvoyLifecycleControlLoad,
     canonicalDispatchContext,
     isOnline,
     loadConvoyLifecycleControl,
@@ -5910,7 +6004,10 @@ export default function DispatchCadCommandCenter() {
       }
 
       stopConvoyLocationSubscription();
+      activeConvoyLoadGenerationRef.current += 1;
       setActiveConvoyControl(null);
+      setObservedActiveConvoyContext(null);
+      setActiveConvoyContextAuthority('resolved');
       setConvoyLifecycleRevision((current) => current + 1);
       showToast?.(activeConvoyControl.isLeader
         ? 'Convoy ended. Live location sharing stopped for all members.'
@@ -6765,6 +6862,9 @@ export default function DispatchCadCommandCenter() {
       onEmergencyPing={handleEmergencyPingButtonPress}
       onOpenEmergencyEvent={handleOpenEmergencyPing}
       presentation={isLandscapeDispatch ? 'signals' : 'feed'}
+      activeConvoyContext={dispatchConvoyPresentationContext}
+      activeConvoyContextAuthority={activeConvoyContextAuthority}
+      activeConvoyContextOwnerKey={user?.id ?? null}
       showEmergencyOverlay={false}
       convoyLifecycleRevision={convoyLifecycleRevision}
       regroupPlannerEnabled={convoyRegroupPlannerEnabled && !isLandscapeDispatch}
@@ -6840,7 +6940,7 @@ export default function DispatchCadCommandCenter() {
         >
           <ECSStateMessage
             title="Mission Command unavailable"
-            message={`${getDispatchRolloutDisabledCopy('missionCommand')} Local Dispatch CAD and Recovery reporting remain available below.`}
+            message={`${getDispatchRolloutDisabledCopy('missionCommand')} Local Dispatch CAD and Recovery reporting remain available from Dispatch controls.`}
             icon="pause-circle-outline"
             variant="disabled"
           />
@@ -6860,41 +6960,46 @@ export default function DispatchCadCommandCenter() {
           <View style={styles.landscapeTopRow}>
             <View style={styles.landscapeSummaryDock}>
               {headerStrip}
-              <DispatchConvoyCommandPanel
-                connectionLabel={connectionState.label}
-                teamStatusLabel={dispatchTeamStatusLabel}
-                teamMemberCount={dispatchTeamMemberCount}
-                hasActiveTeam={hasDispatchTeamContext}
-                userLocation={dispatchConvoyUserLocation}
-                emergencyEvents={emergencyCoordinatePingEvents}
-                emergencyAlertActive={emergencyPingAttentionActive}
-                emergencySubmitting={recoveryAssistSubmitting}
-                emergencyButtonLabel={emergencyPingButtonMode === 'loading' ? 'GETTING GPS' : emergencyPingButtonLabel.toUpperCase()}
-                emergencyButtonTone={emergencyPingButtonTone}
-                onEmergencyPing={handleEmergencyPingButtonPress}
-                onOpenEmergencyEvent={handleOpenEmergencyPing}
-                presentation="summary"
-                showEmergencyOverlay={false}
-                convoyLifecycleRevision={convoyLifecycleRevision}
-                regroupPlannerEnabled={convoyRegroupPlannerEnabled}
-                regroupPlannerOpenRequest={smartRallyOpenRequest}
-                positionSharingRolloutEnabled={teamPositionSharingEnabled}
-                memberLocationPermissionAllowed={memberLocationPermission.allowed}
-                regroupPlannerPermissionAllowed={canPlanConvoyRegroup}
-                regroupPlannerPermissionReason={regroupPlannerPermissionReason}
-                canPreviewRegroupOnMap={dispatchRollout.mapContextIntegration && canPlanConvoyRegroup}
-                previewRegroupUnavailableReason={dispatchRollout.mapContextIntegration
-                  ? regroupPlannerPermissionReason
-                  : getDispatchRolloutDisabledCopy('mapContextIntegration')}
-                canCreateRallyPing={createRallyPingPermission.allowed}
-                rallyPingUnavailableReason={createRallyPingPermission.reason}
-                expeditionId={localDispatchPersistenceId}
-                vehicleConstraints={smartRallyVehicleConstraints}
-                onPreviewRegroupProposal={(proposal) => void handlePreviewConvoyRegroupProposal(proposal)}
-                onCreateRegroupRallyDraft={handleCreateConvoyRegroupRallyDraft}
-                onReturnToCommandBoard={missionCommandEnabled ? handleReturnToMissionCommandBoard : undefined}
-                testID="dispatch-convoy-command-landscape-summary"
-              />
+              {showLandscapeConvoySummary ? (
+                <DispatchConvoyCommandPanel
+                  connectionLabel={connectionState.label}
+                  teamStatusLabel={dispatchTeamStatusLabel}
+                  teamMemberCount={dispatchTeamMemberCount}
+                  hasActiveTeam={hasDispatchTeamContext}
+                  userLocation={dispatchConvoyUserLocation}
+                  emergencyEvents={emergencyCoordinatePingEvents}
+                  emergencyAlertActive={emergencyPingAttentionActive}
+                  emergencySubmitting={recoveryAssistSubmitting}
+                  emergencyButtonLabel={emergencyPingButtonMode === 'loading' ? 'GETTING GPS' : emergencyPingButtonLabel.toUpperCase()}
+                  emergencyButtonTone={emergencyPingButtonTone}
+                  onEmergencyPing={handleEmergencyPingButtonPress}
+                  onOpenEmergencyEvent={handleOpenEmergencyPing}
+                  presentation="summary"
+                  activeConvoyContext={dispatchConvoyPresentationContext}
+                  activeConvoyContextAuthority={activeConvoyContextAuthority}
+                  activeConvoyContextOwnerKey={user?.id ?? null}
+                  showEmergencyOverlay={false}
+                  convoyLifecycleRevision={convoyLifecycleRevision}
+                  regroupPlannerEnabled={convoyRegroupPlannerEnabled}
+                  regroupPlannerOpenRequest={smartRallyOpenRequest}
+                  positionSharingRolloutEnabled={teamPositionSharingEnabled}
+                  memberLocationPermissionAllowed={memberLocationPermission.allowed}
+                  regroupPlannerPermissionAllowed={canPlanConvoyRegroup}
+                  regroupPlannerPermissionReason={regroupPlannerPermissionReason}
+                  canPreviewRegroupOnMap={dispatchRollout.mapContextIntegration && canPlanConvoyRegroup}
+                  previewRegroupUnavailableReason={dispatchRollout.mapContextIntegration
+                    ? regroupPlannerPermissionReason
+                    : getDispatchRolloutDisabledCopy('mapContextIntegration')}
+                  canCreateRallyPing={createRallyPingPermission.allowed}
+                  rallyPingUnavailableReason={createRallyPingPermission.reason}
+                  expeditionId={localDispatchPersistenceId}
+                  vehicleConstraints={smartRallyVehicleConstraints}
+                  onPreviewRegroupProposal={(proposal) => void handlePreviewConvoyRegroupProposal(proposal)}
+                  onCreateRegroupRallyDraft={handleCreateConvoyRegroupRallyDraft}
+                  onReturnToCommandBoard={missionCommandEnabled ? handleReturnToMissionCommandBoard : undefined}
+                  testID="dispatch-convoy-command-landscape-summary"
+                />
+              ) : null}
             </View>
           </View>
         </>

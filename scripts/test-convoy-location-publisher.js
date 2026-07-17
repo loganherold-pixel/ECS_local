@@ -89,12 +89,16 @@ function makeBackend(options = {}) {
     requestForegroundPermission: async () => {
       if (options.permissionThrows) throw new Error(options.permissionThrows);
       backend.permissionRequested = true;
+      options.onPermissionRequest?.();
+      if (options.permissionPromise) return options.permissionPromise;
       return backend.permission;
     },
     watchPosition: async (watchOptions, callback) => {
       backend.watchStarted = true;
       backend.watchOptions = watchOptions;
       backend.watchCallback = callback;
+      options.onWatchRequest?.();
+      if (options.watchPromise) return options.watchPromise;
       return {
         remove: () => {
           backend.removed = true;
@@ -113,7 +117,10 @@ function makeBackend(options = {}) {
 }
 
 async function main() {
-  const { ConvoyLocationPublisher } = require(publisherPath);
+  const {
+    ConvoyLocationPublisher,
+    selectConvoyLocationSharingStateForOwner,
+  } = require(publisherPath);
 
   const permissionDeniedBackend = makeBackend({ permission: 'denied' });
   const permissionDenied = new ConvoyLocationPublisher(permissionDeniedBackend);
@@ -185,6 +192,17 @@ async function main() {
   assert.strictEqual(startResult.ok, true, 'valid start should enable foreground sharing.');
   assert.strictEqual(activeBackend.watchStarted, true);
   assert.strictEqual(activeBackend.watchOptions.timeInterval, 5000);
+  assert.strictEqual(startResult.data.ownerId, 'user-1');
+  assert.strictEqual(
+    selectConvoyLocationSharingStateForOwner(startResult.data, 'user-1'),
+    startResult.data,
+    'the owning account should receive its live-sharing state',
+  );
+  assert.strictEqual(
+    selectConvoyLocationSharingStateForOwner(startResult.data, 'user-2'),
+    null,
+    'a different account must not receive persisted live-sharing state',
+  );
 
   activeBackend.watchCallback(makeFix({ speed: 2.4 }));
   await waitForAsyncCallback();
@@ -204,6 +222,123 @@ async function main() {
   activeBackend.watchCallback(makeFix({ latitude: 38.783, speed: 3.1 }));
   await waitForAsyncCallback();
   assert.strictEqual(activeBackend.publishedRows.length, 1, 'stopped publisher should not publish new updates.');
+
+  const failedRestartBackend = makeBackend();
+  const failedRestartPublisher = new ConvoyLocationPublisher(failedRestartBackend);
+  const successfulInitialStart = await failedRestartPublisher.startConvoyLocationSharing({
+    convoyId: 'convoy-before-restart',
+    memberId: 'member-before-restart',
+  });
+  assert.strictEqual(successfulInitialStart.ok, true);
+  failedRestartBackend.user = null;
+  const failedRestart = await failedRestartPublisher.startConvoyLocationSharing({
+    convoyId: 'convoy-after-restart',
+    memberId: 'member-after-restart',
+  });
+  assert.strictEqual(failedRestart.ok, false);
+  assert.strictEqual(failedRestart.code, 'auth_required');
+  assert.strictEqual(failedRestartBackend.removed, true, 'a replacement start must remove the prior native watch before preflight.');
+  failedRestartBackend.watchCallback(makeFix({ latitude: 38.799 }));
+  await waitForAsyncCallback();
+  assert.strictEqual(failedRestartBackend.publishedRows.length, 0, 'a failed restart must not leave the prior callback publishing.');
+  const failedRestartState = await failedRestartPublisher.getConvoyLocationSharingState();
+  assert.strictEqual(failedRestartState.enabled, false);
+
+  const accountSwitchBackend = makeBackend();
+  const accountSwitchPublisher = new ConvoyLocationPublisher(accountSwitchBackend);
+  const accountSwitchStart = await accountSwitchPublisher.startConvoyLocationSharing({
+    expectedOwnerId: 'user-1',
+    convoyId: 'convoy-account-a',
+    memberId: 'member-account-a',
+  });
+  assert.strictEqual(accountSwitchStart.ok, true);
+  await accountSwitchPublisher.resetConvoyLocationSharingForAccountChange();
+  const accountSwitchState = await accountSwitchPublisher.getConvoyLocationSharingState();
+  assert.strictEqual(accountSwitchBackend.removed, true, 'account switch should remove the native location watch immediately.');
+  assert.strictEqual(accountSwitchState.enabled, false);
+  assert.strictEqual(accountSwitchState.ownerId, null);
+  assert.strictEqual(accountSwitchState.convoyId, null);
+  assert.strictEqual(accountSwitchState.memberId, null);
+  assert.strictEqual(
+    selectConvoyLocationSharingStateForOwner(accountSwitchState, 'user-2'),
+    accountSwitchState,
+    'a neutral cleared state is safe for the next account to observe',
+  );
+
+  const mismatchedStartBackend = makeBackend({ user: { id: 'user-a' } });
+  const mismatchedStartPublisher = new ConvoyLocationPublisher(mismatchedStartBackend);
+  const mismatchedStart = await mismatchedStartPublisher.startConvoyLocationSharing({
+    expectedOwnerId: 'user-b',
+    convoyId: 'convoy-b',
+    memberId: 'member-b',
+  });
+  assert.strictEqual(mismatchedStart.ok, false, 'a raced account response must not start sharing for another UI owner.');
+  assert.strictEqual(mismatchedStart.code, 'auth_required');
+  assert.strictEqual(mismatchedStartBackend.permissionRequested, false);
+  assert.strictEqual(mismatchedStartBackend.watchStarted, false);
+
+  let resolveDeferredPermission;
+  let signalPermissionRequested;
+  const deferredPermissionRequested = new Promise((resolve) => {
+    signalPermissionRequested = resolve;
+  });
+  const deferredPermission = new Promise((resolve) => {
+    resolveDeferredPermission = resolve;
+  });
+  const deferredPermissionBackend = makeBackend({
+    permissionPromise: deferredPermission,
+    onPermissionRequest: signalPermissionRequested,
+  });
+  const deferredPermissionPublisher = new ConvoyLocationPublisher(deferredPermissionBackend);
+  const deferredPermissionStart = deferredPermissionPublisher.startConvoyLocationSharing({
+    expectedOwnerId: 'user-1',
+    convoyId: 'convoy-deferred-permission',
+    memberId: 'member-deferred-permission',
+  });
+  await deferredPermissionRequested;
+  await deferredPermissionPublisher.resetConvoyLocationSharingForAccountChange();
+  resolveDeferredPermission('granted');
+  const deferredPermissionResult = await deferredPermissionStart;
+  assert.strictEqual(deferredPermissionResult.ok, false);
+  assert.strictEqual(deferredPermissionResult.code, 'tracking_disabled');
+  assert.strictEqual(deferredPermissionBackend.watchStarted, false, 'a reset during permission must prevent a late native watch.');
+  const deferredPermissionState = await deferredPermissionPublisher.getConvoyLocationSharingState();
+  assert.strictEqual(deferredPermissionState.enabled, false);
+  assert.strictEqual(deferredPermissionState.ownerId, null);
+
+  let resolveDeferredWatch;
+  let signalWatchRequested;
+  let deferredWatchRemoved = false;
+  const deferredWatchRequested = new Promise((resolve) => {
+    signalWatchRequested = resolve;
+  });
+  const deferredWatch = new Promise((resolve) => {
+    resolveDeferredWatch = resolve;
+  });
+  const deferredWatchBackend = makeBackend({
+    watchPromise: deferredWatch,
+    onWatchRequest: signalWatchRequested,
+  });
+  const deferredWatchPublisher = new ConvoyLocationPublisher(deferredWatchBackend);
+  const deferredWatchStart = deferredWatchPublisher.startConvoyLocationSharing({
+    expectedOwnerId: 'user-1',
+    convoyId: 'convoy-deferred-watch',
+    memberId: 'member-deferred-watch',
+  });
+  await deferredWatchRequested;
+  await deferredWatchPublisher.resetConvoyLocationSharingForAccountChange();
+  resolveDeferredWatch({
+    remove: () => {
+      deferredWatchRemoved = true;
+    },
+  });
+  const deferredWatchResult = await deferredWatchStart;
+  assert.strictEqual(deferredWatchResult.ok, false);
+  assert.strictEqual(deferredWatchResult.code, 'tracking_disabled');
+  assert.strictEqual(deferredWatchRemoved, true, 'a native watch resolving after reset must be removed immediately.');
+  const deferredWatchState = await deferredWatchPublisher.getConvoyLocationSharingState();
+  assert.strictEqual(deferredWatchState.enabled, false);
+  assert.strictEqual(deferredWatchState.ownerId, null);
 
   const publishAuthBackend = makeBackend();
   const publishAuth = new ConvoyLocationPublisher(publishAuthBackend);
