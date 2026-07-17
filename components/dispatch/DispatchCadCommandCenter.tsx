@@ -16,7 +16,7 @@ import {
   type ListRenderItem,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, usePathname, useRouter } from 'expo-router';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 
 import ECSModalShell from '../ECSModalShell';
@@ -2207,6 +2207,7 @@ export default function DispatchCadCommandCenter() {
   const dispatchLocalHydrated = ['ready', 'empty', 'stale', 'degraded'].includes(dispatchLocalSurfaceState.status);
   const dispatchLocalTerminal = dispatchLocalSurfaceState.status !== 'idle' && dispatchLocalSurfaceState.status !== 'loading';
   const router = useRouter();
+  const pathname = usePathname();
   const { push: pushSingleFlight, returnTo: returnSingleFlight } = useECSNavigation();
   const routeParams = useLocalSearchParams<{
     dispatchEventId?: string | string[];
@@ -6091,9 +6092,10 @@ export default function DispatchCadCommandCenter() {
 
   const handleOpenLandscapeBluetoothControls = useCallback(() => {
     openUnifiedBluetoothCommand(router, {
+      returnTo: pathname,
       onUnavailable: () => showToast?.('Bluetooth controls unavailable.'),
     });
-  }, [router, showToast]);
+  }, [pathname, router, showToast]);
 
   const dockRevealControl = isLandscapeDispatch ? (
     <LandscapeShellControls

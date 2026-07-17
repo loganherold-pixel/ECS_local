@@ -37,6 +37,16 @@ function isPrimaryShellRoute(path: string | null | undefined): boolean {
   );
 }
 
+function isPreSetupRequestedEntryRoute(path: string | null | undefined): boolean {
+  const metadata = getRouteMetadata(path);
+  return Boolean(
+    metadata &&
+    metadata.authRequirement === 'shell' &&
+    metadata.setupRequirement === 'none' &&
+    metadata.allowPreSetupEntry === true,
+  );
+}
+
 function isDashboardShellRoute(path: string | null | undefined): boolean {
   const metadata = getRouteMetadata(path);
   return Boolean(
@@ -69,7 +79,10 @@ function resolveAuthenticatedShellTarget(params: {
     allowRouteRestore,
   } = params;
 
-  if (allowRequestedEntryRoute && isPublicDevQaRoute(requestedEntryRoute)) {
+  if (
+    allowRequestedEntryRoute &&
+    (isPublicDevQaRoute(requestedEntryRoute) || isPreSetupRequestedEntryRoute(requestedEntryRoute))
+  ) {
     return {
       target: requestedEntryRoute!,
       destinationSource: 'requested_entry_route',

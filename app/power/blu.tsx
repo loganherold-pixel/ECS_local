@@ -11,7 +11,6 @@ import {
   View,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { useRouter } from 'expo-router';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 import { useTheme } from '../../context/ThemeContext';
 import { hapticCommand, hapticMicro } from '../../lib/haptics';
@@ -36,6 +35,7 @@ import {
   getBluestackVisibleDeviceListLabel,
   isBluestackReleaseDeviceModel,
 } from '../../lib/bluestack';
+import { useECSNavigation } from '../../lib/navigation/useECSNavigation';
 
 type StatusTone = 'neutral' | 'active' | 'sync' | 'warning' | 'danger';
 
@@ -780,7 +780,7 @@ function BluestackCompatibilityCard({ palette }: { palette: any }) {
 }
 
 export default function BluPowerSourcesScreen() {
-  const router = useRouter();
+  const { back: goBack } = useECSNavigation();
   const { palette } = useTheme();
   const connections = useUnifiedDeviceConnections();
   const stopScanning = connections.stopScanning;
@@ -867,8 +867,8 @@ export default function BluPowerSourcesScreen() {
 
   const handleBackPress = useCallback(() => {
     void hapticMicro();
-    router.back();
-  }, [router]);
+    goBack();
+  }, [goBack]);
 
   const handleRescanPress = useCallback(() => {
     void hapticCommand();

@@ -578,6 +578,7 @@
     "test:account-command-hub-geofence-default": "node ./scripts/test-account-command-hub-geofence-default.js",
     "test:bluetooth-live": "node ./scripts/test-bluetooth-live-truthfulness.js",
     "test:bluestack-core": "node ./scripts/test-bluestack-core.js",
+    "test:bluestack-navigation": "node ./scripts/test-bluestack-navigation.js",
     "test:bluetooth-scanner": "node ./scripts/test-bluetooth-scanner-blocker.js",
     "test:bluetooth-classification": "node ./scripts/test-bluetooth-device-classification.js",
     "test:bluetooth-power-obd2-production": "node ./scripts/test-bluetooth-power-obd2-production-readiness.js",

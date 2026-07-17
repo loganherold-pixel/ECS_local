@@ -49,6 +49,7 @@ export interface ECSRouteMetadata {
   loadStrategy: ECSRouteLoadStrategy;
   sharedShellBackground: boolean;
   forceSharedShellBackgroundWithoutDock?: boolean;
+  allowPreSetupEntry?: boolean;
   protectedScreenName?: string;
   note?: string;
 }
@@ -288,7 +289,7 @@ const SHELL_CHILD_ROUTES: ECSRouteMetadata[] = [
   nestedRoute({ route: '/vehicle-twin', title: 'Vehicle Twin', parentSurface: 'fleet', setupRequirement: 'configured_vehicle' }),
   nestedRoute({ route: '/weight-dashboard', title: 'Weight Dashboard', parentSurface: 'fleet', setupRequirement: 'configured_vehicle', presentation: 'modal' }),
   nestedRoute({ route: '/vehicle-telemetry-settings', title: 'Vehicle Telemetry Settings', parentSurface: 'fleet', setupRequirement: 'configured_vehicle', offlineSupport: 'degraded', presentation: 'modal' }),
-  nestedRoute({ route: '/obd-setup', title: 'OBD2 Setup', parentSurface: 'fleet', setupRequirement: 'configured_vehicle', offlineSupport: 'degraded', presentation: 'modal' }),
+  nestedRoute({ route: '/obd-setup', title: 'OBD2 Setup', parentSurface: 'fleet', offlineSupport: 'degraded', presentation: 'modal', allowPreSetupEntry: true }),
   nestedRoute({ route: '/route', title: 'Route', parentSurface: 'navigate', sharedShellBackground: true }),
   nestedRoute({ route: '/navigate-run', title: 'Run Detail', parentSurface: 'navigate', presentation: 'modal' }),
   nestedRoute({ route: '/navigate-offline', title: 'Offline Navigation', parentSurface: 'navigate', presentation: 'modal' }),
@@ -335,11 +336,11 @@ const EXPEDITION_ROUTES: ECSRouteMetadata[] = [
 ];
 
 const HARDWARE_AND_SUPPORT_ROUTES: ECSRouteMetadata[] = [
-  nestedRoute({ route: '/power', title: 'Power', parentSurface: 'dashboard', setupRequirement: 'configured_vehicle', offlineSupport: 'degraded', presentation: 'modal' }),
-  nestedRoute({ route: '/power/blu', title: 'Device Connections', parentSurface: 'dashboard', setupRequirement: 'configured_vehicle', featureRequirement: 'bluetooth_obd_connections', offlineSupport: 'degraded', presentation: 'modal' }),
+  nestedRoute({ route: '/power', title: 'Power', parentSurface: 'dashboard', offlineSupport: 'degraded', presentation: 'modal', allowPreSetupEntry: true }),
+  nestedRoute({ route: '/power/blu', title: 'Device Connections', parentSurface: 'dashboard', featureRequirement: 'bluetooth_obd_connections', offlineSupport: 'degraded', presentation: 'modal', allowPreSetupEntry: true }),
   nestedRoute({ route: '/power/devices', title: 'Power Devices', parentSurface: 'dashboard', setupRequirement: 'configured_vehicle', featureRequirement: 'bluetooth_obd_connections', offlineSupport: 'degraded', presentation: 'modal' }),
   nestedRoute({ route: '/power/manage', title: 'Manage Power', parentSurface: 'dashboard', setupRequirement: 'configured_vehicle', featureRequirement: 'bluetooth_obd_connections', offlineSupport: 'degraded', presentation: 'modal' }),
-  nestedRoute({ route: '/power/setup', title: 'Power Setup', parentSurface: 'dashboard', setupRequirement: 'configured_vehicle', featureRequirement: 'bluetooth_obd_connections', offlineSupport: 'degraded', presentation: 'modal' }),
+  nestedRoute({ route: '/power/setup', title: 'Power Setup', parentSurface: 'dashboard', featureRequirement: 'bluetooth_obd_connections', offlineSupport: 'degraded', presentation: 'modal', allowPreSetupEntry: true }),
   nestedRoute({ route: '/assistant', title: 'ECS Assistant', parentSurface: 'dashboard', authRequirement: 'authenticated', featureRequirement: 'ai_assist', offlineSupport: 'none', presentation: 'modal' }),
 ];
 

@@ -45,7 +45,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
-import { useRouter } from 'expo-router';
+import { usePathname, useRouter } from 'expo-router';
 import { SafeIcon as Ionicons } from '../../components/SafeIcon';
 import { DiscoverIcon } from '../../components/DockIcons';
 import LandscapeShellControls from '../../components/LandscapeShellControls';
@@ -1852,6 +1852,7 @@ function DashboardScreenInner() {
   ));
 
   const router = useRouter();
+  const pathname = usePathname();
   const {
     activeTrip, loadItems, riskScore, waypoints, userSettings,
     syncStatus, refreshActiveTrip, user, showToast, isOnline, connectivityStatus, offlineMode,
@@ -3907,22 +3908,21 @@ function DashboardScreenInner() {
 
   const handleOpenLandscapeBluetoothControls = useCallback(() => {
     openUnifiedBluetoothCommand(router, {
+      returnTo: pathname,
       onUnavailable: () => showToast('Bluetooth controls unavailable'),
     });
-  }, [router, showToast]);
+  }, [pathname, router, showToast]);
 
   const handleOpenLandscapeProfileCommand = useCallback(() => {
     setAuthVisible(true);
   }, []);
 
   const handleOpenPowerConnections = useCallback(() => {
-    try {
-      router.push('/power/blu');
-    } catch {
-      console.warn('[dashboard] Failed to open power route');
-      showToast('Power manager unavailable');
-    }
-  }, [router, showToast]);
+    openUnifiedBluetoothCommand(router, {
+      returnTo: pathname,
+      onUnavailable: () => showToast('Power manager unavailable'),
+    });
+  }, [pathname, router, showToast]);
 
   const handleOpenTelemetrySetup = useCallback(() => {
       try {

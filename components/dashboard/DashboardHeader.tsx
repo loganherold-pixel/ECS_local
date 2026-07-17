@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import { useRouter } from 'expo-router';
+import { usePathname, useRouter } from 'expo-router';
 import { SafeIcon as Ionicons } from '../SafeIcon';
 import ThemeToggle from '../ThemeToggle';
 import { CLOSE_BTN } from '../../lib/uiConstants';
@@ -105,6 +105,7 @@ export default function DashboardHeader({
 }: DashboardHeaderProps) {
   const reducedMotion = useReducedMotion();
   const router = useRouter();
+  const pathname = usePathname();
   const {
     syncStatus,
     user,
@@ -424,9 +425,10 @@ export default function DashboardHeader({
   }, []);
   const openBluetoothConnections = useCallback(() => {
     openUnifiedBluetoothCommand(router, {
+      returnTo: pathname,
       onUnavailable: () => showToast('Device connections unavailable'),
     });
-  }, [router, showToast]);
+  }, [pathname, router, showToast]);
 
   const showEndExpedition = expeditionState === 'active';
   const controlSlotWidth = ECS_TOP_SHELL_CONTROL_SLOT_WIDTH;

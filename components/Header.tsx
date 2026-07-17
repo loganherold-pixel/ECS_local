@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Platform, StyleSheet, Text, TouchableOpacity, View, type TextStyle } from 'react-native';
-import { useRouter } from 'expo-router';
+import { usePathname, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeIcon as Ionicons } from './SafeIcon';
 import { TYPO } from '../lib/theme';
@@ -104,6 +104,7 @@ export default function Header({
   commandContext,
 }: HeaderProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const {
     user,
     activeTrip,
@@ -426,9 +427,10 @@ export default function Header({
   );
   const openBluetoothConnections = useCallback(() => {
     openUnifiedBluetoothCommand(router, {
+      returnTo: pathname,
       onUnavailable: () => showToast('Device connections unavailable'),
     });
-  }, [router, showToast]);
+  }, [pathname, router, showToast]);
 
   const syncActionLabel = useMemo(() => {
     if (syncStatus === 'error') return 'RETRY SYNC';
