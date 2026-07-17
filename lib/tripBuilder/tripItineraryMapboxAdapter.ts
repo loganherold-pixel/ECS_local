@@ -8,6 +8,7 @@ import type {
   TripItinerary,
   WaypointType,
 } from './tripBuilderTypes';
+import { buildTripBuilderCanonicalRouteSpine } from './tripBuilderCanonicalRouteSpine';
 
 export type TripItineraryRenderRole =
   | 'road_approach'
@@ -97,18 +98,21 @@ export type TripItineraryLegacyMarker = {
 export type TripItineraryMapboxRenderData = {
   itineraryId: string;
   routeFeatureCollection: TripItineraryMapFeatureCollection;
+  alternateRouteFeatureCollection: TripItineraryMapFeatureCollection;
   pointFeatureCollection: TripItineraryMapFeatureCollection;
   featureCollection: TripItineraryMapFeatureCollection;
   legacyMapRenderer: {
     points: TripItineraryLegacyRoutePoint[];
     segments: TripItineraryLegacySegment[];
     trailSegments: TripItineraryLegacySegment[];
+    alternateSegments: TripItineraryLegacySegment[];
     waypoints: TripItineraryLegacyMarker[];
     bailoutMarkers: TripItineraryLegacyMarker[];
     pinMarkers: TripItineraryLegacyMarker[];
   };
   metadata: {
     routeFeatureCount: number;
+    alternateRouteFeatureCount: number;
     pointFeatureCount: number;
     approachGeometryAvailable: boolean;
     trailGeometryAvailable: boolean;
@@ -262,6 +266,85 @@ function routeFeaturesForRoute(itinerary: TripItinerary, route?: ItineraryRoute 
     index: 0,
   });
   return fallback ? [fallback] : [];
+}
+
+function primarySpineFeature(itinerary: TripItinerary): TripItineraryMapFeature | null {
+  const trailGeometry = normalizeGeometry(itinerary.trailRoute?.geometry);
+  if (trailGeometry.length >= 2) {
+    const approachGeometry = normalizeGeometry(itinerary.approachRoute?.geometry);
+    const trailMetadata = itinerary.trailRoute?.metadata ?? {};
+    const itineraryMetadata = itinerary.metadata ?? {};
+    const spine = buildTripBuilderCanonicalRouteSpine({
+      route: {
+        id: itinerary.sourceRouteId ?? itinerary.id,
+        routeType: trailMetadata.routeType ?? itineraryMetadata.routeType ?? null,
+        allowLoopGuidance: trailMetadata.allowLoopGuidance ?? itineraryMetadata.allowLoopGuidance ?? false,
+        trailheadStart: itinerary.trailheadStart?.coordinate ?? itinerary.trailheadStartCandidate?.coordinate ?? null,
+        trailEnd: itinerary.trailEnd?.coordinate ?? trailGeometry[trailGeometry.length - 1],
+        trailGeometry,
+        routeMetadata: {
+          isTrailGeometry: true,
+          geometryRole: 'trail',
+          routeType: trailMetadata.routeType ?? itineraryMetadata.routeType ?? null,
+          allowLoopGuidance: trailMetadata.allowLoopGuidance ?? itineraryMetadata.allowLoopGuidance ?? false,
+        },
+      },
+      origin: itinerary.userStart ?? null,
+      approachGeometry,
+      trailhead: itinerary.trailheadStart?.coordinate ?? itinerary.trailheadStartCandidate?.coordinate ?? null,
+      trailEnd: itinerary.trailEnd?.coordinate ?? trailGeometry[trailGeometry.length - 1],
+      includeApproach: true,
+    });
+    if (spine.lineString) {
+      const id = `${itinerary.id}-primary-spine`;
+      return {
+        type: 'Feature',
+        id,
+        geometry: spine.lineString,
+        properties: {
+          id,
+          itineraryId: itinerary.id,
+          sourceRouteId: itinerary.sourceRouteId ?? null,
+          featureKind: 'route_segment',
+          renderRole: 'trail_line',
+          phase: 'trail_navigation',
+          waypointType: null,
+          routeId: itinerary.trailRoute?.id ?? null,
+          segmentId: id,
+          title: itinerary.trailRoute?.title ?? 'Primary route spine',
+          sequence: 1,
+          confidence: itinerary.trailRoute?.confidence ?? null,
+          sourceLabel: itinerary.trailRoute?.source?.label ?? null,
+          dataState: itinerary.trailRoute?.source?.state ?? null,
+          routeGeometryStatus: itinerary.routeGeometryStatus,
+          metadata: {
+            ...(itinerary.trailRoute?.metadata ?? {}),
+            canonicalPrimarySpine: true,
+            spineStatus: spine.status,
+            spineSafeCode: spine.safeCode,
+            spineFingerprint: spine.fingerprint,
+            approachPointCount: spine.approachPointCount,
+            trailPointCount: spine.trailPointCount,
+          },
+        },
+      };
+    }
+    return null;
+  }
+
+  const approachGeometry = normalizeGeometry(itinerary.approachRoute?.geometry);
+  if (
+    approachGeometry.length < 2 ||
+    !itinerary.approachRoute ||
+    itinerary.routeGeometryStatus !== 'approach_only'
+  ) return null;
+  return routeFeature({
+    itinerary,
+    route: itinerary.approachRoute,
+    segment: null,
+    geometry: approachGeometry,
+    index: 0,
+  });
 }
 
 function pointFeature(args: {
@@ -458,11 +541,9 @@ function missingGeometryPhases(itinerary: TripItinerary): ItineraryPhase[] {
 export function tripItineraryToMapboxRenderData(
   itinerary: TripItinerary,
 ): TripItineraryMapboxRenderData {
-  const routeFeatures = [
-    ...routeFeaturesForRoute(itinerary, itinerary.approachRoute),
-    ...routeFeaturesForRoute(itinerary, itinerary.trailRoute),
-    ...routeFeaturesForRoute(itinerary, itinerary.exitRoute),
-  ];
+  const primaryFeature = primarySpineFeature(itinerary);
+  const routeFeatures = primaryFeature ? [primaryFeature] : [];
+  const alternateRouteFeatures = routeFeaturesForRoute(itinerary, itinerary.exitRoute);
   const pointFeatures = [
     ...preTrailStopFeatures(itinerary),
     ...waypointFeatures(itinerary),
@@ -474,26 +555,32 @@ export function tripItineraryToMapboxRenderData(
     .map(legacyMarker)
     .filter((marker): marker is TripItineraryLegacyMarker => marker != null);
   const trailSegments = legacySegments.filter((segment) => segment.kind === 'trail_line');
+  const alternateSegments = alternateRouteFeatures
+    .map(legacySegment)
+    .filter((segment): segment is TripItineraryLegacySegment => segment != null);
 
   return {
     itineraryId: itinerary.id,
     routeFeatureCollection: featureCollection(routeFeatures),
+    alternateRouteFeatureCollection: featureCollection(alternateRouteFeatures),
     pointFeatureCollection: featureCollection(pointFeatures),
     featureCollection: featureCollection([...routeFeatures, ...pointFeatures]),
     legacyMapRenderer: {
       points: legacyPointsFromFeatures(routeFeatures),
       segments: legacySegments,
       trailSegments,
+      alternateSegments,
       waypoints: legacyMarkers.filter((marker) => marker.type !== 'bailout' && marker.type !== 'turnaround'),
       bailoutMarkers: legacyMarkers.filter((marker) => marker.type === 'bailout' || marker.type === 'turnaround'),
       pinMarkers: legacyMarkers,
     },
     metadata: {
       routeFeatureCount: routeFeatures.length,
+      alternateRouteFeatureCount: alternateRouteFeatures.length,
       pointFeatureCount: pointFeatures.length,
-      approachGeometryAvailable: routeFeatures.some((feature) => feature.properties.phase === 'approach'),
-      trailGeometryAvailable: routeFeatures.some((feature) => feature.properties.phase === 'trail_navigation'),
-      exitGeometryAvailable: routeFeatures.some((feature) => feature.properties.phase === 'trail_exit'),
+      approachGeometryAvailable: normalizeGeometry(itinerary.approachRoute?.geometry).length >= 2,
+      trailGeometryAvailable: normalizeGeometry(itinerary.trailRoute?.geometry).length >= 2,
+      exitGeometryAvailable: alternateRouteFeatures.length > 0,
       missingGeometryPhases: missingGeometryPhases(itinerary),
     },
   };

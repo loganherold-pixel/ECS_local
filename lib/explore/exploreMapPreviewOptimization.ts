@@ -80,35 +80,48 @@ function sameCoordinate(left: ExploreMapPreviewCoordinate, right: ExploreMapPrev
 
 export function simplifyRouteGeometryForPreview(
   coordinates: ExploreMapPreviewCoordinate[],
-  options: { maxPoints?: number } = {},
+  options: {
+    maxPoints?: number;
+    preserveCoordinates?: ExploreMapPreviewCoordinate[];
+  } = {},
 ): ExploreMapPreviewCoordinate[] {
   const validCoordinates = coordinates.filter(isValidCoordinate);
   const maxPoints = Math.max(2, Math.round(options.maxPoints ?? EXPLORE_PREVIEW_MAX_SIMPLIFIED_POINTS));
   if (validCoordinates.length <= maxPoints) return validCoordinates.slice();
 
-  const simplified: ExploreMapPreviewCoordinate[] = [];
   const lastIndex = validCoordinates.length - 1;
-  const step = lastIndex / (maxPoints - 1);
+  const selectedIndexes = new Set<number>([0, lastIndex]);
+  const preservedIndexes = (options.preserveCoordinates ?? [])
+    .filter(isValidCoordinate)
+    .map((requiredCoordinate) => validCoordinates.findIndex((point) => sameCoordinate(point, requiredCoordinate)))
+    .filter((index) => index > 0 && index < lastIndex)
+    .slice(0, Math.max(0, maxPoints - 2));
+  preservedIndexes.forEach((index) => selectedIndexes.add(index));
 
-  for (let index = 0; index < maxPoints; index += 1) {
-    const sourceIndex = index === maxPoints - 1 ? lastIndex : Math.round(index * step);
-    const point = validCoordinates[sourceIndex];
-    if (!point) continue;
-    if (simplified.length === 0 || !sameCoordinate(simplified[simplified.length - 1], point)) {
-      simplified.push(point);
+  const remainingSlots = maxPoints - selectedIndexes.size;
+  for (let slot = 1; slot <= remainingSlots; slot += 1) {
+    const targetIndex = Math.round((slot * lastIndex) / (remainingSlots + 1));
+    if (!selectedIndexes.has(targetIndex)) {
+      selectedIndexes.add(targetIndex);
+      continue;
+    }
+    for (let offset = 1; offset < lastIndex; offset += 1) {
+      const before = targetIndex - offset;
+      const after = targetIndex + offset;
+      if (before > 0 && !selectedIndexes.has(before)) {
+        selectedIndexes.add(before);
+        break;
+      }
+      if (after < lastIndex && !selectedIndexes.has(after)) {
+        selectedIndexes.add(after);
+        break;
+      }
     }
   }
 
-  const first = validCoordinates[0];
-  const last = validCoordinates[lastIndex];
-  if (simplified.length === 0 || !sameCoordinate(simplified[0], first)) {
-    simplified.unshift(first);
-  }
-  if (!sameCoordinate(simplified[simplified.length - 1], last)) {
-    simplified.push(last);
-  }
-
-  return simplified.slice(0, maxPoints - 1).concat(last);
+  return [...selectedIndexes]
+    .sort((left, right) => left - right)
+    .map((index) => validCoordinates[index]);
 }
 
 export function getExploreMapPreviewRenderPlan(input: {

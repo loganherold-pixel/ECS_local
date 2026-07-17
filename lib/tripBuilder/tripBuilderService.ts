@@ -5,7 +5,6 @@ import {
   type NormalizedRouteCoordinate,
   type RouteCoordinate,
 } from '../map/routeGeometryUtils';
-import { normalizeRouteGeometryLineString } from '../routeGeometryLifecycle';
 import {
   canonicalJourneyEntityId,
   mergeJourneyLinkage,
@@ -32,6 +31,7 @@ import type {
 } from './tripBuilderTypes';
 import { buildSmartResupplyPlan } from './smartResupplyPlanner';
 import { APPROACH_RESUPPLY_POLICY } from './approachResupplyPlanner';
+import { buildTripBuilderCanonicalRouteSpine } from './tripBuilderCanonicalRouteSpine';
 
 const DEFAULT_TRAIL_SPEED_MPH = 18;
 const MAX_SCENIC_WAYPOINT_STOPS = 3;
@@ -219,21 +219,29 @@ function coordinatesFromGeoJson(value: unknown): NormalizedRouteCoordinate[] {
 }
 
 function extractRouteCoordinates(route: TripBuilderRouteInput): NormalizedRouteCoordinate[] {
-  const sharedGeometry = normalizeRouteGeometryLineString(route);
-  if (sharedGeometry) {
-    return sharedGeometry.coordinates.map(([longitude, latitude]) => ({ latitude, longitude }));
+  const canonicalSpine = buildTripBuilderCanonicalRouteSpine({
+    route,
+    includeApproach: false,
+  });
+  if (canonicalSpine.lineString) {
+    return canonicalSpine.coordinates.map(({ latitude, longitude }) => ({ latitude, longitude }));
+  }
+  if (canonicalSpine.safeCode !== 'TRIP_BUILDER_SPINE_TRAIL_UNAVAILABLE') {
+    return [];
   }
 
   const routeRecord = route as Record<string, unknown>;
-  const directGeometry = [
-    ...coordinatesFromGeoJson(routeRecord.geometry),
-    ...coordinatesFromGeoJson(routeRecord.coordinates),
-    ...coordinatesFromGeoJson(route.trailGeometry),
-    ...coordinatesFromGeoJson(route.routeGeometry),
-    ...coordinatesFromGeoJson(route.geojson),
+  const directGeometryCandidates = [
+    route.trailGeometry,
+    route.routeGeometry,
+    routeRecord.geometry,
+    routeRecord.coordinates,
+    route.geojson,
   ];
-
-  if (directGeometry.length >= 2) return directGeometry;
+  for (const candidate of directGeometryCandidates) {
+    const directGeometry = coordinatesFromGeoJson(candidate);
+    if (directGeometry.length >= 2) return directGeometry;
+  }
 
   if (Array.isArray(route.trailGeometry)) {
     const coordinates = normalizeRouteCoordinates(route.trailGeometry as RouteCoordinate[]);

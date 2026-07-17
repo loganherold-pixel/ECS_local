@@ -217,12 +217,12 @@ function extractLineCoordinates(input: unknown, depth = 0): RouteGeometryLngLat[
   }
 
   const candidates = [
-    input.geometry,
-    input.coordinates,
-    input.routeGeometry,
-    input.route_geometry,
     input.trailGeometry,
     input.trail_geometry,
+    input.routeGeometry,
+    input.route_geometry,
+    input.geometry,
+    input.coordinates,
     input.approachGeometry,
     input.approach_geometry,
     input.geojson,
@@ -233,7 +233,11 @@ function extractLineCoordinates(input: unknown, depth = 0): RouteGeometryLngLat[
     input.path,
   ];
 
-  return candidates.flatMap((candidate) => extractLineCoordinates(candidate, depth + 1));
+  for (const candidate of candidates) {
+    const coordinates = extractLineCoordinates(candidate, depth + 1);
+    if (coordinates.length >= 2) return coordinates;
+  }
+  return [];
 }
 
 function lineStringFromCoordinates(coordinates: RouteGeometryLngLat[]): RouteGeometryLineString | null {

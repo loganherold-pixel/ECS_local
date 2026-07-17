@@ -15,13 +15,28 @@ assert.ok(
   'Trip Builder maps must use a dedicated route-line helper for renderable geometry.',
 );
 assert.ok(
-  screen.includes('if (normalized.length >= 2) return normalized;') &&
-    screen.includes('return [];'),
-  'Route-line helper must not fabricate a straight start-to-end route when geometry is unavailable.',
+  screen.includes('const spine = buildTripBuilderCanonicalRouteSpine({') &&
+    screen.includes('return spine.lineString') &&
+    screen.includes('spine.coordinates.filter(isValidMapCoordinate)'),
+  'Route-line helper must consume the behavioral canonical-spine result instead of flattening route fields.',
 );
 assert.ok(
   screen.includes('routeLinePointsForTripMap(route)'),
   'Trip Builder map overlays must ask for route-line geometry instead of start/end route points.',
+);
+assert.ok(
+  screen.includes('buildTripBuilderCanonicalRouteSpine({') &&
+    screen.includes('const selectedPrimaryRouteSpine = useMemo(() => {'),
+  'Mounted Trip Builder maps should compose one shared origin/approach/trailhead/trail primary spine.',
+);
+assert.ok(
+  screen.includes("selectedPrimaryRouteSpine?.status === 'invalid'") &&
+    screen.includes('routeLinePointsForTripMap(selectedRoute as unknown as TripBuilderRouteInput)'),
+  'A rejected full spine may fall back only to the separately validated canonical trail, not older raw preview geometry.',
+);
+assert.ok(
+  (screen.match(/routePreviewPoints=\{selectedPreparedRoutePoints\}/g) ?? []).length >= 3,
+  'Generated Trip Map, Camp Plan, and Bailout Plan should consume the same prepared primary spine.',
 );
 assert.ok(
   !screen.includes('const fallbackPoints = markers'),
@@ -45,8 +60,14 @@ assert.ok(
   'Trip Builder picker maps should cap route-preview geometry before rendering the mobile preview.',
 );
 assert.ok(
-  screen.includes('function simplifyTripBuilderPickerRoutePoints(points: TripMapCoordinate[]): TripMapCoordinate[]'),
+  screen.includes('function simplifyTripBuilderPickerRoutePoints(') &&
+    screen.includes('trailhead: TripMapCoordinate | null') &&
+    screen.includes('preserveCoordinates: trailhead ? [trailhead] : []'),
   'Trip Builder picker maps should use a dedicated simplifier for camp/bailout route previews.',
+);
+assert.ok(
+  (screen.match(/simplifyTripBuilderPickerRoutePoints\(routePoints, pickerTrailhead\)/g) ?? []).length === 2,
+  'Camp Plan and Bailout Plan must both preserve the selected trailhead while simplifying their shared spine.',
 );
 assert.ok(
   screen.includes('routeCoords={pickerRouteCoords}'),
@@ -62,6 +83,8 @@ assert.ok(
 );
 assert.ok(
   (screen.match(/<MapRenderer/g) ?? []).length >= 3 &&
+    (screen.match(/routeRenderMode="selected"/g) ?? []).length >= 3 &&
+    (screen.match(/routeLineKey=\{routeLineKey\}/g) ?? []).length >= 3 &&
     screen.includes("buildTripRoutePreviewCameraCommand(pickerRoutePoints, 'camp_picker')") &&
     screen.includes("buildTripRoutePreviewCameraCommand(pickerRoutePoints, 'bailout_picker')"),
   'Camp and bailout pickers should mount interactive maps with route-fit camera framing.',

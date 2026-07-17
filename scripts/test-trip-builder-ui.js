@@ -111,8 +111,9 @@ assertIncludes(screen, 'pinMarkers={[...suggestedCampMarkers, ...campMarkers]}',
 assertIncludes(screen, 'mapboxToken={itinerarySearchToken}', 'Reference pickers should receive the active Mapbox token.');
 assertIncludes(screen, 'cameraCommand={pickerCameraCommand}', 'Reference pickers should fit the selected route in the interactive map viewport.');
 assertIncludes(screen, 'statusLabel="Offline reference"', 'Reference pickers should label the lightweight route surface only as an offline fallback.');
-assertIncludes(screen, "id: 'bailout-route-start'", 'Bailout picker should mark the selected route start.');
-assertIncludes(screen, "title: 'Trail entry'", 'Bailout picker should label the selected route start as the trail entry point.');
+assertIncludes(screen, "id: 'bailout-route-start'", 'Bailout picker should mark the selected trailhead.');
+assertIncludes(screen, 'const start = pickerTrailhead ?? routePoints[0]', 'Bailout picker should anchor its trail-entry marker at the selected trailhead rather than the trip origin.');
+assertIncludes(screen, "title: 'Trail entry'", 'Bailout picker should label the selected trailhead as the trail entry point.');
 assertIncludes(screen, "mapChar: 'T'", 'Bailout picker should give the trail entry point a distinct marker label.');
 assertIncludes(screen, "id: 'bailout-route-end'", 'Bailout picker should mark the selected route end.');
 assertIncludes(screen, 'pinMarkers={[...routeEndpointMarkers, ...operatorPinMarkers, ...selectedMarker]}', 'Bailout picker should render route endpoints plus operator bailout pins.');

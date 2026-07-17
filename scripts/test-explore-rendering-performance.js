@@ -172,6 +172,29 @@ assert.deepStrictEqual(
   'Preview simplification must preserve the route end.',
 );
 
+const hardTurnGeometry = [
+  ...Array.from({ length: 101 }, (_, index) => ({
+    latitude: 38.9,
+    longitude: -109.8 + index * 0.001,
+  })),
+  ...Array.from({ length: 100 }, (_, index) => ({
+    latitude: 38.901 + index * 0.001,
+    longitude: -109.7,
+  })),
+];
+const hardTurnTrailhead = hardTurnGeometry[100];
+const simplifiedHardTurn = simplifyRouteGeometryForPreview(hardTurnGeometry, {
+  maxPoints: 96,
+  preserveCoordinates: [hardTurnTrailhead],
+});
+assert(simplifiedHardTurn.length <= 96, 'Mandatory route joins must not break the preview point cap.');
+assert(
+  simplifiedHardTurn.some((point) => (
+    point.latitude === hardTurnTrailhead.latitude && point.longitude === hardTurnTrailhead.longitude
+  )),
+  'Preview simplification must preserve the exact trailhead join on a dense hard-turn route.',
+);
+
 const previewCollection = buildExploreRoutePreviewFeatureCollection(
   Array.from({ length: 75 }, (_, index) => ({
     routeId: `route-${index}`,

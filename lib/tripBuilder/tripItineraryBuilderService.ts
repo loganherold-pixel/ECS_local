@@ -40,6 +40,17 @@ import {
 } from './trailRouteGeometryResolver';
 import { resolveTrailWaypoints } from './trailWaypointIntelligenceResolver';
 import { resupplyPlaceIdentityFromMetadata } from './resupplyPlaceIdentity';
+import { buildTripBuilderCanonicalRouteSpine } from './tripBuilderCanonicalRouteSpine';
+import { routeAllowsLoopGuidance } from '../navigation/routeLoopGuidancePolicy';
+import {
+  CATALOG_GUIDANCE_JOIN_GAP_MAX_METERS,
+  normalizeNavigationGuidanceGeometry,
+} from '../navigationCatalogGuidanceGeometry';
+import {
+  guidanceRouteDistanceMeters,
+  orientGuidanceRouteFromStart,
+} from '../navigation/guidanceRouteProjection';
+import type { RoadNavCoordinate } from '../mapboxRoadNavigation';
 
 export type BuildTripItineraryFromSuggestedRouteArgs = {
   suggestedRoute: SuggestedRoute;
@@ -128,6 +139,22 @@ function routeId(route: SuggestedRoute): string {
 
 function routeTitle(route: SuggestedRoute): string {
   return String(route.name ?? route.title ?? route.id ?? 'Suggested route').trim() || 'Suggested route';
+}
+
+function routeLoopMetadata(route: SuggestedRoute): {
+  routeType: string | null;
+  allowLoopGuidance: boolean;
+} {
+  const routeRecord = route as Record<string, unknown>;
+  const routeMetadata = isRecord(route.routeMetadata) ? route.routeMetadata : {};
+  const routeType = [
+    routeRecord.routeType,
+    routeRecord.route_type,
+    routeMetadata.routeType,
+    routeMetadata.route_type,
+  ].map((value) => String(value ?? '').trim()).find(Boolean) ?? null;
+  const allowLoopGuidance = routeAllowsLoopGuidance(route);
+  return { routeType, allowLoopGuidance };
 }
 
 function source(label: string, state: ItineraryDataSource['state'], extras: Partial<ItineraryDataSource> = {}): ItineraryDataSource {
@@ -544,6 +571,16 @@ function sameWaypointCoordinate(left: GeoPoint | null | undefined, right: GeoPoi
     Math.abs(left.longitude - right.longitude) < 0.00001;
 }
 
+function geoPointFromGuidanceCoordinate(point: RoadNavCoordinate): GeoPoint {
+  const elevationMeters = point.ele_m ?? point.ele ?? null;
+  return {
+    latitude: point.lat,
+    longitude: point.lng,
+    ...(elevationMeters != null ? { elevationMeters } : {}),
+    ...(point.elevationFeet != null ? { elevationFeet: point.elevationFeet } : {}),
+  };
+}
+
 function uniquePhysicalPreTrailStops(preTrailStops: ItineraryPreTrailStops): ItineraryStop[] {
   const seen = new Set<string>();
   return PRE_TRAIL_BUCKETS
@@ -694,7 +731,139 @@ export function buildTripItineraryFromSuggestedRoute({
   const id = routeId(suggestedRoute);
   const name = routeTitle(suggestedRoute);
   const userStart = normalizeCoordinate(userLocation);
-  const geometryResolution = resolveTrailRouteGeometry({ suggestedRoute });
+  const loopMetadata = routeLoopMetadata(suggestedRoute);
+  const sourceGeometryResolution = resolveTrailRouteGeometry({ suggestedRoute });
+  const canonicalTrailSpine = buildTripBuilderCanonicalRouteSpine({
+    route: suggestedRoute,
+    trailhead: sourceGeometryResolution.trailheadStart,
+    includeApproach: false,
+    allowLoop: loopMetadata.allowLoopGuidance,
+  });
+  const canonicalTrailGeometry = canonicalTrailSpine.lineString
+    ? canonicalTrailSpine.coordinates
+    : [];
+  const sourceTrailWasRejected = sourceGeometryResolution.trailGeometry.length >= 2 &&
+    canonicalTrailGeometry.length < 2;
+  const trailValidatedGeometryResolution: ResolvedTrailRouteGeometry = sourceTrailWasRejected
+    ? {
+        ...sourceGeometryResolution,
+        routeGeometryStatus: 'partial_trail',
+        trailRoute: [],
+        trailGeometry: [],
+        hasApproachGeometryOnly: sourceGeometryResolution.approachGeometry.length >= 2,
+        hasTrueTrailGeometry: false,
+        trailGeometryCompleteEnoughForWaypointGeneration: false,
+        trailRouteUnavailableReason: `Canonical trail geometry was rejected (${canonicalTrailSpine.safeCode}).`,
+        confidence: {
+          ...sourceGeometryResolution.confidence,
+          trailRoute: 'low',
+        },
+        warnings: [
+          ...sourceGeometryResolution.warnings,
+          `Canonical trail geometry was rejected (${canonicalTrailSpine.safeCode}).`,
+        ],
+        metadata: {
+          ...sourceGeometryResolution.metadata,
+          trailGeometryPointCount: 0,
+        },
+      }
+    : canonicalTrailGeometry.length >= 2
+      ? {
+          ...sourceGeometryResolution,
+          routeGeometryStatus: 'trail_available',
+          trailRoute: canonicalTrailGeometry,
+          trailGeometry: canonicalTrailGeometry,
+          trailheadStart: canonicalTrailSpine.trailhead,
+          trailEnd: canonicalTrailSpine.trailEnd,
+          hasTrueTrailGeometry: true,
+          hasTrailheadStart: canonicalTrailSpine.trailhead != null,
+          hasTrailEnd: canonicalTrailSpine.trailEnd != null,
+          trailGeometryCompleteEnoughForWaypointGeneration:
+            canonicalTrailSpine.trailhead != null && canonicalTrailSpine.trailEnd != null,
+          trailRouteUnavailableReason: null,
+          trailEndUnavailableReason: canonicalTrailSpine.trailEnd == null
+            ? sourceGeometryResolution.trailEndUnavailableReason
+            : null,
+          metadata: {
+            ...sourceGeometryResolution.metadata,
+            trailGeometryPointCount: canonicalTrailGeometry.length,
+          },
+        }
+      : sourceGeometryResolution;
+  const approachSource = sourceGeometryResolution.approachGeometryInput ??
+    sourceGeometryResolution.approachGeometry;
+  const approachStart = userStart
+    ? { lat: userStart.latitude, lng: userStart.longitude }
+    : null;
+  const resolvedTrailhead = trailValidatedGeometryResolution.trailheadStart;
+  const trailheadGuidance = resolvedTrailhead
+    ? { lat: resolvedTrailhead.latitude, lng: resolvedTrailhead.longitude }
+    : null;
+  const normalizedApproach = normalizeNavigationGuidanceGeometry(approachSource, {
+    preferredStart: approachStart,
+    allowLoop: false,
+    joinGapMaxMeters: CATALOG_GUIDANCE_JOIN_GAP_MAX_METERS,
+  });
+  const orientedApproach = normalizedApproach.status === 'ready' && normalizedApproach.points.length >= 2
+    ? approachStart
+      ? orientGuidanceRouteFromStart(normalizedApproach.points, approachStart)
+      : trailheadGuidance
+        ? orientGuidanceRouteFromStart(normalizedApproach.points, trailheadGuidance).reverse()
+        : normalizedApproach.points
+    : [];
+  const approachJoinsOrigin = !approachStart || (
+    orientedApproach[0] != null &&
+    guidanceRouteDistanceMeters(approachStart, orientedApproach[0]) <= CATALOG_GUIDANCE_JOIN_GAP_MAX_METERS
+  );
+  const approachJoinsTrailhead = !trailheadGuidance || (
+    orientedApproach[orientedApproach.length - 1] != null &&
+    guidanceRouteDistanceMeters(
+      orientedApproach[orientedApproach.length - 1],
+      trailheadGuidance,
+    ) <= CATALOG_GUIDANCE_JOIN_GAP_MAX_METERS
+  );
+  const canonicalApproachGeometry = approachJoinsOrigin && approachJoinsTrailhead
+    ? orientedApproach.map(geoPointFromGuidanceCoordinate)
+    : [];
+  const sourceApproachWasRejected = sourceGeometryResolution.approachGeometry.length >= 2 &&
+    canonicalApproachGeometry.length < 2;
+  const geometryResolution: ResolvedTrailRouteGeometry = sourceApproachWasRejected
+    ? {
+        ...trailValidatedGeometryResolution,
+        routeGeometryStatus: trailValidatedGeometryResolution.hasTrueTrailGeometry
+          ? trailValidatedGeometryResolution.routeGeometryStatus
+          : trailValidatedGeometryResolution.hasTrailheadStart
+            ? 'trail_missing'
+            : 'unknown',
+        approachRoute: [],
+        approachGeometry: [],
+        hasApproachGeometryOnly: false,
+        confidence: {
+          ...trailValidatedGeometryResolution.confidence,
+          approachRoute: 'low',
+        },
+        warnings: [
+          ...trailValidatedGeometryResolution.warnings,
+          'Approach geometry was rejected because its source topology or endpoint continuity is invalid.',
+        ],
+        metadata: {
+          ...trailValidatedGeometryResolution.metadata,
+          approachGeometryPointCount: 0,
+        },
+      }
+    : canonicalApproachGeometry.length >= 2
+      ? {
+          ...trailValidatedGeometryResolution,
+          approachRoute: canonicalApproachGeometry,
+          approachGeometry: canonicalApproachGeometry,
+          hasApproachGeometryOnly:
+            !trailValidatedGeometryResolution.hasTrueTrailGeometry && !sourceTrailWasRejected,
+          metadata: {
+            ...trailValidatedGeometryResolution.metadata,
+            approachGeometryPointCount: canonicalApproachGeometry.length,
+          },
+        }
+      : trailValidatedGeometryResolution;
   const approachGeometry = geometryResolution.approachGeometry;
   const trailGeometry = geometryResolution.trailGeometry;
   const routeDataSource = source('suggested_route', 'cached', { id });
@@ -723,6 +892,8 @@ export function buildTripItineraryFromSuggestedRoute({
       geometryRole: 'trail',
       routeGeometryStatus: geometryResolution.routeGeometryStatus,
       completeEnoughForWaypointGeneration: geometryResolution.trailGeometryCompleteEnoughForWaypointGeneration,
+      routeType: loopMetadata.routeType,
+      allowLoopGuidance: loopMetadata.allowLoopGuidance,
     },
   });
   const trailheadStart = trailheadWaypoint(suggestedRoute, geometryResolution);
@@ -894,6 +1065,8 @@ export function buildTripItineraryFromSuggestedRoute({
       },
       trailWaypointIntelligence: trailWaypointResolution.metadata,
       routeGeometryStatus: geometryResolution.routeGeometryStatus,
+      routeType: loopMetadata.routeType,
+      allowLoopGuidance: loopMetadata.allowLoopGuidance,
       hasApproachGeometryOnly: geometryResolution.hasApproachGeometryOnly,
       hasTrueTrailGeometry: geometryResolution.hasTrueTrailGeometry,
       hasTrailEnd: geometryResolution.hasTrailEnd,

@@ -92,6 +92,11 @@ assert.strictEqual(trueTrail.trailRoute.length, 3);
 assert.strictEqual(trueTrail.hasTrueTrailGeometry, true);
 assert.deepStrictEqual(trueTrail.trailEnd, { latitude: 38.1, longitude: -109.95 });
 assert.strictEqual(trueTrail.trailGeometryCompleteEnoughForWaypointGeneration, true);
+assert.strictEqual(
+  trueTrail.trailGeometryInput,
+  trailGeometry,
+  'The resolver should preserve the selected source geometry for topology-aware canonical validation.',
+);
 
 const noGeometry = resolveTrailRouteGeometry({
   suggestedRoute: {
@@ -169,5 +174,45 @@ assert.strictEqual(importedRoute.approachRoute.length, 0);
 assert.strictEqual(importedRoute.trailRoute.length, 3);
 assert.deepStrictEqual(importedRoute.trailheadStart, { latitude: 38, longitude: -110.1 });
 assert.deepStrictEqual(importedRoute.trailEnd, { latitude: 38.1, longitude: -109.95 });
+
+const disjointMultipartGeometry = {
+  type: 'MultiLineString',
+  coordinates: [
+    [
+      [-110.1, 38],
+      [-110.08, 38.02],
+    ],
+    [
+      [-108.2, 36.5],
+      [-108.1, 36.6],
+    ],
+  ],
+};
+const disjointMultipart = resolveTrailRouteGeometry({
+  importedRouteData: {
+    id: 'disjoint-import',
+    routeGeometry: disjointMultipartGeometry,
+    routeMetadata: {
+      source: 'trip_builder_import',
+      sourceFileType: 'geojson',
+    },
+  },
+});
+assert.strictEqual(disjointMultipart.trailGeometryInput, disjointMultipartGeometry);
+const disjointMultipartItinerary = buildTripItineraryFromSuggestedRoute({
+  suggestedRoute: {
+    id: 'disjoint-suggested',
+    name: 'Disjoint Suggested',
+    trailGeometry: disjointMultipartGeometry,
+    routeMetadata: { isTrailGeometry: true },
+  },
+  generatedAt: '2026-05-29T12:00:00.000Z',
+});
+assert.strictEqual(disjointMultipartItinerary.routeGeometryStatus, 'partial_trail');
+assert.strictEqual(
+  disjointMultipartItinerary.trailRoute,
+  null,
+  'Disconnected source segments must not be flattened into an itinerary trail route.',
+);
 
 console.log('Trail route geometry resolver checks passed.');

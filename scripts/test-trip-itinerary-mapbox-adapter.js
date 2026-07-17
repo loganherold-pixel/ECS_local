@@ -134,11 +134,37 @@ const fullRender = tripItineraryToMapboxRenderData(fullItinerary);
 assert.strictEqual(fullRender.metadata.approachGeometryAvailable, true);
 assert.strictEqual(fullRender.metadata.trailGeometryAvailable, true);
 assert.strictEqual(fullRender.metadata.exitGeometryAvailable, true);
-assert.strictEqual(fullRender.routeFeatureCollection.features.length, 3);
+assert.strictEqual(fullRender.routeFeatureCollection.features.length, 1);
 assert.deepStrictEqual(
   fullRender.routeFeatureCollection.features.map((feature) => feature.properties.renderRole),
-  ['road_approach', 'trail_line', 'exit_route'],
+  ['trail_line'],
 );
+assert.strictEqual(fullRender.routeFeatureCollection.features[0].properties.metadata.canonicalPrimarySpine, true);
+assert.strictEqual(fullRender.routeFeatureCollection.features[0].geometry.type, 'LineString');
+assert.deepStrictEqual(
+  fullRender.routeFeatureCollection.features[0].geometry.coordinates[0],
+  approachGeometry.coordinates[0],
+  'The primary spine should begin at the approach origin.',
+);
+assert.deepStrictEqual(
+  fullRender.routeFeatureCollection.features[0].geometry.coordinates.at(-1),
+  trailGeometry.coordinates.at(-1),
+  'The primary spine should end at the trail end rather than appending exit or origin geometry.',
+);
+assert.ok(
+  fullRender.routeFeatureCollection.features[0].geometry.coordinates.some(([longitude, latitude]) => (
+    longitude === -110.02 && latitude === 38
+  )),
+  'The primary spine should pass through the selected trailhead.',
+);
+assert.strictEqual(fullRender.alternateRouteFeatureCollection.features.length, 1);
+assert.strictEqual(
+  fullRender.alternateRouteFeatureCollection.features[0].properties.renderRole,
+  'exit_route',
+  'Exit/egress geometry should remain semantically separate from the default primary spine.',
+);
+assert.strictEqual(fullRender.metadata.routeFeatureCount, 1);
+assert.strictEqual(fullRender.metadata.alternateRouteFeatureCount, 1);
 
 const pointRoles = fullRender.pointFeatureCollection.features.map((feature) => feature.properties.renderRole);
 assert.ok(pointRoles.includes('pre_trail_resupply'), 'Pre-trail stops should render as phase-aware point features.');
@@ -157,8 +183,10 @@ assert.strictEqual(hazardFeature.geometry.coordinates[1], 38.04);
 
 assert.ok(
   fullRender.legacyMapRenderer.trailSegments.some((segment) => segment.kind === 'trail_line'),
-  'Legacy renderer bridge should expose trail segments without replacing existing route rendering.',
+  'Legacy renderer bridge should expose the one canonical primary spine.',
 );
+assert.strictEqual(fullRender.legacyMapRenderer.segments.length, 1);
+assert.strictEqual(fullRender.legacyMapRenderer.alternateSegments.length, 1);
 assert.ok(
   fullRender.legacyMapRenderer.bailoutMarkers.some((marker) => marker.type === 'bailout'),
   'Legacy renderer bridge should expose bailout markers separately.',
@@ -200,6 +228,177 @@ assert.ok(
 assert.ok(
   !missingGeometryRender.pointFeatureCollection.features.some((feature) => feature.properties.renderRole === 'hazard'),
   'Waypoint intelligence should not fabricate trail waypoint rendering when true trail geometry is missing.',
+);
+
+const reversedApproachWithoutOrigin = buildTripItineraryFromSuggestedRoute({
+  suggestedRoute: {
+    id: 'reversed-approach-no-origin',
+    name: 'Reversed Approach No Origin',
+    trailheadStart: { latitude: 38, longitude: -110.02 },
+    routeGeometry: {
+      type: 'LineString',
+      coordinates: [...approachGeometry.coordinates].reverse(),
+    },
+    trailGeometry,
+  },
+  userLocation: null,
+  generatedAt: '2026-05-30T10:00:00.000Z',
+});
+const reversedApproachRender = tripItineraryToMapboxRenderData(reversedApproachWithoutOrigin);
+assert.strictEqual(reversedApproachRender.routeFeatureCollection.features.length, 1);
+assert.deepStrictEqual(
+  reversedApproachRender.routeFeatureCollection.features[0].geometry.coordinates[0],
+  approachGeometry.coordinates[0],
+  'Without a user origin, the central spine builder should orient the approach from its non-trailhead endpoint.',
+);
+assert.deepStrictEqual(
+  reversedApproachRender.routeFeatureCollection.features[0].geometry.coordinates.at(-1),
+  trailGeometry.coordinates.at(-1),
+  'A reversed approach without user GPS must retain the canonical trail through its end.',
+);
+
+const disconnectedApproachItinerary = buildTripItineraryFromSuggestedRoute({
+  suggestedRoute: {
+    id: 'disconnected-approach',
+    name: 'Disconnected Approach',
+    trailheadStart: { latitude: 38, longitude: -110.02 },
+    routeGeometry: {
+      type: 'MultiLineString',
+      coordinates: [
+        [
+          [-110.21, 37.91],
+          [-110.18, 37.93],
+        ],
+        [
+          [-108.2, 36.5],
+          [-110.02, 38],
+        ],
+      ],
+    },
+    trailGeometry,
+  },
+  userLocation: { latitude: 37.91, longitude: -110.21 },
+  generatedAt: '2026-05-30T10:00:00.000Z',
+});
+assert.strictEqual(
+  disconnectedApproachItinerary.approachRoute,
+  null,
+  'Disconnected approach source segments must be rejected before itinerary persistence.',
+);
+const disconnectedApproachRender = tripItineraryToMapboxRenderData(disconnectedApproachItinerary);
+assert.strictEqual(disconnectedApproachRender.routeFeatureCollection.features.length, 1);
+assert.strictEqual(disconnectedApproachRender.metadata.approachGeometryAvailable, false);
+assert.deepStrictEqual(
+  disconnectedApproachRender.routeFeatureCollection.features[0].geometry.coordinates,
+  trailGeometry.coordinates,
+  'A disconnected approach should degrade to the canonical trail without an artificial approach connector.',
+);
+
+const loopGeometry = {
+  type: 'LineString',
+  coordinates: [
+    [-110.02, 38],
+    [-109.98, 38.05],
+    [-109.94, 38.02],
+    [-110.02, 38],
+  ],
+};
+const explicitLoopItinerary = buildTripItineraryFromSuggestedRoute({
+  suggestedRoute: {
+    id: 'explicit-loop-render',
+    name: 'Explicit Loop Render',
+    routeType: 'loop',
+    trailheadStart: { latitude: 38, longitude: -110.02 },
+    trailGeometry: loopGeometry,
+  },
+  userLocation: null,
+  generatedAt: '2026-05-30T10:00:00.000Z',
+});
+assert.strictEqual(explicitLoopItinerary.trailRoute.metadata.routeType, 'loop');
+assert.strictEqual(explicitLoopItinerary.trailRoute.metadata.allowLoopGuidance, true);
+const explicitLoopRender = tripItineraryToMapboxRenderData(explicitLoopItinerary);
+assert.strictEqual(explicitLoopRender.routeFeatureCollection.features.length, 1);
+assert.deepStrictEqual(
+  explicitLoopRender.routeFeatureCollection.features[0].geometry.coordinates,
+  loopGeometry.coordinates,
+  'An explicitly declared loop should retain its source closure exactly once.',
+);
+
+const elevatedItinerary = buildTripItineraryFromSuggestedRoute({
+  suggestedRoute: {
+    id: 'elevated-itinerary',
+    name: 'Elevated Itinerary',
+    routeType: 'point_to_point',
+    trailheadStart: { latitude: 38, longitude: -110.02 },
+    trailGeometry: [
+      { latitude: 38, longitude: -110.02, elevationMeters: 1000 },
+      { latitude: 38.05, longitude: -109.98, elevationMeters: 1200 },
+      { latitude: 38.1, longitude: -109.94, elevationMeters: 1100 },
+    ],
+    routeMetadata: { isTrailGeometry: true, sourceFileType: 'gpx' },
+  },
+  userLocation: null,
+  generatedAt: '2026-05-30T10:00:00.000Z',
+});
+assert.deepStrictEqual(
+  elevatedItinerary.trailRoute.geometry.map((point) => point.elevationMeters),
+  [1000, 1200, 1100],
+  'Itinerary construction must retain canonical elevation samples for Terrain Risk consumers.',
+);
+
+const disjointTrailItinerary = buildTripItineraryFromSuggestedRoute({
+  suggestedRoute: {
+    id: 'disjoint-trail-render',
+    name: 'Disjoint Trail Render',
+    trailheadStart: { latitude: 38, longitude: -110.02 },
+    routeGeometry: approachGeometry,
+    trailGeometry: {
+      type: 'LineString',
+      coordinates: [
+        [-108.2, 36.5],
+        [-108.1, 36.6],
+      ],
+    },
+  },
+  userLocation: { latitude: 37.91, longitude: -110.21 },
+  generatedAt: '2026-05-30T10:00:00.000Z',
+});
+const disjointTrailRender = tripItineraryToMapboxRenderData(disjointTrailItinerary);
+assert.strictEqual(
+  disjointTrailRender.routeFeatureCollection.features.length,
+  0,
+  'A rejected trail join must not silently fall back to an approach-only primary line.',
+);
+
+const disjointMultipartItinerary = buildTripItineraryFromSuggestedRoute({
+  suggestedRoute: {
+    id: 'disjoint-multipart-render',
+    name: 'Disjoint Multipart Render',
+    trailheadStart: { latitude: 38, longitude: -110.02 },
+    trailGeometry: {
+      type: 'MultiLineString',
+      coordinates: [
+        [
+          [-110.02, 38],
+          [-110, 38.02],
+        ],
+        [
+          [-108.2, 36.5],
+          [-108.1, 36.6],
+        ],
+      ],
+    },
+  },
+  userLocation: null,
+  generatedAt: '2026-05-30T10:00:00.000Z',
+});
+assert.strictEqual(disjointMultipartItinerary.trailRoute, null);
+assert.strictEqual(disjointMultipartItinerary.routeGeometryStatus, 'partial_trail');
+const disjointMultipartRender = tripItineraryToMapboxRenderData(disjointMultipartItinerary);
+assert.strictEqual(
+  disjointMultipartRender.routeFeatureCollection.features.length,
+  0,
+  'Disconnected multipart trail segments must not become a primary itinerary connector.',
 );
 
 console.log('Trip itinerary Mapbox adapter checks passed.');

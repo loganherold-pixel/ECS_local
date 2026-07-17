@@ -140,6 +140,43 @@ assert.deepStrictEqual(
   'Renderer should synthesize trail entry/end route markers and dedupe destination markers at the same coordinate.',
 );
 
+const selectedPrimarySpine = buildWebPayload({
+  mapboxToken: 'token',
+  routeRenderMode: 'selected',
+  routeLineKey: 'line:5:canonical-trip-spine',
+  points: [
+    { latitude: 38.9, longitude: -109.7 },
+    { latitude: 38.95, longitude: -109.65 },
+    { latitude: 39, longitude: -109.6 },
+    { latitude: 39.02, longitude: -109.57 },
+    { latitude: 39.04, longitude: -109.54 },
+  ],
+  pinMarkers: [
+    { id: 'camp-reference', latitude: 39.01, longitude: -109.8, title: 'Camp reference' },
+    { id: 'bailout-reference', latitude: 39.03, longitude: -109.75, title: 'Bailout reference' },
+  ],
+});
+assert.strictEqual(selectedPrimarySpine.routeRenderMode, 'selected');
+assert.strictEqual(selectedPrimarySpine.routeLineKey, 'line:5:canonical-trip-spine');
+assert.deepStrictEqual(
+  selectedPrimarySpine.routeCoords,
+  [
+    [-109.7, 38.9],
+    [-109.65, 38.95],
+    [-109.6, 39],
+    [-109.57, 39.02],
+    [-109.54, 39.04],
+  ],
+  'Mounted MapRenderer presentation should preserve one canonical origin-to-trail-end sequence.',
+);
+assert.ok(
+  selectedPrimarySpine.routeCoords.every(([longitude, latitude]) => (
+    !(longitude === -109.8 && latitude === 39.01) &&
+    !(longitude === -109.75 && latitude === 39.03)
+  )),
+  'Camp and bailout annotations must not enter the selected primary route source.',
+);
+
 const roadOnlyActiveRoute = buildWebPayload({
   mapboxToken: 'token',
   routeRenderMode: 'active',

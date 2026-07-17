@@ -47,6 +47,7 @@ import { recordBadgeIdentitySafeSignal } from '../lib/expedition/expeditionBadge
 import {
   buildTripItineraryFromSuggestedRoute,
   buildTripPlan,
+  buildTripBuilderCanonicalRouteSpine,
   clearTripBuilderRouteHandoff,
   createMapboxRouteContextProviderRegistry,
   acceptTripItineraryEditItem,
@@ -1851,9 +1852,13 @@ function isValidMapCoordinate(coordinate: TripMapCoordinate | null | undefined):
   );
 }
 
-function simplifyTripBuilderPickerRoutePoints(points: TripMapCoordinate[]): TripMapCoordinate[] {
+function simplifyTripBuilderPickerRoutePoints(
+  points: TripMapCoordinate[],
+  trailhead: TripMapCoordinate | null,
+): TripMapCoordinate[] {
   return simplifyRouteGeometryForPreview(points.filter(isValidMapCoordinate), {
     maxPoints: TRIP_BUILDER_PICKER_ROUTE_PREVIEW_MAX_POINTS,
+    preserveCoordinates: trailhead ? [trailhead] : [],
   });
 }
 
@@ -2006,6 +2011,9 @@ function routeEndCoordinateForTrip(route: TripBuilderRouteInput | null | undefin
 }
 
 function routePointsForTripMap(route: TripBuilderRouteInput): TripMapCoordinate[] {
+  const canonicalTrail = routeLinePointsForTripMap(route);
+  if (canonicalTrail.length >= 2) return canonicalTrail;
+
   const normalized = getOfflinePrepRouteCoordinates(route)
     .map((point) => ({
       latitude: point.latitude,
@@ -2023,15 +2031,18 @@ function routePointsForTripMap(route: TripBuilderRouteInput): TripMapCoordinate[
 }
 
 function routeLinePointsForTripMap(route: TripBuilderRouteInput): TripMapCoordinate[] {
-  const normalized = normalizeCanonicalRouteGeometry(route)
-    .latitudeLongitude
-    .map((point) => ({
-      latitude: point.latitude,
-      longitude: point.longitude,
-    }))
-    .filter(isValidMapCoordinate);
-  if (normalized.length >= 2) return normalized;
-  return [];
+  const spine = buildTripBuilderCanonicalRouteSpine({
+    route,
+    includeApproach: false,
+  });
+  return spine.lineString
+    ? spine.coordinates.filter(isValidMapCoordinate)
+    : [];
+}
+
+function routeLineKeyForTripMap(points: TripMapCoordinate[]): string | null {
+  const normalized = normalizeCanonicalRouteGeometry(points);
+  return normalized.valid ? normalized.fingerprint : null;
 }
 
 function tripBuilderCoordinateFromGpsPosition(position: GPSPosition | null): TripBuilderCoordinate | null {
@@ -3654,7 +3665,7 @@ function buildTripPlanMapModel(
         type: entry.pinType ?? entry.type,
         color: entry.color ?? tone.color,
         mapChar: entry.mapChar ?? tone.mapChar,
-        connectToRouteLine: entry.connectToRouteLine ?? true,
+        connectToRouteLine: entry.connectToRouteLine ?? false,
       }];
     });
   const itineraryRouteLinePoints = scope === 'itinerary' && routePoints.length >= 2
@@ -3705,6 +3716,7 @@ function TripPlanMapOverlay({
     () => buildTripPlanMapModel(route, plan, scope, itinerarySaved, routePreviewPoints),
     [itinerarySaved, plan, route, routePreviewPoints, scope],
   );
+  const routeLineKey = useMemo(() => routeLineKeyForTripMap(model.points), [model.points]);
 
   useEffect(() => {
     if (!visible || mapboxToken) return;
@@ -3745,6 +3757,8 @@ function TripPlanMapOverlay({
               points={model.points}
               pinMarkers={model.markers}
               routeColor={TACTICAL.amber}
+              routeRenderMode="selected"
+              routeLineKey={routeLineKey}
               mapStyle={DEFAULT_MAP_STYLE}
               mapboxToken={mapboxToken}
               hasToken={!!mapboxToken}
@@ -3817,13 +3831,21 @@ function CampPlanPickerOverlay({
     if (prepared.length >= 2) return prepared;
     return route ? routeLinePointsForTripMap(route) : [];
   }, [route, routePreviewPoints]);
-  const pickerRoutePoints = useMemo(() => simplifyTripBuilderPickerRoutePoints(routePoints), [routePoints]);
+  const pickerTrailhead = useMemo(() => routeStartCoordinateForTrip(route), [route]);
+  const pickerRoutePoints = useMemo(
+    () => simplifyTripBuilderPickerRoutePoints(routePoints, pickerTrailhead),
+    [pickerTrailhead, routePoints],
+  );
   const pickerRouteCoords = useMemo(
     () => pickerRoutePoints.map((point) => [point.longitude, point.latitude] as [number, number]),
     [pickerRoutePoints],
   );
   const pickerCameraCommand = useMemo(
     () => buildTripRoutePreviewCameraCommand(pickerRoutePoints, 'camp_picker'),
+    [pickerRoutePoints],
+  );
+  const routeLineKey = useMemo(
+    () => routeLineKeyForTripMap(pickerRoutePoints),
     [pickerRoutePoints],
   );
   const campMarkers = pins.map((pin, index): TripPlanMapMarker => ({
@@ -3880,6 +3902,8 @@ function CampPlanPickerOverlay({
                 points={pickerRoutePoints}
                 pinMarkers={[...suggestedCampMarkers, ...campMarkers]}
                 routeColor={TACTICAL.amber}
+                routeRenderMode="selected"
+                routeLineKey={routeLineKey}
                 mapStyle={DEFAULT_MAP_STYLE}
                 mapboxToken={mapboxToken}
                 hasToken
@@ -4021,7 +4045,11 @@ function BailoutPlanPickerOverlay({
     if (prepared.length >= 2) return prepared;
     return route ? routeLinePointsForTripMap(route) : [];
   }, [route, routePreviewPoints]);
-  const pickerRoutePoints = useMemo(() => simplifyTripBuilderPickerRoutePoints(routePoints), [routePoints]);
+  const pickerTrailhead = useMemo(() => routeStartCoordinateForTrip(route), [route]);
+  const pickerRoutePoints = useMemo(
+    () => simplifyTripBuilderPickerRoutePoints(routePoints, pickerTrailhead),
+    [pickerTrailhead, routePoints],
+  );
   const pickerRouteCoords = useMemo(
     () => pickerRoutePoints.map((point) => [point.longitude, point.latitude] as [number, number]),
     [pickerRoutePoints],
@@ -4030,9 +4058,13 @@ function BailoutPlanPickerOverlay({
     () => buildTripRoutePreviewCameraCommand(pickerRoutePoints, 'bailout_picker'),
     [pickerRoutePoints],
   );
+  const routeLineKey = useMemo(
+    () => routeLineKeyForTripMap(pickerRoutePoints),
+    [pickerRoutePoints],
+  );
   const routeEndpointMarkers = useMemo(() => {
     if (routePoints.length === 0) return [];
-    const start = routePoints[0];
+    const start = pickerTrailhead ?? routePoints[0];
     const end = routePoints.length > 1 ? routePoints[routePoints.length - 1] : null;
     const markers: TripPlanMapMarker[] = [{
       id: 'bailout-route-start',
@@ -4057,7 +4089,7 @@ function BailoutPlanPickerOverlay({
       });
     }
     return markers;
-  }, [routePoints]);
+  }, [pickerTrailhead, routePoints]);
   const selectedMarker = selectedPoint && !pins.some((pin) => pin.id === selectedPoint.id) ? [{
     id: selectedPoint.id,
     latitude: selectedPoint.coordinate.latitude,
@@ -4110,6 +4142,8 @@ function BailoutPlanPickerOverlay({
                 points={pickerRoutePoints}
                 pinMarkers={[...routeEndpointMarkers, ...operatorPinMarkers, ...selectedMarker]}
                 routeColor={TACTICAL.amber}
+                routeRenderMode="selected"
+                routeLineKey={routeLineKey}
                 mapStyle={DEFAULT_MAP_STYLE}
                 mapboxToken={mapboxToken}
                 hasToken
@@ -4841,7 +4875,33 @@ export default function ExploreTripBuilderScreen() {
       : routeEndCoordinateForTrip(selectedRoute as unknown as TripBuilderRouteInput);
   }, [preparedTripRoutePreview, selectedRoute, tripSetupStarted]);
 
+  const selectedPrimaryRouteSpine = useMemo(() => {
+    if (!selectedRoute) return null;
+    return buildTripBuilderCanonicalRouteSpine({
+      route: selectedRoute as unknown as TripBuilderRouteInput,
+      origin: selectedTripOrigin,
+      approachGeometry: liveApproachRoutePoints.length >= 2
+        ? liveApproachRoutePoints
+        : undefined,
+      trailhead: selectedRouteStartCoordinate,
+      includeApproach: true,
+    });
+  }, [
+    liveApproachRoutePoints,
+    selectedRoute,
+    selectedRouteStartCoordinate,
+    selectedTripOrigin,
+  ]);
+
   const selectedPreparedRoutePoints = useMemo(() => {
+    if (selectedPrimaryRouteSpine?.lineString) {
+      return selectedPrimaryRouteSpine.coordinates.filter(isValidMapCoordinate);
+    }
+    if (selectedPrimaryRouteSpine?.status === 'invalid') {
+      return selectedRoute
+        ? routeLinePointsForTripMap(selectedRoute as unknown as TripBuilderRouteInput)
+        : [];
+    }
     if (
       selectedRoute &&
       tripSetupStarted &&
@@ -4852,7 +4912,13 @@ export default function ExploreTripBuilderScreen() {
     const contextRoutePoints = routeContextRoutePoints(routeContextSnapshot);
     if (contextRoutePoints.length >= 2) return contextRoutePoints;
     return selectedRoute ? routeLinePointsForTripMap(selectedRoute as unknown as TripBuilderRouteInput) : [];
-  }, [preparedTripRoutePreview, routeContextSnapshot, selectedRoute, tripSetupStarted]);
+  }, [
+    preparedTripRoutePreview,
+    routeContextSnapshot,
+    selectedPrimaryRouteSpine,
+    selectedRoute,
+    tripSetupStarted,
+  ]);
 
   const suggestedEstablishedCampPins = useMemo(
     () => buildSuggestedEstablishedCampPins({

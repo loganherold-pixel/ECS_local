@@ -115,6 +115,28 @@ assert.strictEqual(explicitTrail.authority, 'trail');
 assert.strictEqual(explicitTrail.isTrailGeometry, true);
 assert.strictEqual(explicitTrail.isPreviewOrDemo, false);
 
+const routeWithSemanticGeometryFields = normalizeCanonicalRouteGeometry({
+  routeGeometry: lineString,
+  trailGeometry: lineString,
+  approachGeometry: {
+    type: 'LineString',
+    coordinates: [
+      [-120.3, 39],
+      [-120.1, 39.1],
+    ],
+  },
+  routeMetadata: {
+    source: 'trip_builder_import',
+    isTrailGeometry: true,
+  },
+});
+assert.deepStrictEqual(
+  routeWithSemanticGeometryFields.coordinates,
+  lineString.coordinates,
+  'A plain route object should select one authoritative trail geometry instead of concatenating duplicate and approach fields.',
+);
+assert.strictEqual(routeWithSemanticGeometryFields.pointCount, 2);
+
 const preview = normalizeCanonicalRouteGeometry({
   routeGeometry: lineString,
   routeMetadata: {

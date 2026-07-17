@@ -13,6 +13,7 @@ import {
 } from './exploreRouteCampHandoff';
 import { classifyExploreRouteAuthority } from './exploreRouteAuthority';
 import { orientGuidanceRouteFromStart } from './navigation/guidanceRouteProjection';
+import { routeAllowsLoopGuidance } from './navigation/routeLoopGuidancePolicy';
 
 const STORAGE_KEY = 'ecs_hybrid_navigation_handoff_v1';
 const nativeNavigationHandoffCache = createPersistedKeyValueCache('ecs_navigation_handoff');
@@ -128,44 +129,6 @@ function readRouteMetadata(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
-}
-
-function isExplicitLoopRoute(value: unknown): boolean {
-  const route = readRouteMetadata(value) ?? {};
-  const metadata = readRouteMetadata(route.routeMetadata) ?? readRouteMetadata(route.route_metadata) ?? {};
-  const catalogVerification =
-    readRouteMetadata(route.catalogVerification) ??
-    readRouteMetadata(metadata.catalogVerification) ??
-    readRouteMetadata(metadata.catalog_verification) ??
-    {};
-  const loopFlagValues = [
-    route.allowLoopGuidance,
-    route.allow_loop_guidance,
-    metadata.allowLoopGuidance,
-    metadata.allow_loop_guidance,
-    catalogVerification.allowLoopGuidance,
-    catalogVerification.allow_loop_guidance,
-  ];
-  if (loopFlagValues.some((entry) => entry === true)) return true;
-
-  const routeTypeValues = [
-    route.routeType,
-    route.route_type,
-    metadata.routeType,
-    metadata.route_type,
-    metadata.trailPackRouteType,
-    metadata.trail_pack_route_type,
-    metadata.routeShape,
-    metadata.route_shape,
-    metadata.guidanceRouteShape,
-    metadata.guidance_route_shape,
-    catalogVerification.routeType,
-    catalogVerification.route_type,
-  ];
-  return routeTypeValues.some((entry) => {
-    const normalized = String(entry ?? '').trim().toLowerCase();
-    return normalized === 'loop' || normalized === 'closed_loop' || normalized === 'loop_route';
-  });
 }
 
 export function getNavigationHandoffActiveGuidanceUnavailableReason(
@@ -733,7 +696,7 @@ export function buildExploreNavigationPayload(
     : approachOriginCoordinate ?? declaredTrailheadCoordinate;
   const trailGeometryResult = extractTrailGeometryResult(route, {
     preferredStart: preferredTrailStart,
-    allowLoop: isExplicitLoopRoute(route),
+    allowLoop: routeAllowsLoopGuidance(route),
     approachOriginCoordinate,
     declaredTrailheadCoordinate,
   });

@@ -61,8 +61,10 @@ export type ResolvedTrailRouteGeometry = {
   routeGeometryStatus: RouteGeometryStatus;
   approachRoute: GeoPoint[];
   approachGeometry: GeoPoint[];
+  approachGeometryInput?: unknown | null;
   trailRoute: GeoPoint[];
   trailGeometry: GeoPoint[];
+  trailGeometryInput?: unknown | null;
   trailheadStartCandidate: TrailheadStartCandidate;
   trailheadStart: GeoPoint | null;
   trailEnd: GeoPoint | null;
@@ -70,6 +72,7 @@ export type ResolvedTrailRouteGeometry = {
   hasTrueTrailGeometry: boolean;
   hasTrailheadStart: boolean;
   hasTrailEnd: boolean;
+  trailEndExplicit: boolean;
   trailGeometryCompleteEnoughForWaypointGeneration: boolean;
   routeGeometryMissing: boolean;
   trailRouteUnavailableReason: string | null;
@@ -715,6 +718,7 @@ export function resolveTrailRouteGeometry(args: ResolveTrailRouteGeometryArgs): 
     candidate.pointCount > 0
   ));
   const trailEnd = pickTrailEnd(inputs, trail);
+  const trailEndExplicit = trailEnd != null && trailEnd.key !== 'trail_geometry_last_point';
   const preliminaryStatus = routeGeometryStatus({
     approach,
     trail,
@@ -759,8 +763,10 @@ export function resolveTrailRouteGeometry(args: ResolveTrailRouteGeometryArgs): 
     routeGeometryStatus: status,
     approachRoute: approachGeometry,
     approachGeometry,
+    approachGeometryInput: approach?.value ?? null,
     trailRoute: trailGeometry,
     trailGeometry,
+    trailGeometryInput: trail?.value ?? null,
     trailheadStartCandidate,
     trailheadStart: trailheadStart?.coordinate ?? null,
     trailEnd: trailEnd?.coordinate ?? null,
@@ -768,6 +774,7 @@ export function resolveTrailRouteGeometry(args: ResolveTrailRouteGeometryArgs): 
     hasTrueTrailGeometry,
     hasTrailheadStart,
     hasTrailEnd,
+    trailEndExplicit,
     trailGeometryCompleteEnoughForWaypointGeneration,
     routeGeometryMissing,
     trailRouteUnavailableReason: hasTrueTrailGeometry

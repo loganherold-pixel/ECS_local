@@ -18,6 +18,7 @@ import {
 } from './exploreTripBuilderWizard';
 import { normalizeExploreDiscoveryItems } from './exploreDiscoveryItem';
 import { normalizeNavigationGuidanceGeometry } from '../navigationCatalogGuidanceGeometry';
+import { routeAllowsLoopGuidance } from '../navigation/routeLoopGuidancePolicy';
 
 export const EXPLORE_GUIDANCE_READY_EXCLUSION_CODES = [
   'missing_geometry',
@@ -624,38 +625,6 @@ function collectExploreGuidanceReadyExclusions(
   }
 
   return sortExclusionReasons(reasons.values());
-}
-
-function routeAllowsLoopGuidance(route: ExpeditionOpportunity): boolean {
-  const routeRecord = record(route);
-  const metadata = metadataRecord(route);
-  const catalogVerifications = [
-    record(metadata.catalogVerification),
-    record(routeRecord.catalogVerification),
-  ];
-  const declaredTypes = normalizedTokens(
-    routeRecord.routeType,
-    routeRecord.route_type,
-    metadata.routeType,
-    metadata.route_type,
-    metadata.trailPackRouteType,
-    metadata.trail_pack_route_type,
-    metadata.routeShape,
-    metadata.route_shape,
-    metadata.guidanceRouteShape,
-    metadata.guidance_route_shape,
-    ...catalogVerifications.flatMap((verification) => [verification.routeType, verification.route_type]),
-  );
-  const allowDeclarations = [
-    routeRecord.allowLoopGuidance,
-    metadata.allowLoopGuidance,
-    ...catalogVerifications.map((verification) => verification.allowLoopGuidance),
-  ];
-  if (allowDeclarations.includes(false)) return false;
-  const isLoopType = (value: string) =>
-    value === 'loop' || value === 'closed_loop' || value === 'loop_route';
-  if (declaredTypes.some((value) => !isLoopType(value))) return false;
-  return declaredTypes.some(isLoopType) || allowDeclarations.includes(true);
 }
 
 function hasReadyNormalizedGeometry(route: ExpeditionOpportunity): boolean {

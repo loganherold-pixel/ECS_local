@@ -49,6 +49,7 @@ function appendCoordinateElevation(
         source.ele,
         source.ele_m,
         source.elevationM,
+        source.elevationMeters,
         source.elevation_m,
         source.altitudeM,
         source.altitude_m,
