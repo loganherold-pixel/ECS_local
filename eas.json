@@ -32,8 +32,10 @@
       },
       "env": {
         "EXPO_NO_TELEMETRY": "1",
+        "EXPO_PUBLIC_APP_ENV": "internal",
         "EXPO_PUBLIC_ECS_FIELD_TEST_BUILD": "true",
         "EXPO_PUBLIC_ECS_BUILD_PROFILE": "fieldtest",
+        "EXPO_PUBLIC_ECS_MISSION_COMMAND": "true",
         "EXPO_PUBLIC_ECS_DISPERSED_CAMPING_LAYER": "true",
         "EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER": "true",
         "EXPO_PUBLIC_ECS_ROUTE_GEOMETRY_VIEWPORT_OVERLAY": "true"
@@ -61,6 +63,8 @@
       },
       "env": {
         "EXPO_NO_TELEMETRY": "1",
+        "EXPO_PUBLIC_APP_ENV": "production",
+        "EXPO_PUBLIC_ECS_MISSION_COMMAND": "false",
         "EXPO_PUBLIC_ECS_ROUTE_GEOMETRY_VIEWPORT_OVERLAY": "true"
       }
     }

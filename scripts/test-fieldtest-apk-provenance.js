@@ -93,6 +93,31 @@ assert.strictEqual(
   'true',
   'Field-test profile should identify itself to runtime config.',
 );
+assert.strictEqual(
+  easJson.build.fieldtest.env.EXPO_PUBLIC_APP_ENV,
+  'internal',
+  'The approved field-test profile should identify itself to the central feature registry as internal.',
+);
+assert.strictEqual(
+  easJson.build.fieldtest.env.EXPO_PUBLIC_ECS_MISSION_COMMAND,
+  'true',
+  'The approved field-test profile should explicitly enable local Mission Command.',
+);
+assert.strictEqual(easJson.build.production.env.EXPO_PUBLIC_APP_ENV, 'production');
+assert.strictEqual(easJson.build.production.env.EXPO_PUBLIC_ECS_MISSION_COMMAND, 'false');
+for (const sensitiveFlag of [
+  'EXPO_PUBLIC_ECS_TEAM_POSITION_SHARING',
+  'EXPO_PUBLIC_ECS_SMART_RALLY',
+  'EXPO_PUBLIC_ECS_DISPATCH_CANONICAL_BACKEND',
+  'EXPO_PUBLIC_ECS_MISSION_COMMAND_BACKEND',
+  'EXPO_PUBLIC_ECS_DISPATCH_EXTERNAL_INTEGRATIONS',
+]) {
+  assert.notStrictEqual(
+    easJson.build.fieldtest.env[sensitiveFlag],
+    'true',
+    `${sensitiveFlag} must not be enabled by the local Mission Command rollout.`,
+  );
+}
 
 assertIncludes(buildScript, 'resolveProfileArg', 'Cloud APK helper should support selecting the exact EAS profile.');
 assertIncludes(buildScript, 'ECS_BUILD_COMMIT_SHA', 'Cloud APK helper should stamp the commit SHA into the build env.');

@@ -1300,7 +1300,18 @@ function detectECSDeploymentEnvironment(
 
 function getRuntimeEnvironmentVariables(): Record<string, string | undefined> {
   try {
-    return (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
+    const runtimeEnv = (globalThis as {
+      process?: { env?: Record<string, string | undefined> };
+    }).process?.env ?? {};
+    return {
+      ...runtimeEnv,
+      // Expo substitutes EXPO_PUBLIC values only when referenced statically.
+      // Keep those references inside this single authoritative environment reader.
+      EXPO_PUBLIC_APP_ENV: process.env.EXPO_PUBLIC_APP_ENV,
+      EXPO_PUBLIC_ECS_MISSION_COMMAND: process.env.EXPO_PUBLIC_ECS_MISSION_COMMAND,
+      EXPO_PUBLIC_ECS_KILL_MISSION_COMMAND: process.env.EXPO_PUBLIC_ECS_KILL_MISSION_COMMAND,
+      EXPO_PUBLIC_ECS_KILL_DISPATCH_TAB: process.env.EXPO_PUBLIC_ECS_KILL_DISPATCH_TAB,
+    };
   } catch {
     return {};
   }

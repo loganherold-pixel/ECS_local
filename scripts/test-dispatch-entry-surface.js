@@ -26,6 +26,7 @@ require.extensions['.tsx'] = compileTypeScript;
 const routeManifest = require(path.join(root, 'lib', 'routeManifest.ts'));
 const featureRegistry = require(path.join(root, 'lib', 'features', 'featureVisibilityRegistry.ts'));
 const dispatchRollout = require(path.join(root, 'lib', 'dispatchRolloutConfig.ts'));
+const easConfig = JSON.parse(fs.readFileSync(path.join(root, 'eas.json'), 'utf8'));
 
 assert.equal(routeManifest.ECS_CANONICAL_DISPATCH_ROUTE, '/alert');
 assert.equal(routeManifest.getPrimaryTabById('dispatch').route, '/alert');
@@ -47,6 +48,31 @@ function visibilityContext(environment, env = {}) {
     env,
     online: true,
   });
+}
+
+function withReleaseRuntimeEnv(env, callback) {
+  const keys = Array.from(new Set([
+    'EXPO_PUBLIC_APP_ENV',
+    'EXPO_PUBLIC_ECS_MISSION_COMMAND',
+    'EXPO_PUBLIC_ECS_KILL_MISSION_COMMAND',
+    'EXPO_PUBLIC_ECS_KILL_DISPATCH_TAB',
+    ...Object.keys(env),
+  ]));
+  const previousValues = new Map(keys.map((key) => [key, process.env[key]]));
+  const previousDev = global.__DEV__;
+  try {
+    for (const key of keys) delete process.env[key];
+    Object.assign(process.env, env);
+    global.__DEV__ = false;
+    return callback();
+  } finally {
+    for (const [key, value] of previousValues) {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+    if (previousDev === undefined) delete global.__DEV__;
+    else global.__DEV__ = previousDev;
+  }
 }
 
 function assertMissionCommandRollout() {
@@ -97,6 +123,80 @@ function assertMissionCommandRollout() {
     false,
     'Mission Command must remain fail-closed in production.',
   );
+
+  const fieldtestContext = withReleaseRuntimeEnv(
+    easConfig.build.fieldtest.env,
+    () => featureRegistry.createRuntimeFeatureVisibilityContext(),
+  );
+  const fieldtestRollout = dispatchRollout.resolveDispatchRolloutConfig({}, fieldtestContext);
+  assert.equal(fieldtestContext.environment, 'internal');
+  assert.equal(
+    fieldtestRollout.missionCommand,
+    true,
+    'The approved release-style fieldtest profile should activate Mission Command through the central registry.',
+  );
+  for (const sensitiveFeature of [
+    'teamPositionSharing',
+    'convoyRegroupPlanner',
+    'canonicalBackendPersistence',
+    'missionCommandCanonicalPersistence',
+    'agencyDataIngestion',
+    'externalDispatchIntegration',
+    'publicHazardPublishing',
+    'automatedSosTransmission',
+    'liveRadioNetworkIntegrations',
+  ]) {
+    assert.equal(
+      fieldtestRollout[sensitiveFeature],
+      false,
+      `${sensitiveFeature} must remain separately disabled in the Mission Command fieldtest rollout.`,
+    );
+  }
+
+  const killedFieldtestContext = withReleaseRuntimeEnv(
+    {
+      ...easConfig.build.fieldtest.env,
+      EXPO_PUBLIC_ECS_KILL_MISSION_COMMAND: 'true',
+    },
+    () => featureRegistry.createRuntimeFeatureVisibilityContext(),
+  );
+  const killedFieldtestDecision = featureRegistry.resolveECSFeatureVisibility(
+    'dispatch_mission_command',
+    killedFieldtestContext,
+  );
+  assert.equal(killedFieldtestDecision.visible, false);
+  assert.equal(killedFieldtestDecision.reason, 'kill_switch');
+
+  const dispatchKilledContext = withReleaseRuntimeEnv(
+    {
+      ...easConfig.build.fieldtest.env,
+      EXPO_PUBLIC_ECS_KILL_DISPATCH_TAB: 'true',
+    },
+    () => featureRegistry.createRuntimeFeatureVisibilityContext(),
+  );
+  assert.equal(
+    featureRegistry.resolveECSFeatureVisibility('dispatch_mission_command', dispatchKilledContext).reason,
+    'feature_dependency_unavailable',
+  );
+
+  const staleDisabledConfig = dispatchRollout.resolveDispatchRolloutConfig(
+    {},
+    visibilityContext('internal', { EXPO_PUBLIC_ECS_MISSION_COMMAND: 'false' }),
+  );
+  const currentInternalConfig = dispatchRollout.resolveDispatchRolloutConfig({}, fieldtestContext);
+  assert.equal(staleDisabledConfig.missionCommand, false);
+  assert.equal(
+    currentInternalConfig.missionCommand,
+    true,
+    'A prior disabled resolution must not override the current immutable fieldtest build configuration.',
+  );
+
+  const productionContext = withReleaseRuntimeEnv(
+    easConfig.build.production.env,
+    () => featureRegistry.createRuntimeFeatureVisibilityContext(),
+  );
+  assert.equal(productionContext.environment, 'production');
+  assert.equal(dispatchRollout.resolveDispatchRolloutConfig({}, productionContext).missionCommand, false);
 }
 
 const reactStub = {
@@ -268,5 +368,20 @@ try {
 }
 
 assertMissionCommandRollout();
+
+const canonicalCommandCenterSource = fs.readFileSync(
+  path.join(root, 'components', 'dispatch', 'DispatchCadCommandCenter.tsx'),
+  'utf8',
+);
+assert.equal(
+  (canonicalCommandCenterSource.match(/<DispatchMissionCommandBoard\b/g) ?? []).length,
+  1,
+  'The canonical Dispatch implementation should contain one Mission Command board mount.',
+);
+assert.match(
+  canonicalCommandCenterSource,
+  /!missionCommandEnabled \? convoyFeedSurface/,
+  'Local Dispatch CAD and convoy controls must remain mounted when Mission Command is unavailable.',
+);
 
 console.log('Dispatch registered-route and canonical entry checks passed.');
