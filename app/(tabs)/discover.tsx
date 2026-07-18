@@ -188,6 +188,7 @@ import {
   classifyExploreRouteAvailability,
   defaultExploreReadyRouteEligibility,
   deriveExploreGuidanceProviderAvailability,
+  deriveExploreRouteSurfaceState,
 } from '../../lib/explore/exploreGuidanceReadyInventory';
 import {
   getVisibleExploreFeatures,
@@ -1341,18 +1342,13 @@ function DiscoverScreenInner() {
   const routeCatalogSafeDiagnosticRecords = liveTrailPackCatalogSnapshot.guidanceDiagnosticRecords;
   const routeCatalogCurationCandidateCount =
     liveTrailPackCatalogSnapshot.searchMeta?.curationCandidateCount ?? 0;
-  const routeCatalogSourceBackedCandidateCount =
-    liveTrailPackCatalogSnapshot.searchMeta?.anySourceBackedCandidateCount ?? 0;
   const routeCatalogMaterializedNotReadyCount =
     routeCatalogDiagnosticTrailPacks.length +
     Math.max(routeCatalogSafeDiagnosticRecords.length, routeCatalogCurationCandidateCount);
-  const routeCatalogProviderNotReadyCount = Math.max(
-    routeCatalogMaterializedNotReadyCount,
-    Math.max(
-      0,
-      routeCatalogSourceBackedCandidateCount - liveTrailPackCatalogSnapshot.trailPacks.length,
-    ),
-  );
+  // anySourceBackedCandidateCount can include the extra pagination lookahead
+  // row. Only materialized diagnostics or explicit curation counts establish
+  // that a provider record is blocked from discovery.
+  const routeCatalogProviderNotReadyCount = routeCatalogMaterializedNotReadyCount;
   const routeCatalogHasNonReadyProviderResults = routeCatalogProviderNotReadyCount > 0;
   const routeCatalogCurationCoverageNotice = useMemo(() => {
     if (routeCatalogProviderNotReadyCount <= 0) return null;
@@ -4576,6 +4572,24 @@ function DiscoverScreenInner() {
       liveTrailPackCatalogSnapshot.status === 'stale' ||
       liveTrailPackCatalogSnapshot.status === 'degraded'
     );
+  const exploreRouteSurfaceState = deriveExploreRouteSurfaceState({
+    status: liveTrailPackCatalogSnapshot.status,
+    providerStatus: liveTrailPackCatalogSnapshot.asyncState.providerStatus,
+    catalogSource: liveTrailPackCatalogSnapshot.source,
+    sourceTruth: liveTrailPackCatalogSnapshot.asyncState.source,
+    freshness: liveTrailPackCatalogSnapshot.asyncState.freshness,
+    snapshotRefreshKey: liveTrailPackCatalogSnapshot.refreshKey,
+    currentRefreshKey: routeCatalogSearchRefreshKey,
+    visibleCandidateCount: visibleExploreWizardCandidates.length,
+    candidateCount: exploreWizardCandidateSet.candidates.length,
+    discoverableCount: exploreDiscoverableCount,
+    readyCount: exploreGuidanceReadyCount,
+    evaluatedCount: exploreGuidanceEvaluatedCount,
+    hasRangeData: hasExploreRangeRouteData,
+    isSourceFilterAll: exploreWizardSourceFilter === 'all',
+    isLoading: showInitialLoading || showSectionLoading || showTrailPackSectionLoading,
+    validEmpty: routeCatalogValidEmpty,
+  });
   const exploreGuidanceReadyBlockedReasons = useMemo(
     () =>
       Array.from(
@@ -4592,14 +4606,42 @@ function DiscoverScreenInner() {
     exploreGuidanceReadyBlockedReasons.length > 0
       ? `Primary blocker: ${exploreGuidanceReadyBlockedReasons.join(' / ')}`
       : 'Primary blocker: verified identity, access, or supported production metadata is unavailable.';
-  const showGuidanceReadyBlockedNotice =
-    !showInitialLoading &&
-    !showSectionLoading &&
-    !routeCatalogTerminalFailure &&
-    !routeCatalogValidEmpty &&
-    hasExploreRangeRouteData &&
-    exploreDiscoverableCount === 0 &&
-    exploreGuidanceReadyCount === 0;
+  const showGuidanceReadyBlockedNotice = exploreRouteSurfaceState.showBlockedNotice;
+  const exploreRouteEmptyStateTitle = exploreRouteSurfaceState.kind === 'valid_empty'
+    ? 'No Routes in This Area'
+    : exploreRouteSurfaceState.kind === 'filtered'
+      ? 'Routes Found but Filtered'
+      : exploreRouteSurfaceState.kind === 'blocked'
+        ? 'Routes Found but Blocked'
+        : exploreRouteSurfaceState.kind === 'loading'
+          ? 'Refreshing Routes'
+          : exploreRouteSurfaceState.kind === 'stale'
+            ? 'Route Results Need Refresh'
+            : exploreRouteSurfaceState.kind === 'provider_unavailable'
+              ? 'Route Catalog Unavailable'
+              : 'No Routes in This Area';
+  const exploreRouteEmptyStateMessage = exploreRouteSurfaceState.kind === 'valid_empty'
+    ? 'The configured provider completed successfully with a valid empty result for this approved search area and radius.'
+    : exploreRouteSurfaceState.kind === 'filtered'
+      ? 'Available routes exist in this search, but the active source chip hides them.'
+      : exploreRouteSurfaceState.kind === 'blocked'
+        ? 'ECS found source records, but access, moderation, source, safety, identity, or supported-format requirements block them from discovery.'
+        : exploreRouteSurfaceState.kind === 'loading'
+          ? 'ECS is refreshing approved route summaries for the current search area and radius.'
+          : exploreRouteSurfaceState.kind === 'stale'
+            ? 'Only stale, cached, or fallback route records are available. They cannot establish a current blocked-discovery result.'
+            : exploreRouteSurfaceState.kind === 'provider_unavailable'
+              ? 'The live route provider did not complete a successful current evaluation. This is not a blocked-discovery result.'
+              : 'No current successful route evaluation is available for this search area and radius.';
+  const exploreRouteEmptyStateHelper = exploreRouteSurfaceState.kind === 'valid_empty'
+    ? 'Choose another approved area, widen the radius, or retry later. This request is complete and is not still loading.'
+    : exploreRouteSurfaceState.kind === 'filtered'
+      ? 'Show all available sources or reset the Explore filters.'
+      : exploreRouteSurfaceState.kind === 'loading'
+        ? 'Wait for the current route-catalog request to complete before treating this search as empty or blocked.'
+        : exploreRouteSurfaceState.kind === 'stale' || exploreRouteSurfaceState.kind === 'provider_unavailable'
+          ? 'Retry live routes before treating these records as a current policy evaluation.'
+          : 'Adjust the radius, choose another approved area, or review the typed exclusion diagnostics.';
   const exploreDeferredRouteCount = exploreWizardCandidateSet.candidates.filter(
     (candidate) => candidate.detailState === 'deferred',
   ).length;
@@ -6417,33 +6459,9 @@ function DiscoverScreenInner() {
               {visibleExploreWizardCandidates.length === 0 ? (
                 <ECSResultsEmptyState
                   style={s.exploreWizardEmpty}
-                   title={
-                     routeCatalogEmptyWithoutGuidance
-                       ? 'No Routes in This Area'
-                       : exploreWizardSourceFilter !== 'all' && exploreWizardCandidateSet.candidates.length > 0
-                       ? 'Routes Found but Filtered'
-                      : exploreDiscoverableCount > 0
-                        ? 'Routes Found but Filtered'
-                      : exploreGuidanceEvaluatedCount > 0
-                        ? 'Routes Found but Blocked'
-                        : 'No Routes in This Area'
-                  }
-                   message={
-                     routeCatalogEmptyWithoutGuidance
-                       ? 'The configured provider completed successfully with a valid empty result for this approved search area and radius.'
-                       : exploreWizardSourceFilter !== 'all' && exploreWizardCandidateSet.candidates.length > 0
-                       ? 'Available routes exist in this search, but the active source chip hides them.'
-                      : exploreGuidanceEvaluatedCount > 0
-                        ? 'ECS found source records, but access, moderation, source, safety, identity, or supported-format requirements block them from discovery.'
-                        : 'The configured providers returned a valid empty result for this search area and radius.'
-                  }
-                   helper={
-                     routeCatalogEmptyWithoutGuidance
-                       ? 'Choose another approved area, widen the radius, or retry later. This request is complete and is not still loading.'
-                       : exploreWizardSourceFilter !== 'all' && exploreWizardCandidateSet.candidates.length > 0
-                       ? 'Show all available sources or reset the Explore filters.'
-                      : 'Adjust the radius, choose another approved area, or review the typed exclusion diagnostics.'
-                  }
+                  title={exploreRouteEmptyStateTitle}
+                  message={exploreRouteEmptyStateMessage}
+                  helper={exploreRouteEmptyStateHelper}
                   actionLabel={
                     exploreWizardSourceFilter !== 'all' && exploreWizardCandidateSet.candidates.length > 0
                       ? 'Show All Routes'

@@ -119,6 +119,113 @@ export type ExploreGuidanceProviderAvailability = {
   blockCanonicalInventory: boolean;
 };
 
+export type ExploreRouteEvaluationIdentity = {
+  status: string;
+  providerStatus: string;
+  catalogSource: string;
+  sourceTruth: string;
+  freshness: string;
+  snapshotRefreshKey: string | null;
+  currentRefreshKey: string;
+};
+
+export type ExploreRouteSurfaceStateKind =
+  | 'cards'
+  | 'filtered'
+  | 'blocked'
+  | 'valid_empty'
+  | 'loading'
+  | 'stale'
+  | 'provider_unavailable'
+  | 'empty';
+
+export type ExploreRouteSurfaceStateInput = ExploreRouteEvaluationIdentity & {
+  visibleCandidateCount: number;
+  candidateCount: number;
+  discoverableCount: number;
+  readyCount: number;
+  evaluatedCount: number;
+  hasRangeData: boolean;
+  isSourceFilterAll: boolean;
+  isLoading: boolean;
+  validEmpty: boolean;
+};
+
+export type ExploreRouteSurfaceStateDecision = {
+  kind: ExploreRouteSurfaceStateKind;
+  currentSuccessfulEvaluation: boolean;
+  showBlockedNotice: boolean;
+};
+
+/**
+ * A policy-blocked result is only authoritative after the current route-catalog
+ * request completes successfully. Cached, fallback, and last-good data may
+ * remain renderable, but they cannot establish a fresh exclusion conclusion.
+ */
+export function isCurrentSuccessfulExploreRouteEvaluation(
+  input: ExploreRouteEvaluationIdentity,
+): boolean {
+  return (
+    input.snapshotRefreshKey != null &&
+    input.snapshotRefreshKey === input.currentRefreshKey &&
+    input.catalogSource === 'route_catalog' &&
+    input.providerStatus === 'active' &&
+    input.sourceTruth === 'live' &&
+    ['live', 'recent'].includes(input.freshness) &&
+    ['ready', 'degraded', 'empty'].includes(input.status)
+  );
+}
+
+export function deriveExploreRouteSurfaceState(
+  input: ExploreRouteSurfaceStateInput,
+): ExploreRouteSurfaceStateDecision {
+  const currentSuccessfulEvaluation = isCurrentSuccessfulExploreRouteEvaluation(input);
+  let kind: ExploreRouteSurfaceStateKind;
+
+  if (input.visibleCandidateCount > 0) {
+    kind = 'cards';
+  } else if (
+    (!input.isSourceFilterAll && input.candidateCount > 0) ||
+    input.discoverableCount > 0
+  ) {
+    kind = 'filtered';
+  } else if (input.isLoading) {
+    kind = 'loading';
+  } else if (input.validEmpty && currentSuccessfulEvaluation) {
+    kind = 'valid_empty';
+  } else if (
+    currentSuccessfulEvaluation &&
+    input.discoverableCount === 0 &&
+    input.evaluatedCount > 0
+  ) {
+    kind = 'blocked';
+  } else if (
+    input.sourceTruth === 'cached' ||
+    ['stale', 'expired'].includes(input.freshness) ||
+    ['stale', 'degraded'].includes(input.status) ||
+    input.catalogSource === 'trail_packs_fallback'
+  ) {
+    kind = 'stale';
+  } else if (
+    input.providerStatus !== 'active' ||
+    ['error', 'cancelled', 'disabled'].includes(input.status)
+  ) {
+    kind = 'provider_unavailable';
+  } else {
+    kind = 'empty';
+  }
+
+  return {
+    kind,
+    currentSuccessfulEvaluation,
+    showBlockedNotice:
+      kind === 'blocked' &&
+      input.hasRangeData &&
+      input.discoverableCount === 0 &&
+      input.readyCount === 0,
+  };
+}
+
 export function deriveExploreGuidanceProviderAvailability(input: {
   providerStatus: string;
   providerHasData: boolean;

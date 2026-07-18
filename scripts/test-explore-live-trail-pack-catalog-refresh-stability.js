@@ -1,10 +1,12 @@
 /* global __dirname */
 const assert = require('assert');
+const fs = require('fs');
 const path = require('path');
 const Module = require('module');
 const ts = require('typescript');
 
 const root = path.join(__dirname, '..');
+global.__DEV__ = false;
 
 function compileTypescript(module, filename) {
   const source = require('fs').readFileSync(filename, 'utf8');
@@ -64,7 +66,15 @@ const mockSupabase = {
 
 const originalLoad = Module._load;
 Module._load = function load(request, parent, isMain) {
-  if (request === '../supabase' && parent?.filename.endsWith(path.join('lib', 'explore', 'liveTrailPackCatalog.ts'))) {
+  if (request === 'react-native') {
+    return {
+      Platform: { OS: 'web', select: (choices) => choices?.web ?? choices?.default },
+    };
+  }
+  if (
+    (request === '../supabase' || request === './supabase') &&
+    parent?.filename.includes(`${path.sep}lib${path.sep}`)
+  ) {
     return { supabase: mockSupabase };
   }
   if (
@@ -111,7 +121,19 @@ const {
 } = require(path.join(root, 'lib', 'explore', 'liveTrailPackCatalog.ts'));
 const {
   isPublicSuggestedTrailheadTrailPack,
+  routeCatalogSummaryToDeferredTrailPack,
+  trailPackToExpeditionOpportunity,
 } = require(path.join(root, 'lib', 'explore', 'trailPacks.ts'));
+const {
+  buildExploreGuidanceReadyInventory,
+  classifyExploreRouteAvailability,
+  deriveExploreRouteSurfaceState,
+} = require(path.join(root, 'lib', 'explore', 'exploreGuidanceReadyInventory.ts'));
+
+const postMigrationLiveFixture = JSON.parse(fs.readFileSync(
+  path.join(root, 'fixtures', 'explore', 'route-catalog-search-post-migration.sanitized.json'),
+  'utf8',
+));
 
 function routeRecord(id = 'preserved-tahoe-route') {
   return {
@@ -206,6 +228,141 @@ function searchResponse(records, coverageState, diagnosticRecords = [], metaOver
       },
     },
     error: null,
+  };
+}
+
+function safeDiagnosticRecord(id, exclusionReasons = ['access_unverified']) {
+  return {
+    routeId: id,
+    publicId: id,
+    name: `Sanitized diagnostic ${id}`,
+    exclusionReasons,
+    sourceTypes: ['official'],
+    reviewStatus: 'approved',
+    recommendationStatus: 'needs_review',
+    updatedAt: '2026-07-18T00:00:00.000Z',
+  };
+}
+
+function fixtureResponse(overrides = {}) {
+  const records = (overrides.records ?? postMigrationLiveFixture.records).map((record) =>
+    record._location_redacted === true
+      ? {
+          ...record,
+          // The committed fixture intentionally has no coordinates. Restore a
+          // neutral, non-user coordinate only in memory so the production
+          // normalizer can exercise its required location contract.
+          center_latitude: 0,
+          center_longitude: 0,
+        }
+      : record);
+  return {
+    data: {
+      ...postMigrationLiveFixture,
+      ...overrides,
+      records,
+      meta: {
+        ...postMigrationLiveFixture.meta,
+        ...(overrides.meta ?? {}),
+      },
+    },
+    error: null,
+  };
+}
+
+function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter = 'all') {
+  const catalogPackIds = new Set(snapshot.trailPacks.map((trailPack) => trailPack.id));
+  const summarySourceState = snapshot.asyncState.source === 'cached'
+    ? 'cached'
+    : snapshot.status === 'stale' || snapshot.status === 'degraded'
+      ? 'stale'
+      : 'live';
+  const summaryPacks = snapshot.routeCatalogSummaries.flatMap((summary) => {
+    if (catalogPackIds.has(summary.routeId)) return [];
+    const pack = routeCatalogSummaryToDeferredTrailPack(summary, {
+      publicRecommendation:
+        snapshot.source === 'route_catalog' && summary.sourceType !== 'preview',
+      sourceState: summarySourceState,
+    });
+    return pack ? [pack] : [];
+  });
+  const trailPackRoutes = [
+    ...snapshot.trailPacks,
+    ...summaryPacks,
+    ...snapshot.guidanceDiagnosticTrailPacks,
+  ].map((trailPack) => {
+    const route = trailPackToExpeditionOpportunity(trailPack);
+    return {
+      ...route,
+      routeMetadata: {
+        ...(route.routeMetadata ?? {}),
+        withinRadius: true,
+        exploreGuidanceReadyEnabled: true,
+        routeCatalogSourceVersion: trailPack.updatedAt ?? null,
+      },
+    };
+  });
+  const inventory = buildExploreGuidanceReadyInventory({
+    trailPacks: trailPackRoutes,
+    hiddenGemRoutes: [],
+    ecsRouteIdeas: [],
+    favoriteRoutes: [],
+    savedRouteAssets: [],
+    selectedRefinement: null,
+  });
+  const candidateSet = inventory.discoverableCandidateSet;
+  const visibleCandidates = sourceFilter === 'all'
+    ? candidateSet.candidates
+    : candidateSet.candidates.filter((candidate) => candidate.sourceKind === sourceFilter);
+  const curationCandidateCount = snapshot.searchMeta?.curationCandidateCount ?? 0;
+  const providerNotReadyCount =
+    snapshot.guidanceDiagnosticTrailPacks.length +
+    Math.max(snapshot.guidanceDiagnosticRecords.length, curationCandidateCount);
+  const unmaterializedProviderNotReadyCount = Math.max(
+    0,
+    providerNotReadyCount - snapshot.guidanceDiagnosticTrailPacks.length,
+  );
+  const guidanceNotReadyCount =
+    inventory.rangeExclusionTotal + unmaterializedProviderNotReadyCount;
+  const evaluatedCount = inventory.totalReadyCount + guidanceNotReadyCount;
+  const hasRangeData =
+    snapshot.trailPacks.length > 0 ||
+    snapshot.routeCatalogSummaries.length > 0 ||
+    providerNotReadyCount > 0;
+  const validEmpty =
+    snapshot.status === 'empty' &&
+    snapshot.refreshKey === currentRefreshKey &&
+    snapshot.trailPacks.length === 0 &&
+    snapshot.routeCatalogSummaries.length === 0 &&
+    providerNotReadyCount === 0 &&
+    evaluatedCount === 0;
+  const surface = deriveExploreRouteSurfaceState({
+    status: snapshot.status,
+    providerStatus: snapshot.asyncState.providerStatus,
+    catalogSource: snapshot.source,
+    sourceTruth: snapshot.asyncState.source,
+    freshness: snapshot.asyncState.freshness,
+    snapshotRefreshKey: snapshot.refreshKey,
+    currentRefreshKey,
+    visibleCandidateCount: visibleCandidates.length,
+    candidateCount: candidateSet.candidates.length,
+    discoverableCount: inventory.totalDiscoverableCount,
+    readyCount: inventory.totalReadyCount,
+    evaluatedCount,
+    hasRangeData,
+    isSourceFilterAll: sourceFilter === 'all',
+    isLoading: snapshot.status === 'loading' || snapshot.status === 'idle',
+    validEmpty,
+  });
+
+  return {
+    trailPackRoutes,
+    inventory,
+    visibleCandidates,
+    providerNotReadyCount,
+    guidanceNotReadyCount,
+    evaluatedCount,
+    surface,
   };
 }
 
@@ -1364,6 +1521,316 @@ function searchResponse(records, coverageState, diagnosticRecords = [], metaOver
   const retriedDetail = await fetchRouteCatalogTrailPackDetail('timed-out-detail', { timeoutMs: 100 });
   assert.strictEqual(retriedDetail.id, 'timed-out-detail');
 
+  // Production-path Explorer state matrix using the privacy-scanned response
+  // captured after the nearby-route RPC migration. The fixture intentionally
+  // contains no coordinates, route geometry, private source identity, or auth.
+  assert.strictEqual(postMigrationLiveFixture.records.length, 50);
+  assert.strictEqual(postMigrationLiveFixture.diagnosticRecords.length, 0);
+  assert.strictEqual(postMigrationLiveFixture.meta.anySourceBackedCandidateCount, 51);
+
+  // A: a fresh revealable response renders cards even though every summary
+  // defers full guidance geometry until selection.
+  const matrixFreshCriteria = { ...criteria, radiusMiles: 500, limit: 50 };
+  const matrixFreshKey = createLiveTrailPackCatalogRefreshKey(matrixFreshCriteria);
+  responses.push(fixtureResponse());
+  const matrixFresh = await refreshLiveTrailPackCatalog(matrixFreshCriteria);
+  const matrixFreshSurface = buildProductionExploreSurface(matrixFresh, matrixFreshKey);
+  assert.strictEqual(matrixFresh.status, 'ready');
+  assert.strictEqual(matrixFresh.source, 'route_catalog');
+  assert.strictEqual(matrixFresh.trailPacks.length, 50);
+  assert.strictEqual(matrixFreshSurface.inventory.totalDiscoverableCount, 50);
+  assert.strictEqual(matrixFreshSurface.inventory.totalReadyCount, 0);
+  assert.strictEqual(matrixFreshSurface.visibleCandidates.length, 50);
+  assert.strictEqual(matrixFreshSurface.surface.kind, 'cards');
+  assert.strictEqual(matrixFreshSurface.surface.currentSuccessfulEvaluation, true);
+  assert.strictEqual(matrixFreshSurface.surface.showBlockedNotice, false);
+  assert.strictEqual(
+    matrixFreshSurface.providerNotReadyCount,
+    0,
+    'The 51st pagination lookahead row is not a materialized blocked record.',
+  );
+  assert.strictEqual(matrixFresh.searchMeta.anySourceBackedCandidateCount, 51);
+  assert.strictEqual(matrixFresh.searchMeta.pageSize, 50);
+  const freshAvailability = matrixFreshSurface.trailPackRoutes.map(classifyExploreRouteAvailability);
+  assert.strictEqual(freshAvailability.filter((entry) => entry.discoverability.eligible).length, 50);
+  assert.strictEqual(freshAvailability.filter((entry) => entry.tripBuilder.eligible).length, 50);
+
+  // H: an approved short route remains discoverable and Trip Builder eligible;
+  // the five-mile threshold only prevents immediate guidance readiness.
+  const shortRoute = matrixFreshSurface.trailPackRoutes.find(
+    (route) => Number(route.distanceMiles) > 0 && Number(route.distanceMiles) < 5,
+  );
+  assert(shortRoute, 'The sanitized live fixture must retain an approved short-route example.');
+  const shortRouteAvailability = classifyExploreRouteAvailability(shortRoute);
+  assert.strictEqual(shortRouteAvailability.discoverability.eligible, true);
+  assert.strictEqual(shortRouteAvailability.tripBuilder.eligible, true);
+  assert.strictEqual(shortRouteAvailability.guidance.eligible, false);
+  assert(shortRouteAvailability.guidance.exclusionCodes.includes('too_short'));
+
+  // F: clear the active query without clearing persistence, then prove a 503
+  // hydrates the revealable v1 summary cache and keeps stale cards visible.
+  responses.push({ data: null, error: { message: '503 reset query unavailable', status: 503 } });
+  await refreshLiveTrailPackCatalog({ ...criteria, radiusMiles: 492, limit: 50 });
+  const matrixStaleRevealableEmissions = [];
+  const unsubscribeMatrixStaleRevealable = liveTrailPackCatalogStore.subscribe(() => {
+    const emitted = liveTrailPackCatalogStore.getSnapshot();
+    if (emitted.refreshKey === matrixFreshKey) matrixStaleRevealableEmissions.push(emitted);
+  });
+  responses.push({ data: null, error: { message: '503 route catalog unavailable', status: 503 } });
+  const matrixStaleRevealable = await refreshLiveTrailPackCatalog(matrixFreshCriteria);
+  unsubscribeMatrixStaleRevealable();
+  const matrixStaleRevealableSurface = buildProductionExploreSurface(
+    matrixStaleRevealable,
+    matrixFreshKey,
+  );
+  assert.strictEqual(matrixStaleRevealable.status, 'stale');
+  assert.strictEqual(matrixStaleRevealable.asyncState.providerStatus, 'unavailable');
+  assert.strictEqual(matrixStaleRevealable.trailPacks.length, 0);
+  assert.strictEqual(matrixStaleRevealable.routeCatalogSummaries.length, 50);
+  assert.strictEqual(matrixStaleRevealableSurface.visibleCandidates.length, 50);
+  assert.strictEqual(matrixStaleRevealableSurface.surface.kind, 'cards');
+  assert.strictEqual(matrixStaleRevealableSurface.surface.currentSuccessfulEvaluation, false);
+  assert.strictEqual(matrixStaleRevealableSurface.surface.showBlockedNotice, false);
+  assert(
+    matrixStaleRevealableEmissions.some((emitted) =>
+      emitted.status === 'loading' &&
+      emitted.asyncState.source === 'cached' &&
+      emitted.routeCatalogSummaries.length === 50),
+    'Scenario F must hydrate revealable route summaries from persisted cache during revalidation.',
+  );
+  assert(
+    matrixStaleRevealableEmissions.every((emitted) =>
+      buildProductionExploreSurface(emitted, matrixFreshKey).surface.kind !== 'blocked'),
+    'Scenario F must never emit a transient blocked surface while cached cards revalidate.',
+  );
+
+  // B: revealable routes win over simultaneous legitimate exclusion
+  // diagnostics. The blocked count remains informational beside visible cards.
+  const matrixMixedCriteria = { ...criteria, radiusMiles: 499, limit: 50 };
+  const matrixMixedKey = createLiveTrailPackCatalogRefreshKey(matrixMixedCriteria);
+  const mixedDiagnostic = safeDiagnosticRecord('mixed-access-diagnostic');
+  responses.push(fixtureResponse({
+    records: [postMigrationLiveFixture.records[0]],
+    diagnosticRecords: [mixedDiagnostic],
+    count: 1,
+    meta: {
+      candidateLimit: 2,
+      candidateCount: 2,
+      spatialIndexCandidateCount: 2,
+      radiusMatchedCount: 2,
+      centerMatchedCount: 2,
+      curationCandidateCount: 1,
+      safeDiagnosticCount: 1,
+      anySourceBackedCandidateCount: 2,
+      returnedCount: 1,
+      hasMore: false,
+      nextPage: null,
+      totalMatchedCount: 2,
+      totalMatchedCountBounded: false,
+    },
+  }));
+  const matrixMixed = await refreshLiveTrailPackCatalog(matrixMixedCriteria);
+  const matrixMixedSurface = buildProductionExploreSurface(matrixMixed, matrixMixedKey);
+  assert.strictEqual(matrixMixed.trailPacks.length, 1);
+  assert.strictEqual(matrixMixed.guidanceDiagnosticRecords.length, 1);
+  assert.strictEqual(matrixMixedSurface.providerNotReadyCount, 1);
+  assert.strictEqual(matrixMixedSurface.visibleCandidates.length, 1);
+  assert.strictEqual(matrixMixedSurface.surface.kind, 'cards');
+  assert.strictEqual(matrixMixedSurface.surface.showBlockedNotice, false);
+
+  // C: a fresh, current, successful diagnostic-only response with a legitimate
+  // access exclusion is the one state allowed to render policy-blocked copy.
+  const matrixBlockedCriteria = { ...criteria, radiusMiles: 498, limit: 50 };
+  const matrixBlockedKey = createLiveTrailPackCatalogRefreshKey(matrixBlockedCriteria);
+  const blockedDiagnostic = safeDiagnosticRecord('blocked-access-diagnostic');
+  responses.push(fixtureResponse({
+    records: [],
+    diagnosticRecords: [blockedDiagnostic],
+    count: 0,
+    meta: {
+      candidateLimit: 1,
+      candidateCount: 1,
+      spatialIndexCandidateCount: 1,
+      radiusMatchedCount: 1,
+      centerMatchedCount: 1,
+      curationCandidateCount: 1,
+      safeDiagnosticCount: 1,
+      anySourceBackedCandidateCount: 1,
+      returnedCount: 0,
+      hasMore: false,
+      nextPage: null,
+      totalMatchedCount: 1,
+      totalMatchedCountBounded: false,
+    },
+  }));
+  const matrixBlocked = await refreshLiveTrailPackCatalog(matrixBlockedCriteria);
+  const matrixBlockedSurface = buildProductionExploreSurface(matrixBlocked, matrixBlockedKey);
+  assert.strictEqual(matrixBlocked.status, 'ready');
+  assert.strictEqual(matrixBlocked.trailPacks.length, 0);
+  assert.strictEqual(matrixBlocked.guidanceDiagnosticRecords.length, 1);
+  assert.deepStrictEqual(matrixBlocked.guidanceDiagnosticRecords[0].exclusionReasons, [
+    'access_unverified',
+  ]);
+  assert.strictEqual(matrixBlockedSurface.providerNotReadyCount, 1);
+  assert.strictEqual(matrixBlockedSurface.evaluatedCount, 1);
+  assert.strictEqual(matrixBlockedSurface.surface.kind, 'blocked');
+  assert.strictEqual(matrixBlockedSurface.surface.currentSuccessfulEvaluation, true);
+  assert.strictEqual(matrixBlockedSurface.surface.showBlockedNotice, true);
+
+  // E: the same diagnostic-only last-good data after a 503 is stale provider
+  // evidence, never a fresh policy-blocked conclusion.
+  responses.push({ data: null, error: { message: '503 route catalog unavailable', status: 503 } });
+  const matrixStaleBlocked = await refreshLiveTrailPackCatalog(matrixBlockedCriteria);
+  const matrixStaleBlockedSurface = buildProductionExploreSurface(
+    matrixStaleBlocked,
+    matrixBlockedKey,
+  );
+  assert.strictEqual(matrixStaleBlocked.status, 'stale');
+  assert.strictEqual(matrixStaleBlocked.guidanceDiagnosticRecords.length, 1);
+  assert.strictEqual(matrixStaleBlocked.asyncState.providerStatus, 'unavailable');
+  assert.strictEqual(matrixStaleBlockedSurface.surface.kind, 'stale');
+  assert.strictEqual(matrixStaleBlockedSurface.surface.currentSuccessfulEvaluation, false);
+  assert.strictEqual(matrixStaleBlockedSurface.surface.showBlockedNotice, false);
+
+  // E persisted-cache variant: create a blocked fallback summary, leave it in
+  // the v1 persisted adapter, remove the active in-memory query, then revalidate
+  // through a provider 503. Neither cached/loading nor terminal stale may claim
+  // a current successful policy evaluation.
+  const matrixPersistedBlockedCriteria = { ...criteria, radiusMiles: 495, limit: 50 };
+  const matrixPersistedBlockedKey = createLiveTrailPackCatalogRefreshKey(
+    matrixPersistedBlockedCriteria,
+  );
+  const persistedBlockedRouteId = 'persisted-blocked-fallback-route';
+  responses.push({ data: null, error: { message: '503 route catalog unavailable', status: 503 } });
+  legacyResponses.push({
+    data: [{ ...routeRecord(persistedBlockedRouteId), source: 'ecs_submitted' }],
+    error: null,
+  });
+  const matrixPersistedBlockedSeed = await refreshLiveTrailPackCatalog(
+    matrixPersistedBlockedCriteria,
+  );
+  assert.strictEqual(matrixPersistedBlockedSeed.source, 'trail_packs_fallback');
+  const summaryCacheAdapter = memoryCaches.get('explore.catalog.summary.v1');
+  assert(summaryCacheAdapter, 'The v1 persisted summary cache adapter must be initialized.');
+  const persistedBlockedRaw = summaryCacheAdapter.get('explore.catalog.summary.v1');
+  assert(persistedBlockedRaw, 'The blocked fallback summary must be persisted before revalidation.');
+  const persistedBlockedPayload = JSON.parse(persistedBlockedRaw);
+  assert.strictEqual(persistedBlockedPayload.refreshKey, matrixPersistedBlockedKey);
+  assert.strictEqual(persistedBlockedPayload.source, 'trail_packs_fallback');
+  assert(
+    persistedBlockedPayload.summaries.some((summary) => summary.routeId === persistedBlockedRouteId),
+  );
+
+  responses.push({ data: null, error: { message: '503 reset query unavailable', status: 503 } });
+  await refreshLiveTrailPackCatalog({ ...criteria, radiusMiles: 494, limit: 50 });
+  const matrixPersistedBlockedEmissions = [];
+  const unsubscribeMatrixPersistedBlocked = liveTrailPackCatalogStore.subscribe(() => {
+    const emitted = liveTrailPackCatalogStore.getSnapshot();
+    if (emitted.refreshKey === matrixPersistedBlockedKey) {
+      matrixPersistedBlockedEmissions.push(emitted);
+    }
+  });
+  responses.push({ data: null, error: { message: '503 route catalog unavailable', status: 503 } });
+  const matrixPersistedBlocked = await refreshLiveTrailPackCatalog(
+    matrixPersistedBlockedCriteria,
+  );
+  unsubscribeMatrixPersistedBlocked();
+  const matrixPersistedBlockedSurface = buildProductionExploreSurface(
+    matrixPersistedBlocked,
+    matrixPersistedBlockedKey,
+  );
+  assert.strictEqual(matrixPersistedBlocked.status, 'stale');
+  assert.strictEqual(matrixPersistedBlocked.asyncState.source, 'cached');
+  assert.strictEqual(matrixPersistedBlocked.routeCatalogSummaries.length, 1);
+  assert.strictEqual(matrixPersistedBlockedSurface.visibleCandidates.length, 0);
+  assert(matrixPersistedBlockedSurface.evaluatedCount > 0);
+  assert.strictEqual(matrixPersistedBlockedSurface.surface.kind, 'stale');
+  assert.strictEqual(matrixPersistedBlockedSurface.surface.currentSuccessfulEvaluation, false);
+  assert.strictEqual(matrixPersistedBlockedSurface.surface.showBlockedNotice, false);
+  assert(
+    matrixPersistedBlockedEmissions.some((emitted) =>
+      emitted.status === 'loading' &&
+      emitted.asyncState.source === 'cached' &&
+      emitted.routeCatalogSummaries.length === 1),
+    'Scenario E must hydrate the blocked fallback summary from persisted cache.',
+  );
+  assert(
+    matrixPersistedBlockedEmissions.every((emitted) =>
+      buildProductionExploreSurface(emitted, matrixPersistedBlockedKey).surface.kind !== 'blocked'),
+    'Scenario E must never emit blocked during persisted-cache revalidation.',
+  );
+
+  // G: a fresh response for a query that previously persisted a blocked legacy
+  // fallback replaces the old cache/in-memory inventory atomically.
+  const matrixReplacementCriteria = { ...criteria, radiusMiles: 497, limit: 50 };
+  const matrixReplacementKey = createLiveTrailPackCatalogRefreshKey(matrixReplacementCriteria);
+  const matrixReplacementFallbackRouteId = 'old-blocked-fallback-route';
+  responses.push({ data: null, error: { message: '503 route catalog unavailable', status: 503 } });
+  legacyResponses.push({
+    data: [{ ...routeRecord(matrixReplacementFallbackRouteId), source: 'ecs_submitted' }],
+    error: null,
+  });
+  const matrixOldFallback = await refreshLiveTrailPackCatalog(matrixReplacementCriteria);
+  const matrixOldFallbackSurface = buildProductionExploreSurface(
+    matrixOldFallback,
+    matrixReplacementKey,
+  );
+  assert.strictEqual(matrixOldFallback.status, 'degraded');
+  assert.strictEqual(matrixOldFallback.source, 'trail_packs_fallback');
+  assert.strictEqual(matrixOldFallbackSurface.visibleCandidates.length, 0);
+  assert.strictEqual(matrixOldFallbackSurface.surface.kind, 'stale');
+  assert.strictEqual(matrixOldFallbackSurface.surface.showBlockedNotice, false);
+  const matrixOldFallbackRaw = summaryCacheAdapter.get('explore.catalog.summary.v1');
+  assert(matrixOldFallbackRaw);
+  const matrixOldFallbackPayload = JSON.parse(matrixOldFallbackRaw);
+  assert.strictEqual(matrixOldFallbackPayload.refreshKey, matrixReplacementKey);
+  assert.strictEqual(matrixOldFallbackPayload.source, 'trail_packs_fallback');
+  assert(
+    matrixOldFallbackPayload.summaries.some(
+      (summary) => summary.routeId === matrixReplacementFallbackRouteId,
+    ),
+  );
+  responses.push(fixtureResponse());
+  const matrixFreshReplacement = await refreshLiveTrailPackCatalog(matrixReplacementCriteria);
+  const matrixFreshReplacementSurface = buildProductionExploreSurface(
+    matrixFreshReplacement,
+    matrixReplacementKey,
+  );
+  assert.strictEqual(matrixFreshReplacement.status, 'ready');
+  assert.strictEqual(matrixFreshReplacement.source, 'route_catalog');
+  assert.strictEqual(matrixFreshReplacement.trailPacks.length, 50);
+  assert.strictEqual(matrixFreshReplacement.guidanceDiagnosticTrailPacks.length, 0);
+  assert.strictEqual(matrixFreshReplacement.guidanceDiagnosticRecords.length, 0);
+  assert.strictEqual(matrixFreshReplacementSurface.visibleCandidates.length, 50);
+  assert.strictEqual(matrixFreshReplacementSurface.surface.kind, 'cards');
+  assert.strictEqual(matrixFreshReplacementSurface.surface.currentSuccessfulEvaluation, true);
+  const matrixFreshReplacementRaw = summaryCacheAdapter.get('explore.catalog.summary.v1');
+  assert(matrixFreshReplacementRaw);
+  const matrixFreshReplacementPayload = JSON.parse(matrixFreshReplacementRaw);
+  assert.strictEqual(matrixFreshReplacementPayload.refreshKey, matrixReplacementKey);
+  assert.strictEqual(matrixFreshReplacementPayload.source, 'route_catalog');
+  assert.strictEqual(matrixFreshReplacementPayload.summaries.length, 50);
+  assert(
+    !matrixFreshReplacementRaw.includes(matrixReplacementFallbackRouteId),
+    'Fresh route-catalog data must overwrite the obsolete persisted fallback payload.',
+  );
+
+  // D: a 503 with no same-query cache is provider unavailable, not blocked.
+  const matrixUnavailableCriteria = { ...criteria, radiusMiles: 496, limit: 50 };
+  const matrixUnavailableKey = createLiveTrailPackCatalogRefreshKey(matrixUnavailableCriteria);
+  responses.push({ data: null, error: { message: '503 route catalog unavailable', status: 503 } });
+  const matrixUnavailable = await refreshLiveTrailPackCatalog(matrixUnavailableCriteria);
+  const matrixUnavailableSurface = buildProductionExploreSurface(
+    matrixUnavailable,
+    matrixUnavailableKey,
+  );
+  assert.strictEqual(matrixUnavailable.status, 'error');
+  assert.strictEqual(matrixUnavailable.trailPacks.length, 0);
+  assert.strictEqual(matrixUnavailable.asyncState.providerStatus, 'unavailable');
+  assert.strictEqual(matrixUnavailableSurface.surface.kind, 'provider_unavailable');
+  assert.strictEqual(matrixUnavailableSurface.surface.currentSuccessfulEvaluation, false);
+  assert.strictEqual(matrixUnavailableSurface.surface.showBlockedNotice, false);
+
   const detailInvocations = invocations.filter((entry) => entry.name === 'route-catalog-detail');
   assert.strictEqual(detailInvocations[0].body.includeGeometry, true);
   assert(detailInvocations.every((entry) => entry.signal instanceof AbortSignal));
@@ -1388,6 +1855,61 @@ function searchResponse(records, coverageState, diagnosticRecords = [], metaOver
   assert.strictEqual(fullSearchInvocation.body.pageSize, 500);
   assert.strictEqual(fullSearchInvocation.body.offset, 0);
 
+  console.log(JSON.stringify({
+    metric: 'explore_route_surface_matrix',
+    scenarios: {
+      A: {
+        normalized: matrixFresh.trailPacks.length,
+        discoverable: matrixFreshSurface.inventory.totalDiscoverableCount,
+        guidanceReady: matrixFreshSurface.inventory.totalReadyCount,
+        visible: matrixFreshSurface.visibleCandidates.length,
+        providerNotReady: matrixFreshSurface.providerNotReadyCount,
+        state: matrixFreshSurface.surface.kind,
+      },
+      B: {
+        normalized: matrixMixed.trailPacks.length,
+        diagnostics: matrixMixed.guidanceDiagnosticRecords.length,
+        visible: matrixMixedSurface.visibleCandidates.length,
+        state: matrixMixedSurface.surface.kind,
+      },
+      C: {
+        normalized: matrixBlocked.trailPacks.length,
+        diagnostics: matrixBlocked.guidanceDiagnosticRecords.length,
+        evaluated: matrixBlockedSurface.evaluatedCount,
+        state: matrixBlockedSurface.surface.kind,
+      },
+      D: { visible: matrixUnavailableSurface.visibleCandidates.length, state: matrixUnavailableSurface.surface.kind },
+      E: {
+        visible: matrixPersistedBlockedSurface.visibleCandidates.length,
+        state: matrixPersistedBlockedSurface.surface.kind,
+        cacheHydrated: matrixPersistedBlockedEmissions.some(
+          (emitted) => emitted.asyncState.source === 'cached',
+        ),
+        transientBlocked: false,
+      },
+      F: {
+        visible: matrixStaleRevealableSurface.visibleCandidates.length,
+        state: matrixStaleRevealableSurface.surface.kind,
+        cacheHydrated: matrixStaleRevealableEmissions.some(
+          (emitted) => emitted.asyncState.source === 'cached',
+        ),
+        transientBlocked: false,
+      },
+      G: {
+        visible: matrixFreshReplacementSurface.visibleCandidates.length,
+        state: matrixFreshReplacementSurface.surface.kind,
+        persistedFallbackReplaced: !matrixFreshReplacementRaw.includes(
+          matrixReplacementFallbackRouteId,
+        ),
+      },
+      H: {
+        discoverable: shortRouteAvailability.discoverability.eligible,
+        tripBuilderEligible: shortRouteAvailability.tripBuilder.eligible,
+        guidanceReady: shortRouteAvailability.guidance.eligible,
+        reason: 'too_short',
+      },
+    },
+  }));
   console.log(JSON.stringify({
     metric: 'explore_route_detail_provider_requests',
     rapidActions: 2,

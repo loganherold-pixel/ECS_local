@@ -223,7 +223,8 @@ assert(
     searchFunction.includes('geometryMatchedCount') &&
     searchFunction.includes('routeTrailhead') &&
     searchFunction.includes('knownRouteDiagnostics') &&
-    searchFunction.includes('ROUTE_CATALOG_RADIUS_GEOMETRY_PADDING_MILES') &&
+    searchFunction.includes("'route_catalog_nearby_route_ids'") &&
+    searchFunction.includes('spatialIndexFilterApplied') &&
     searchFunction.includes('radiusMatchedCount') &&
     searchFunction.includes('candidateLimit') &&
     searchFunction.includes(".gte('distance_miles'") &&

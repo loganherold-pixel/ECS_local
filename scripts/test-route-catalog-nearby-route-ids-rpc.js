@@ -9,11 +9,23 @@ const migrationPath = path.join(
   'migrations',
   '20260717212739_route_catalog_nearby_route_ids_rpc.sql',
 );
+const optimizationMigrationPath = path.join(
+  root,
+  'supabase',
+  'migrations',
+  '20260718192605_optimize_route_catalog_nearby_route_ids_rpc.sql',
+);
 
 assert(fs.existsSync(migrationPath), 'Nearby route ID RPC migration should exist.');
+assert(
+  fs.existsSync(optimizationMigrationPath),
+  'Nearby route ID RPC timeout optimization migration should exist.',
+);
 
 const migration = fs.readFileSync(migrationPath, 'utf8');
 const normalizedMigration = migration.replace(/\s+/g, ' ').toLowerCase();
+const optimizationMigration = fs.readFileSync(optimizationMigrationPath, 'utf8');
+const normalizedOptimizationMigration = optimizationMigration.replace(/\s+/g, ' ').toLowerCase();
 
 assert(
   normalizedMigration.includes('create or replace function public.route_catalog_nearby_route_ids') &&
@@ -73,8 +85,44 @@ assert(
   'Exact/prefix provider filtering must happen before LIMIT.',
 );
 
+assert(
+  normalizedOptimizationMigration.includes(
+    'create or replace function public.route_catalog_nearby_route_ids',
+  ) &&
+    normalizedOptimizationMigration.includes('nearest_candidates as materialized') &&
+    normalizedOptimizationMigration.includes('operator(public.<->)') &&
+    normalizedOptimizationMigration.includes('parallel unsafe'),
+  'The timeout repair should preserve the RPC and use a conservative GiST KNN candidate plan.',
+);
+assert(
+  normalizedOptimizationMigration.includes('least( 8000,') &&
+    normalizedOptimizationMigration.includes(
+      'greatest(1, least(coalesce($4, 600), 2000)) * 4',
+    ) &&
+    normalizedOptimizationMigration.includes(
+      'limit (select request.candidate_limit from request)',
+    ),
+  'The KNN plan should overfetch a bounded candidate pool before exact radius qualification.',
+);
+assert(
+  normalizedOptimizationMigration.includes(
+    'public.st_dwithin( nearest_candidates.geog, request.search_center, request.radius_meters )',
+  ) &&
+    normalizedOptimizationMigration.indexOf('operator(public.<->)') <
+      normalizedOptimizationMigration.indexOf('limit (select request.candidate_limit from request)') &&
+    normalizedOptimizationMigration.indexOf('limit (select request.candidate_limit from request)') <
+      normalizedOptimizationMigration.indexOf('public.st_dwithin') &&
+    normalizedOptimizationMigration.indexOf('public.st_dwithin') <
+      normalizedOptimizationMigration.indexOf('limit (select request.row_limit from request)'),
+  'The repair should bound nearest candidates first, then enforce exact radius before final output.',
+);
+
 function clampLimit(value) {
   return Math.max(1, Math.min(value ?? 600, 2000));
+}
+
+function knnCandidateLimit(value) {
+  return Math.min(8000, clampLimit(value) * 4);
 }
 
 function sourceMatches(providerId, adapter) {
@@ -121,6 +169,25 @@ function routeMatches(route, criteria) {
 function selectNearbyRouteIds(routes, criteria) {
   return routes
     .filter((route) => routeMatches(route, criteria))
+    .sort((left, right) =>
+      left.centerDistanceMiles - right.centerDistanceMiles ||
+      right.confidenceScore - left.confidenceScore ||
+      right.updatedAt.localeCompare(left.updatedAt) ||
+      left.id.localeCompare(right.id))
+    .slice(0, clampLimit(criteria.limit));
+}
+
+function selectNearbyRouteIdsWithKnnPool(routes, criteria) {
+  const withoutRadius = routes.filter((route) =>
+    routeMatches(route, { ...criteria, radiusMiles: Number.POSITIVE_INFINITY }));
+  const nearestCandidates = withoutRadius
+    .sort((left, right) =>
+      (left.knnDistanceMiles ?? left.centerDistanceMiles) -
+        (right.knnDistanceMiles ?? right.centerDistanceMiles) ||
+      left.id.localeCompare(right.id))
+    .slice(0, knnCandidateLimit(criteria.limit));
+  return nearestCandidates
+    .filter((route) => route.centerDistanceMiles <= criteria.radiusMiles)
     .sort((left, right) =>
       left.centerDistanceMiles - right.centerDistanceMiles ||
       right.confidenceScore - left.confidenceScore ||
@@ -193,6 +260,17 @@ assert.strictEqual(
 const nearby = selectNearbyRouteIds([...distantHighConfidenceRoutes, ...mendocinoRoutes], criteria);
 assert.strictEqual(nearby.length, 23, 'All 23 eligible Mendocino summaries should survive pre-limit eligibility.');
 assert(nearby.every((route) => route.id.startsWith('mendocino-')));
+
+const knnNearby = selectNearbyRouteIdsWithKnnPool(
+  [...distantHighConfidenceRoutes, ...mendocinoRoutes],
+  { ...criteria, limit: 50 },
+);
+assert.strictEqual(
+  knnNearby.length,
+  23,
+  'The bounded KNN pool should retain every eligible nearby summary when fewer than the output limit exist.',
+);
+assert(knnNearby.every((route) => route.id.startsWith('mendocino-')));
 
 const excludedFixtures = [
   { ...baseRoute, id: 'pending-review', reviewStatus: 'pending_review' },
