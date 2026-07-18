@@ -177,9 +177,11 @@ export function buildOfflineNavigationProductionReadinessResult(options = {}) {
     ),
     check(
       'departure_audit_and_prepare_offline_cta_visible',
-      'Command Brief and Navigate expose offline departure audit status and the route package CTA.',
+      'Command Brief explains offline readiness in its narrative audit while Navigate retains the route package CTA.',
       commandBrief.includes('Departure Audit') &&
-        commandBrief.includes('DepartureAuditChecklist') &&
+        commandBrief.includes('<DepartureAuditNarrative') &&
+        commandBrief.includes('buildCommandBriefPresentation') &&
+        !commandBrief.includes('DepartureAuditChecklist') &&
         readinessStrip.includes('Offline: {offlineStatus}') &&
         readinessStrip.includes('Download Route Package') &&
         navigate.includes('onPrepareOffline={handlePrepareOfflineFromRoadPreview}'),

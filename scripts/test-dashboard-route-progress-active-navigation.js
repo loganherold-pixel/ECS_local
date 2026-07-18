@@ -575,6 +575,21 @@ function getProgressSnapshot({
 
 const exactRouteSnapshot = getProgressSnapshot({ roadSession: activeRoadSession('saved-route-b') });
 assert.strictEqual(exactRouteSnapshot.routePoints.length, 2, 'An exact route identity may reuse saved route geometry.');
+assert.strictEqual(
+  exactRouteSnapshot.guidanceSessionId,
+  'road-session-a',
+  'Route Progress must preserve the guidance session identity separately from the route asset id.',
+);
+
+const navigateIdentitySnapshot = getProgressSnapshot({
+  navigateSession: activeNavigateSession('live-route-a'),
+  activeRoute: null,
+});
+assert.strictEqual(
+  navigateIdentitySnapshot.guidanceSessionId,
+  'navigate-session-a',
+  'The mounted Navigate session identity must survive the shared Dashboard progress adapter.',
+);
 
 const linkedRunSnapshot = getProgressSnapshot({
   activeRoute: savedRoute({ linked_run_id: 'linked-run-a' }),

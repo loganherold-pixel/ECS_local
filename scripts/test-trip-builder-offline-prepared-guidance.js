@@ -341,13 +341,53 @@ const run = {
   is_active: false,
 };
 
+const offlineRouteIntent = {
+  syncType: 'route',
+  origin: {
+    mode: 'saved_route_start',
+    latitude: origin.lat,
+    longitude: origin.lng,
+    label: 'Trip origin',
+  },
+  destination: {
+    latitude: trailhead.lat,
+    longitude: trailhead.lng,
+    label: 'Trip finish',
+    source: 'route_geometry',
+  },
+  routeGeometryPointCount: run.points.length,
+  routeSummary: {
+    distanceMeters: run.stats.distance_m,
+    distanceMiles: run.stats.distance_miles,
+    durationSeconds: preparedRoadRoute.durationS,
+    primaryName: run.title,
+  },
+  mapContext: {
+    styleKey: 'ecs',
+    layerContext: ['route-corridor', 'road-preview', 'offline_prep_pack'],
+  },
+  readinessSnapshot: {
+    offlinePrepManifest: {
+      routeId: tripBuilderRoute.id,
+    },
+  },
+  preparedAt: createdAt,
+};
+
 (async () => {
   const routeCache = require(routeCachePath);
   const cached = await routeCache.cacheOfflineRoute({
     run,
+    routeIdAliases: [tripBuilderRoute.id, preparedRoadRoute.id],
+    routeIntent: offlineRouteIntent,
+    offlineTileRegionId: 'trip-builder-offline-region',
+    offlineTileRegionIds: ['trip-builder-offline-region'],
+    tileCacheStatus: 'complete',
     preparedRoadRoute,
     includeRemoteConnectivityCache: false,
   });
+  assert.ok(cached.routeIdAliases.includes(tripBuilderRoute.id));
+  assert.ok(cached.routeIdAliases.includes(preparedRoadRoute.id));
   assert.strictEqual(cached.roadGuidanceStatus, 'cached_turn_by_turn');
   assert.deepStrictEqual(cached.preparedRoadRoute.geometry, preparedRoadRoute.geometry);
   assert.deepStrictEqual(cached.preparedRoadRoute.steps, preparedRoadRoute.steps);
@@ -364,6 +404,31 @@ const run = {
     deriveOfflineReadiness({ runCacheManifest: cachedRunManifest }).readyAssets.includes('guidance instructions'),
     'The authoritative run cache projection should retain offline guidance readiness.',
   );
+  const routeSpecificReadiness = deriveOfflineReadiness({
+    currentRouteContext: {
+      routeId: tripBuilderRoute.id,
+      destination: trailhead,
+      geometry: preparedRoadRoute.geometry,
+      mapStyle: 'ecs',
+      requiredLayers: ['route-corridor', 'road-preview'],
+    },
+    downloadedRoutes: [cached],
+    tileRegions: [{
+      id: 'trip-builder-offline-region',
+      status: 'complete',
+      sourceType: 'route-corridor',
+      syncType: 'route',
+      routeId: run.id,
+      styleKey: 'ecs',
+      downloadedTiles: 40,
+      tileCount: 40,
+      routeIntent: offlineRouteIntent,
+    }],
+    tileSyncJobs: [],
+    routeSyncHydrated: true,
+  });
+  assert.strictEqual(routeSpecificReadiness.level, 'ready');
+  assert.strictEqual(routeSpecificReadiness.recommendedAction, undefined);
 
   const cleared = await routeCache.cacheOfflineRoute({
     run,

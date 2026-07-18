@@ -166,11 +166,7 @@ function buildRecommendedActions(args: {
   routeConfidenceSummary?: NavigateRouteConfidenceSummary | null;
 }): RouteGuidanceRecommendedAction[] {
   const actions: RouteGuidanceRecommendedAction[] = [];
-  if (
-    args.offlineReadiness.recommendedAction === 'prepare_offline' ||
-    args.offlineReadiness.level === 'partial' ||
-    args.offlineReadiness.level === 'not_ready'
-  ) {
+  if (args.offlineReadiness.recommendedAction === 'prepare_offline') {
     actions.push({ id: 'prepare_offline', label: 'Prepare Offline' });
   }
 

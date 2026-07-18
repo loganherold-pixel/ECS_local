@@ -109,6 +109,7 @@ includes(screen, 'readiness: selectedInput.readiness ?? selectedInput.tripPlan?.
 includes(screen, 'offlinePresentation: packPresentation', 'Offline presentation remains distinct from route readiness');
 includes(screen, '<ECSOperationalAnnouncer event={packStateAnnouncement} />', 'Terminal pack-state announcement');
 includes(screen, 'performOfflinePackPreparation = async (context: OfflinePrepActionContext)', 'Mounted action lifecycle context');
+includes(screen, 'styleKey: mapStyleKey', 'Reused route regions retain canonical prepared map-style identity');
 includes(screen, 'mountedRef.current && context.isCurrent() && !context.signal.aborted', 'Stale action presentation guard');
 includes(screen, 'prepareActionLifecycleRef.current = createOfflinePrepActionLifecycle<void>()', 'Strict-mode-safe action lifecycle setup');
 includes(ecsButton, 'busy: loading', 'Shared ECS button busy state');

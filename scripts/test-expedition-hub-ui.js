@@ -134,7 +134,8 @@ for (const forbidden of [
 includes('if (insights.length === 0) return null;', 'Expedition Insights should not render an empty placeholder section.');
 
 includes('ExpeditionRecapMap', 'Expedition detail should include the completed-trip recap map foundation.');
-includes('routeGeometry={trip.routeGeometry}', 'Full route geometry should only be passed after opening a specific trip detail.');
+includes('buildExpeditionRecapRoutePresentation({', 'Trip detail should resolve recorded or planned recap geometry only after opening a specific trip.');
+includes('routeGeometry={recapRoutePresentation.geometry}', 'Recap map should receive the truthfully resolved detail geometry.');
 includes('ExpeditionNotableMomentsTimeline', 'Expedition detail should include the notable moments timeline foundation.');
 includes('tripStartedAt={trip.startedAt}', 'Timeline should receive the trip start time for elapsed labels.');
 

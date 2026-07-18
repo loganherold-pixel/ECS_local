@@ -48,7 +48,6 @@ import {
   type DispatchEventSeverity,
   type DispatchEventSource,
   type DispatchEventType,
-  type DispatchLiveSourceState,
 } from '../../lib/dispatchLiveEvents';
 import { createDispatchEventDetailPresentation } from '../../lib/dispatchEventDetailPresentation';
 import { createDispatchCoordinateFingerprint } from '../../lib/dispatchEventDedupe';
@@ -156,7 +155,6 @@ import { useOperationalWeather } from '../../lib/useOperationalWeather';
 import { useThrottledGPS } from '../../lib/useThrottledGPS';
 import { isECSDevelopmentDiagnosticEnabled } from '../../lib/features/featureVisibilityRegistry';
 import {
-  createDispatchEventFromChannelAction,
   getDispatchChannelSnapshots,
   getLiveDispatchEventInput,
   subscribeDispatchChannels,
@@ -442,11 +440,6 @@ type DispatchCommandIdentity = {
     vehicleId?: string;
     label: string;
   };
-};
-
-type DispatchChannelAvailability = {
-  enabled: boolean;
-  reason: string | null;
 };
 
 type ConvoyLifecycleControlState = {
@@ -1076,18 +1069,6 @@ function isActiveLiveDispatchEvent(event: DispatchEvent): boolean {
   return event.id.startsWith('live-') && status !== 'resolved' && status !== 'dismissed';
 }
 
-function getSourceStateLabel(sourceState: DispatchLiveSourceState): string {
-  switch (sourceState) {
-    case 'live_systems':
-      return 'LIVE SYSTEMS';
-    case 'cached_last_known':
-      return 'RECENT DATA';
-    case 'unavailable':
-    default:
-      return 'UNAVAILABLE';
-  }
-}
-
 function getDefaultCommandForm(): CommandFormState {
   return {
     checkInStatus: 'OK',
@@ -1499,49 +1480,6 @@ function getDispatchSenderLabel(event: DispatchEvent): string | null {
   }
 
   return null;
-}
-
-function getDispatchChannelAvailability({
-  channel,
-  isOnline,
-  offlineMode,
-  hasActiveVehicle,
-}: {
-  channel: DispatchChannelSnapshot;
-  isOnline: boolean;
-  offlineMode: boolean;
-  hasActiveVehicle: boolean;
-}): DispatchChannelAvailability {
-  if (channel.id === 'sync') {
-    return { enabled: true, reason: null };
-  }
-
-  if (!isOnline || offlineMode) {
-    return { enabled: false, reason: 'Offline' };
-  }
-
-  if (channel.id === 'vehicle' && !hasActiveVehicle) {
-    return { enabled: false, reason: 'No active rig' };
-  }
-
-  if (channel.sourceState === 'unavailable') {
-    switch (channel.id) {
-      case 'route':
-        return { enabled: false, reason: 'No active route' };
-      case 'terrain':
-        return { enabled: false, reason: 'No terrain data' };
-      case 'vehicle':
-        return { enabled: false, reason: 'No vehicle data' };
-      case 'resources':
-        return { enabled: false, reason: 'No resource data' };
-      case 'weather':
-        return { enabled: false, reason: 'No live weather' };
-      default:
-        return { enabled: false, reason: 'Unavailable' };
-    }
-  }
-
-  return { enabled: true, reason: null };
 }
 
 function validateCommandForm(command: DispatchCommandType, form: CommandFormState): string | null {
@@ -4109,31 +4047,6 @@ export default function DispatchCadCommandCenter() {
     missionCommandView !== 'team' &&
     hasDispatchTeamContext,
   );
-  const channelSnapshots = useMemo(
-    () => {
-      if (channelRevision < 0) {
-        return [];
-      }
-
-      return getDispatchChannelSnapshots({
-        queuedCount,
-        syncStatus,
-        isOnline,
-        offlineMode,
-        gpsAltitudeFt: dispatchGps.position?.altitudeFt ?? null,
-        gpsHasFix: dispatchGps.hasFix,
-      });
-    },
-    [
-      channelRevision,
-      dispatchGps.hasFix,
-      dispatchGps.position?.altitudeFt,
-      isOnline,
-      offlineMode,
-      queuedCount,
-      syncStatus,
-    ],
-  );
   const advisory = useMemo(() => {
     const topEvent = getTopDispatchAdvisory(visibleEvents);
     return topEvent?.id === dismissedAdvisoryId ? null : topEvent;
@@ -4490,95 +4403,6 @@ export default function DispatchCadCommandCenter() {
     realtimeStatus,
     showToast,
     teamSnapshot,
-  ]);
-
-  const requestDispatchSync = useCallback(async () => {
-    setChannelRevision((revision) => revision + 1);
-
-    if (offlineMode || !isOnline) {
-      showToast?.('Dispatch sync will retry when ECS is online.');
-      return;
-    }
-
-    const convoyLoadGeneration = ++activeConvoyLoadGenerationRef.current;
-    const convoyLoadResult = await loadConvoyLifecycleControl();
-    const convoyLoadApplied = applyConvoyLifecycleControlLoad(convoyLoadResult, convoyLoadGeneration);
-    if (convoyLoadApplied && convoyLoadResult.authority === 'resolved') {
-      if (!convoyLoadResult.control && activeConvoyControl?.convoyId) {
-        stopConvoyLocationSubscription();
-      }
-    }
-    setConvoyLifecycleRevision((current) => current + 1);
-
-    const session = realtimeSessionRef.current;
-    const canPublishRealtime = Boolean(
-      session && realtimeStatus === 'connected' && dispatchRealtimeEnabled,
-    );
-    if ((!canPublishRealtime && !canonicalDispatchContext) || !localDispatchPersistenceId) {
-      const retryableRecoveryEvents = events.filter((event) => (
-        isRecoveryCriticalEvent(event) &&
-        (event.syncState === 'queued' || event.syncState === 'failed' || event.syncState === 'sending')
-      ));
-      retryableRecoveryEvents.forEach(publishRecoveryCadEvent);
-      showToast?.(
-        retryableRecoveryEvents.length > 0
-          ? 'Dispatch sync requested.'
-          : 'Dispatch sync state refreshed.',
-      );
-      return;
-    }
-
-    try {
-      const result = await replayQueuedDispatchActions({
-        expeditionId: localDispatchPersistenceId,
-        defaults: recoveryCadPersistenceDefaults,
-        publish: (event) => canPublishRealtime && session
-          ? session.publish(event)
-          : event.type === 'mission_command_upsert'
-              || event.type === 'mission_command_event_added'
-              || event.type === 'mission_playbook_upsert'
-            ? Promise.resolve({
-                ok: false,
-                retryable: true,
-                safeCode: 'mission_realtime_unavailable',
-              } as const)
-            : Promise.resolve(true),
-        persistCadEvent: recoveryCadBackendContext
-          ? (event) => upsertDispatchCadEventToBackend(event, recoveryCadBackendContext).then((response) => response.ok)
-          : undefined,
-        persistCanonicalEntity: canonicalDispatchContext
-          ? persistCanonicalReplayEntity
-          : undefined,
-      });
-
-      dispatchPersistenceAdapter.save(result.snapshot);
-      setChannelRevision((revision) => revision + 1);
-      showToast?.(
-        result.attempted === 0
-          ? 'Dispatch sync state refreshed.'
-          : result.failed > 0
-            ? `Dispatch sync sent ${result.replayed}/${result.attempted}; ${result.failed} failed.`
-            : `Dispatch sync sent ${result.replayed}/${result.attempted}.`,
-      );
-    } catch {
-      showToast?.('Dispatch sync failed. ECS will retry queued items.');
-    }
-  }, [
-    events,
-    activeConvoyControl?.convoyId,
-    applyConvoyLifecycleControlLoad,
-    canonicalDispatchContext,
-    isOnline,
-    loadConvoyLifecycleControl,
-    localDispatchPersistenceId,
-    offlineMode,
-    persistCanonicalReplayEntity,
-    publishRecoveryCadEvent,
-    realtimeStatus,
-    recoveryCadBackendContext,
-    recoveryCadPersistenceDefaults,
-    dispatchRealtimeEnabled,
-    showToast,
   ]);
 
   useEffect(() => {
@@ -5398,48 +5222,6 @@ export default function DispatchCadCommandCenter() {
     teamSnapshot,
   ]);
 
-  const handleChannelAction = useCallback((channel: DispatchChannelSnapshot) => {
-    if (channel.id === 'sync') {
-      void requestDispatchSync();
-      return;
-    }
-
-    const availability = getDispatchChannelAvailability({
-      channel,
-      isOnline,
-      offlineMode,
-      hasActiveVehicle: !!activeVehicle,
-    });
-    if (!availability.enabled) {
-      return;
-    }
-
-    const event = createDispatchEventFromChannelAction(channel);
-    if (!event) {
-      showToast?.('Dispatch channel action failed validation.');
-      return;
-    }
-
-    const storedEvent = appendEvent({
-      ...event,
-      dedupeKey: [
-        'channel-action',
-        channel.id,
-        channel.actionLabel,
-        getDispatchActorDedupeId(commandIdentity),
-      ].join(':'),
-      targetItemId: channel.id,
-      createdBy: {
-        userId: commandIdentity.userId,
-        displayName: commandIdentity.displayName,
-        email: commandIdentity.email,
-        callsign: commandIdentity.callsign,
-      },
-      rig: commandIdentity.rig,
-    }, !isOnline || offlineMode || queuedCount > 0);
-    showToast?.(storedEvent ? `${channel.actionLabel} created.` : 'Already submitted.');
-  }, [activeVehicle, appendEvent, commandIdentity, isOnline, offlineMode, queuedCount, requestDispatchSync, showToast]);
-
   const submitCommand = useCallback(async () => {
     if (!activeCommand || commandSubmittingRef.current) {
       return;
@@ -6126,7 +5908,10 @@ export default function DispatchCadCommandCenter() {
   }, [activeExpeditionDispatchId, router, showToast]);
 
   const headerStrip = (
-    <View style={[styles.headerStrip, isLandscapeDispatch ? styles.headerStripLandscape : null]}>
+    <View
+      style={[styles.headerStrip, isLandscapeDispatch ? styles.headerStripLandscape : null]}
+      testID="dispatch-primary-actions"
+    >
       <View style={[styles.headerActions, isLandscapeDispatch ? styles.headerActionsLandscape : null]}>
         <View style={[styles.headerActionsPrimary, isLandscapeDispatch ? styles.headerActionsPrimaryLandscape : null]}>
         <TouchableOpacity
@@ -6349,25 +6134,6 @@ export default function DispatchCadCommandCenter() {
       </TouchableOpacity>
     </View>
   ) : null;
-
-  const renderLiveStrip = (compact = false) => (
-    <View style={[styles.liveStrip, compact ? styles.liveStripLandscape : styles.liveStripPortrait]}>
-      {channelSnapshots.map((channel) => (
-        <DispatchChannelButton
-          key={channel.id}
-          channel={channel}
-          compact={compact}
-          availability={getDispatchChannelAvailability({
-            channel,
-            isOnline,
-            offlineMode,
-            hasActiveVehicle: !!activeVehicle,
-          })}
-          onPress={handleChannelAction}
-        />
-      ))}
-    </View>
-  );
 
   const handleMissionCommandStatusMessage = useCallback((message: string) => {
     showToast?.(message);
@@ -7009,7 +6775,6 @@ export default function DispatchCadCommandCenter() {
         <>
           {headerStrip}
           {advisoryLine}
-          {renderLiveStrip(false)}
         </>
       )}
 
@@ -7030,7 +6795,7 @@ export default function DispatchCadCommandCenter() {
         isLandscapeDispatch && (!missionCommandEnabled || missionCommandView === 'team')
           ? styles.feedPanelLandscapeSignal
           : null,
-      ]}>
+      ]} testID="dispatch-primary-workspace">
         {!missionCommandEnabled ? convoyFeedSurface : missionCommandView === 'board' ? (
           <DispatchMissionCommandBoard
             expeditionId={localDispatchPersistenceId}
@@ -7416,126 +7181,6 @@ function MissionCommandLazySurfaceFallback() {
       <Text style={styles.missionLazyFallbackText}>Opening Mission Command</Text>
     </View>
   );
-}
-
-function DispatchChannelButton({
-  channel,
-  compact = false,
-  availability,
-  onPress,
-}: {
-  channel: DispatchChannelSnapshot;
-  compact?: boolean;
-  availability: DispatchChannelAvailability;
-  onPress: (channel: DispatchChannelSnapshot) => void;
-}) {
-  const disabled = !availability.enabled;
-  const isLiveSource = channel.sourceState === 'live_systems';
-  const isCachedSource = channel.sourceState === 'cached_last_known';
-  const isUnavailableSource = channel.sourceState === 'unavailable';
-  const isElevatedChannel = isDispatchChannelElevated(channel);
-  const isPrimaryChannel = isPrimaryDispatchChannel(channel) && isElevatedChannel;
-  const isSubduedChannel = !isElevatedChannel;
-  const sourceTone = isLiveSource
-    ? SEVERITY_TONE[channel.severity]
-    : isCachedSource
-      ? TACTICAL.amber
-      : TACTICAL.textMuted;
-  const tone = disabled && !isLiveSource && !isCachedSource
-    ? TACTICAL.textMuted
-    : sourceTone;
-  const displayActionLabel = disabled
-    ? availability.reason ?? 'Unavailable'
-    : channel.actionLabel;
-  const compactActionLabel = compact && channel.id === 'sync' ? '' : displayActionLabel;
-  const sourceLabel = getSourceStateLabel(channel.sourceState);
-  const displaySourceLabel = isCachedSource ? channel.sourceLabel : sourceLabel;
-
-  return (
-    <TouchableOpacity
-      testID={`dispatch-channel-${channel.id}-${channel.sourceState}`}
-      style={[
-        styles.liveChip,
-        compact ? styles.liveChipCompact : null,
-        isPrimaryChannel ? styles.liveChipPrimary : null,
-        isLiveSource ? styles.liveChipSourceLive : null,
-        isCachedSource ? styles.liveChipSourceCached : null,
-        isSubduedChannel ? styles.liveChipSubdued : null,
-        disabled && isUnavailableSource ? styles.liveChipDisabled : null,
-      ]}
-      accessibilityRole="button"
-      accessibilityLabel={`${channel.label}. ${sourceLabel}. ${channel.statusLabel}. ${displayActionLabel}`}
-      accessibilityState={{ disabled }}
-      disabled={disabled}
-      activeOpacity={disabled ? 1 : 0.78}
-      onPress={() => {
-        if (disabled) return;
-        onPress(channel);
-      }}
-    >
-      <View style={styles.channelTopRow}>
-        <Text
-          style={[
-            styles.liveChipLabel,
-            compact ? styles.liveChipLabelCompact : null,
-            isSubduedChannel ? styles.liveChipTextSubdued : null,
-            isUnavailableSource ? styles.liveChipTextDisabled : null,
-          ]}
-          numberOfLines={1}
-        >
-          {channel.label}
-        </Text>
-        <View style={[styles.channelStatusWrap, isLiveSource ? styles.channelStatusWrapLive : null]}>
-          <View style={[styles.channelStatusDot, { backgroundColor: tone }]} />
-        </View>
-      </View>
-      <Text style={[styles.liveChipValue, compact ? styles.liveChipValueCompact : null, { color: tone }]} numberOfLines={1}>{channel.statusLabel}</Text>
-      <Text
-        style={[
-          styles.channelDetail,
-          compact ? styles.channelDetailCompact : null,
-          isSubduedChannel ? styles.liveChipTextSubdued : null,
-          isUnavailableSource ? styles.liveChipTextDisabled : null,
-        ]}
-        numberOfLines={1}
-      >
-        {channel.detail}
-      </Text>
-      <View style={styles.channelFooterRow}>
-        <Text
-          style={[
-            styles.channelSourceLabel,
-            isLiveSource ? styles.channelSourceLabelLive : null,
-            isCachedSource ? styles.channelSourceLabelCached : null,
-            isSubduedChannel ? styles.channelSourceLabelSubdued : null,
-          ]}
-          numberOfLines={1}
-        >
-          {displaySourceLabel}
-        </Text>
-        {compactActionLabel ? (
-          <Text
-            style={[
-              styles.channelActionLabel,
-              isSubduedChannel ? styles.channelActionLabelSubdued : null,
-              disabled ? styles.channelActionLabelDisabled : null,
-            ]}
-            numberOfLines={1}
-          >
-            {compactActionLabel}
-          </Text>
-        ) : null}
-      </View>
-    </TouchableOpacity>
-  );
-}
-
-function isDispatchChannelElevated(channel: DispatchChannelSnapshot): boolean {
-  return channel.sourceState === 'live_systems' || channel.severity === 'critical' || channel.severity === 'warning';
-}
-
-function isPrimaryDispatchChannel(channel: DispatchChannelSnapshot): boolean {
-  return channel.id === 'route' || channel.id === 'sync';
 }
 
 function FeedSeparator() {
@@ -9563,7 +9208,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingTop: 4,
     paddingBottom: 4,
-    gap: 5,
+    gap: 7,
   },
   rootLandscape: {
     paddingHorizontal: 8,
@@ -9845,24 +9490,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
     textAlign: 'center',
   },
-  liveStrip: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-  },
-  liveStripPortrait: {
-    justifyContent: 'space-between',
-    rowGap: 5,
-    columnGap: 0,
-  },
-  liveStripLandscape: {
-    flexGrow: 0,
-    flexShrink: 0,
-    minHeight: 0,
-    justifyContent: 'space-between',
-    rowGap: 4,
-    columnGap: 0,
-    paddingHorizontal: 2,
-  },
   rolloutNotice: {
     minHeight: 32,
     flexDirection: 'row',
@@ -10013,140 +9640,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.7,
     textTransform: 'uppercase',
   },
-  liveChip: {
-    width: '32%',
-    minHeight: 50,
-    borderWidth: 1,
-    borderColor: ECS_SURFACE.border.default,
-    backgroundColor: ECS_SURFACE.background.primary,
-    borderRadius: 7,
-    paddingHorizontal: 7,
-    paddingVertical: 6,
-    justifyContent: 'space-between',
-    overflow: 'hidden',
-  },
-  liveChipCompact: {
-    width: '32%',
-    minHeight: 32,
-    borderRadius: 6,
-    paddingHorizontal: 5,
-    paddingVertical: 4,
-  },
-  liveChipPrimary: {
-    borderColor: `${TACTICAL.amber}2E`,
-    backgroundColor: `${TACTICAL.amber}12`,
-  },
-  liveChipSourceLive: {
-    borderColor: `${TACTICAL.amber}2E`,
-    backgroundColor: `${TACTICAL.amber}12`,
-  },
-  liveChipSourceCached: {
-    borderColor: `${TACTICAL.amber}3F`,
-    backgroundColor: 'rgba(196,138,44,0.055)',
-  },
-  liveChipSubdued: {
-    borderColor: ECS_SURFACE.border.quiet,
-    backgroundColor: ECS_SURFACE.background.quiet,
-  },
-  liveChipDisabled: {
-    opacity: 0.64,
-  },
-  liveChipTextDisabled: {
-    color: TACTICAL.textMuted,
-  },
-  liveChipTextSubdued: {
-    color: 'rgba(183,190,196,0.64)',
-  },
-  channelTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 4,
-  },
-  channelStatusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  channelStatusWrap: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  channelStatusWrapLive: {
-    backgroundColor: `${TACTICAL.amber}24`,
-  },
-  liveChipLabel: {
-    color: TACTICAL.textMuted,
-    fontSize: 8,
-    fontWeight: '900',
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-  },
-  liveChipLabelCompact: {
-    fontSize: 6.4,
-    letterSpacing: 0.35,
-  },
-  liveChipValue: {
-    fontSize: 11,
-    fontWeight: '900',
-    marginTop: 1,
-  },
-  liveChipValueCompact: {
-    fontSize: 8.5,
-    marginTop: 0,
-  },
-  channelDetail: {
-    color: TACTICAL.textMuted,
-    fontSize: 8,
-    fontWeight: '700',
-    marginTop: 1,
-  },
-  channelDetailCompact: {
-    fontSize: 6.6,
-    marginTop: 0,
-  },
-  channelFooterRow: {
-    minWidth: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 5,
-    marginTop: 2,
-  },
-  channelSourceLabel: {
-    flexShrink: 1,
-    color: TACTICAL.textMuted,
-    fontSize: 6.8,
-    fontWeight: '900',
-    letterSpacing: 0.42,
-    textTransform: 'uppercase',
-  },
-  channelSourceLabelLive: {
-    color: TACTICAL.amber,
-  },
-  channelSourceLabelCached: {
-    color: `${TACTICAL.amber}CC`,
-  },
-  channelSourceLabelSubdued: {
-    color: 'rgba(183,190,196,0.58)',
-  },
-  channelActionLabel: {
-    color: TACTICAL.amber,
-    fontSize: 7,
-    fontWeight: '900',
-    letterSpacing: 0.45,
-    textTransform: 'uppercase',
-    flexShrink: 0,
-  },
-  channelActionLabelDisabled: {
-    color: TACTICAL.textMuted,
-  },
-  channelActionLabelSubdued: {
-    color: 'rgba(183,190,196,0.62)',
-  },
   advisoryLine: {
     minHeight: 30,
     flexDirection: 'row',
@@ -10235,6 +9728,7 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 0,
     backgroundColor: 'transparent',
+    marginTop: 1,
   },
   feedPanelLandscapeSignal: {
     flex: 1,

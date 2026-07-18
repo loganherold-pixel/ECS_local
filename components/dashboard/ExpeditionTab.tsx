@@ -24,6 +24,7 @@ import { ExpeditionBadgeCatalogView } from './ExpeditionBadgeCatalogView';
 import {
   dismissInsight,
   downloadExpeditionReport,
+  buildExpeditionRecapRoutePresentation,
   generateExpeditionReport,
   getBadgeProgress,
   getCompletedTrips,
@@ -199,6 +200,10 @@ export default function ExpeditionTab({
           setNewBadgeUnlocks(result.badges);
         }
         if (result.trip) {
+          const materializedTrip = result.trip;
+          setSelectedTrip((current) => (
+            current?.id === materializedTrip.id ? materializedTrip : current
+          ));
           await loadCompletedTrips();
         }
       } catch {
@@ -460,11 +465,31 @@ function ExpeditionDetailView({
 }) {
   const [reportStatus, setReportStatus] = useState<ExpeditionReportExportStatus>('idle');
   const [reportMessage, setReportMessage] = useState<string | null>(null);
+  const [selectedStoryMomentId, setSelectedStoryMomentId] = useState<string | null>(null);
   const expeditionReplayDebriefEnabled = isExpeditionReplayDebriefFeatureEnabled();
+  const recapRoutePresentation = useMemo(
+    () => buildExpeditionRecapRoutePresentation({
+      tripId: trip.id,
+      startedAt: trip.startedAt,
+      completedAt: trip.completedAt,
+      routeGeometry: trip.routeGeometry,
+      plannedRouteGeometry: trip.plannedRouteGeometry,
+      recap: trip.recap,
+    }),
+    [trip],
+  );
   const replayDebriefRecord = useMemo(
     () => expeditionReplayDebriefEnabled ? buildExpeditionDebriefRecordFromTripRecord(trip) : null,
     [expeditionReplayDebriefEnabled, trip],
   );
+  const elevationMetricLabel = recapRoutePresentation.source === 'planned'
+    ? 'Planned High'
+    : recapRoutePresentation.source === 'recorded'
+      ? 'Recorded High'
+      : 'Max Elevation';
+  const elevationMetricValue = recapRoutePresentation.source === 'unavailable'
+    ? trip.maxElevationFt
+    : recapRoutePresentation.highestElevation?.elevationFt ?? null;
 
   const handleExportReport = useCallback(async () => {
     if (reportStatus === 'generating') return;
@@ -540,24 +565,32 @@ function ExpeditionDetailView({
         <View style={styles.detailMetricGrid}>
           <DetailMetric label="Distance" value={formatDistance(trip.totalDistanceMiles)} />
           <DetailMetric label="Duration" value={formatDuration(trip.totalDurationSeconds)} />
-          <DetailMetric label="Max Elevation" value={formatElevation(trip.maxElevationFt ?? 0)} />
+          <DetailMetric label={elevationMetricLabel} value={formatNullableElevation(elevationMetricValue)} />
           <DetailMetric label="Elevation Gain" value={formatNullableElevation(trip.totalElevationGainFt)} />
         </View>
 
         <React.Suspense fallback={null}>
           <ExpeditionRecapMap
-            routeGeometry={trip.routeGeometry}
-            routeBounds={trip.recap?.routeSummary.routeBounds ?? trip.routeBounds}
-            startCoordinate={trip.startCoordinate}
-            endCoordinate={trip.endCoordinate}
+            routeGeometry={recapRoutePresentation.geometry}
+            routeBounds={recapRoutePresentation.bounds}
+            startCoordinate={recapRoutePresentation.startCoordinate}
+            endCoordinate={recapRoutePresentation.endCoordinate}
             recap={trip.recap}
             tripStartedAt={trip.startedAt}
+            routeSourceLabel={recapRoutePresentation.sourceLabel.toUpperCase()}
+            routeSourceDetail={recapRoutePresentation.sourceDetail}
+            storyMoments={recapRoutePresentation.storyMoments}
+            selectedCalloutId={selectedStoryMomentId}
+            onCalloutSelected={setSelectedStoryMomentId}
           />
         </React.Suspense>
 
         <ExpeditionNotableMomentsTimeline
           recap={trip.recap}
           tripStartedAt={trip.startedAt}
+          moments={recapRoutePresentation.storyMoments.length > 0 ? recapRoutePresentation.storyMoments : undefined}
+          selectedMomentId={selectedStoryMomentId}
+          onSelectMoment={setSelectedStoryMomentId}
         />
 
         <TripLearningSummaryCard trip={trip} />
@@ -1230,6 +1263,39 @@ function readStringValue(source: unknown, keys: string[]): string | null {
   return null;
 }
 
+function readGeometryRevision(source: unknown): string {
+  if (!source || typeof source !== 'object') return 'geometry:none';
+  const record = source as Record<string, unknown>;
+  const geometryKeys = ['routeGeometry', 'plannedRouteGeometry', 'routePoints'] as const;
+
+  return geometryKeys.map((key) => {
+    const value = record[key];
+    if (!Array.isArray(value) || value.length === 0) return `${key}:0`;
+    const coordinateSignature = (point: unknown): string => {
+      if (!point || typeof point !== 'object') return 'invalid';
+      const candidate = point as Record<string, unknown>;
+      const lat = Number(candidate.lat ?? candidate.latitude);
+      const lng = Number(candidate.lng ?? candidate.lon ?? candidate.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return 'invalid';
+      return `${lat.toFixed(5)},${lng.toFixed(5)}`;
+    };
+    let elevationCount = 0;
+    let minElevation = Number.POSITIVE_INFINITY;
+    let maxElevation = Number.NEGATIVE_INFINITY;
+    for (const point of value) {
+      const elevation = readFiniteNumber(point, ['elevationFt', 'elevationFeet', 'ele']);
+      if (elevation == null) continue;
+      elevationCount += 1;
+      minElevation = Math.min(minElevation, elevation);
+      maxElevation = Math.max(maxElevation, elevation);
+    }
+    const elevationSignature = elevationCount > 0
+      ? `${elevationCount}:${minElevation.toFixed(1)}:${maxElevation.toFixed(1)}`
+      : '0';
+    return `${key}:${value.length}:${coordinateSignature(value[0])}:${coordinateSignature(value[value.length - 1])}:elev:${elevationSignature}`;
+  }).join('|');
+}
+
 function completedGuidanceMaterializationSignature({
   completedExpeditionRecord,
   routeCompleted,
@@ -1256,7 +1322,15 @@ function completedGuidanceMaterializationSignature({
   const updatedAt =
     readStringValue(completedExpeditionRecord, ['completedAt', 'endedAt', 'updatedAt', 'lastUpdatedAt', 'timestamp']) ??
     'unknown';
-  return [id, completedState ?? routeLifecycleState ?? 'completed', updatedAt, routeLabel ?? ''].join(':');
+  const guidanceSessionId = readStringValue(completedExpeditionRecord, ['guidanceSessionId', 'sessionId']) ?? 'unknown-session';
+  return [
+    id,
+    guidanceSessionId,
+    completedState ?? routeLifecycleState ?? 'completed',
+    updatedAt,
+    routeLabel ?? '',
+    readGeometryRevision(completedExpeditionRecord),
+  ].join(':');
 }
 
 function buildLiveHubStats({

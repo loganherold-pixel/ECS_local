@@ -66,9 +66,24 @@ export type ResolveGuidanceRouteProgressInput = {
   snapToleranceM?: number | null;
 };
 
+export type GuidanceRouteProjectionSearchDiagnostics = {
+  strategy: 'local' | 'full';
+  totalSegmentCount: number;
+  evaluatedSegmentCount: number;
+  localSegmentCount: number;
+  fullSegmentCount: number;
+  fellBackToFullRoute: boolean;
+  fallbackReason: 'none' | 'no_previous_projection' | 'local_projection_not_plausible';
+};
+
 const EARTH_RADIUS_M = 6371000;
 const DUPLICATE_EPSILON_M = 0.05;
 const ORDINARY_BACKTRACK_TOLERANCE_M = 18;
+const LOCAL_PROJECTION_SEGMENT_RADIUS = 32;
+const routeDistanceIndexCache = new WeakMap<
+  GuidanceRouteCoordinate[],
+  GuidanceRouteDistanceIndex
+>();
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -141,6 +156,12 @@ export function orientGuidanceRouteFromStart<T extends GuidanceRouteCoordinate>(
 export function buildGuidanceRouteDistanceIndex(
   routeGeometry: GuidanceRouteCoordinate[],
 ): GuidanceRouteDistanceIndex {
+  // Canonical route arrays are immutable store values. Reusing their derived
+  // index removes duplicate O(n) preparation across road, trail, dashboard,
+  // and map consumers while allowing replaced route arrays to build anew.
+  const cached = routeDistanceIndexCache.get(routeGeometry);
+  if (cached) return cached;
+
   const geometry: GuidanceRouteCoordinate[] = [];
   let invalidPointCount = 0;
 
@@ -164,12 +185,14 @@ export function buildGuidanceRouteDistanceIndex(
       guidanceRouteDistanceMeters(geometry[index - 1], geometry[index]);
   }
 
-  return {
+  const result = {
     geometry,
     cumulativeDistancesM,
     totalDistanceM: cumulativeDistancesM[cumulativeDistancesM.length - 1] ?? 0,
     invalidPointCount,
   };
+  routeDistanceIndexCache.set(routeGeometry, result);
+  return result;
 }
 
 function segmentBearingDegrees(
@@ -271,9 +294,14 @@ export function scoreGuidanceProjectionContinuity(input: {
 function enumerateRouteProjections(
   position: GuidanceRouteCoordinate,
   routeIndex: GuidanceRouteDistanceIndex,
+  startSegmentIndex = 0,
+  endSegmentIndexExclusive = routeIndex.geometry.length - 1,
 ): GuidanceRouteProjection[] {
   const candidates: GuidanceRouteProjection[] = [];
-  for (let segmentIndex = 0; segmentIndex < routeIndex.geometry.length - 1; segmentIndex += 1) {
+  const segmentCount = Math.max(0, routeIndex.geometry.length - 1);
+  const start = clamp(Math.floor(startSegmentIndex), 0, segmentCount);
+  const end = clamp(Math.ceil(endSegmentIndexExclusive), start, segmentCount);
+  for (let segmentIndex = start; segmentIndex < end; segmentIndex += 1) {
     candidates.push(projectPointToGuidanceSegment({
       position,
       segmentStart: routeIndex.geometry[segmentIndex],
@@ -285,20 +313,25 @@ function enumerateRouteProjections(
   return candidates;
 }
 
-export function findNearestPlausibleRouteProjection(input: {
-  position: GuidanceRouteCoordinate;
-  routeIndex: GuidanceRouteDistanceIndex;
+type ProjectionSelectionInput = {
   previousProjection?: GuidanceRouteProjection | null;
   headingDeg?: number | null;
   accuracyM?: number | null;
   elapsedMs?: number | null;
   speedMps?: number | null;
   allowBacktracking?: boolean;
-}): GuidanceRouteProjection | null {
-  const candidates = enumerateRouteProjections(input.position, input.routeIndex);
+};
+
+function selectPlausibleRouteProjection(
+  candidates: GuidanceRouteProjection[],
+  input: ProjectionSelectionInput,
+): GuidanceRouteProjection | null {
   if (candidates.length === 0) return null;
 
-  const nearestDistanceM = Math.min(...candidates.map((candidate) => candidate.distanceFromPositionM));
+  let nearestDistanceM = Infinity;
+  for (const candidate of candidates) {
+    nearestDistanceM = Math.min(nearestDistanceM, candidate.distanceFromPositionM);
+  }
   const lateralSlackM = nearestDistanceM <= 1
     ? clamp((finiteNumber(input.accuracyM) ?? 10) * 0.2, 1, 3)
     : clamp((finiteNumber(input.accuracyM) ?? 10) * 0.6, 12, 40);
@@ -335,6 +368,98 @@ export function findNearestPlausibleRouteProjection(input: {
     left.segmentFraction - right.segmentFraction,
   );
   return scored[0] ?? null;
+}
+
+function resolveLocalProjectionAcceptanceRadiusM(accuracyM?: number | null): number {
+  return clamp((finiteNumber(accuracyM) ?? 10) + 15, 25, 50);
+}
+
+function isLocalProjectionPlausible(
+  projection: GuidanceRouteProjection | null,
+  input: ProjectionSelectionInput,
+): projection is GuidanceRouteProjection {
+  if (!projection || !input.previousProjection) return false;
+  const acceptanceRadiusM = resolveLocalProjectionAcceptanceRadiusM(input.accuracyM);
+  if (projection.distanceFromPositionM > acceptanceRadiusM) return false;
+
+  const routeDeltaM =
+    projection.distanceFromRouteStartM - input.previousProjection.distanceFromRouteStartM;
+  if (
+    !input.allowBacktracking &&
+    routeDeltaM < -ORDINARY_BACKTRACK_TOLERANCE_M
+  ) {
+    return false;
+  }
+  if (routeDeltaM > resolvePlausibleForwardDistanceM(input) + acceptanceRadiusM) {
+    return false;
+  }
+
+  const headingDeg = finiteNumber(input.headingDeg);
+  if (
+    headingDeg != null &&
+    projection.segmentBearingDeg != null &&
+    headingDeltaDegrees(headingDeg, projection.segmentBearingDeg) > 110
+  ) {
+    return false;
+  }
+  return true;
+}
+
+export function findNearestPlausibleRouteProjection(input: {
+  position: GuidanceRouteCoordinate;
+  routeIndex: GuidanceRouteDistanceIndex;
+  previousProjection?: GuidanceRouteProjection | null;
+  headingDeg?: number | null;
+  accuracyM?: number | null;
+  elapsedMs?: number | null;
+  speedMps?: number | null;
+  allowBacktracking?: boolean;
+  onSearchDiagnostics?: (diagnostics: GuidanceRouteProjectionSearchDiagnostics) => void;
+}): GuidanceRouteProjection | null {
+  const totalSegmentCount = Math.max(0, input.routeIndex.geometry.length - 1);
+  const previous = input.previousProjection;
+  let localSegmentCount = 0;
+
+  if (previous && totalSegmentCount > 0) {
+    const localStart = Math.max(0, previous.segmentIndex - LOCAL_PROJECTION_SEGMENT_RADIUS);
+    const localEndExclusive = Math.min(
+      totalSegmentCount,
+      previous.segmentIndex + LOCAL_PROJECTION_SEGMENT_RADIUS + 1,
+    );
+    const localCandidates = enumerateRouteProjections(
+      input.position,
+      input.routeIndex,
+      localStart,
+      localEndExclusive,
+    );
+    localSegmentCount = localCandidates.length;
+    const localProjection = selectPlausibleRouteProjection(localCandidates, input);
+    if (isLocalProjectionPlausible(localProjection, input)) {
+      input.onSearchDiagnostics?.({
+        strategy: 'local',
+        totalSegmentCount,
+        evaluatedSegmentCount: localSegmentCount,
+        localSegmentCount,
+        fullSegmentCount: 0,
+        fellBackToFullRoute: false,
+        fallbackReason: 'none',
+      });
+      return localProjection;
+    }
+  }
+
+  const candidates = enumerateRouteProjections(input.position, input.routeIndex);
+  const projection = selectPlausibleRouteProjection(candidates, input);
+  input.onSearchDiagnostics?.({
+    strategy: 'full',
+    totalSegmentCount,
+    evaluatedSegmentCount: localSegmentCount + candidates.length,
+    localSegmentCount,
+    fullSegmentCount: candidates.length,
+    fellBackToFullRoute: !!previous,
+    fallbackReason: previous ? 'local_projection_not_plausible' : 'no_previous_projection',
+  });
+  return projection;
 }
 
 export function getGuidanceRouteDistanceAtProjection(

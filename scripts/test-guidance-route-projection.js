@@ -72,6 +72,11 @@ function assertPoint(actual, expected, message, toleranceM = 0.25) {
 
 const straight = [point(0, 0), point(1000, 0)];
 const distanceIndex = buildGuidanceRouteDistanceIndex(straight);
+assert.strictEqual(
+  buildGuidanceRouteDistanceIndex(straight),
+  distanceIndex,
+  'Repeated progress samples should reuse the prepared distance index for the same immutable route geometry.',
+);
 assert.strictEqual(distanceIndex.geometry.length, 2);
 assert(Math.abs(distanceIndex.totalDistanceM - 1000) < 2, 'Route index should preserve metric distance.');
 
@@ -337,6 +342,121 @@ assert.strictEqual(
   Number(near.snappedPosition.lng.toFixed(6)),
   Number(point(250, 0).lng.toFixed(6)),
   'Guidance geometry must preserve longitude/latitude ordering.',
+);
+
+const longRoute = Array.from({ length: 8001 }, (_, index) => point(index * 5, 500));
+const longRouteIndex = buildGuidanceRouteDistanceIndex(longRoute);
+let longRoutePrevious = findNearestPlausibleRouteProjection({
+  position: point(20000, 500),
+  routeIndex: longRouteIndex,
+  headingDeg: 90,
+  accuracyM: 5,
+});
+assert(longRoutePrevious, 'Long-route fixture should establish an initial projection.');
+
+for (let step = 1; step <= 24; step += 1) {
+  let diagnostics = null;
+  const projection = findNearestPlausibleRouteProjection({
+    position: point(20000 + step * 5, 502),
+    routeIndex: longRouteIndex,
+    previousProjection: longRoutePrevious,
+    headingDeg: 90,
+    accuracyM: 5,
+    elapsedMs: 1000,
+    speedMps: 5,
+    onSearchDiagnostics: (value) => {
+      diagnostics = value;
+    },
+  });
+  assert(projection, 'Repeated long-route progress should retain a projection.');
+  assert.strictEqual(
+    diagnostics?.strategy,
+    'local',
+    'A plausible follow-up fix should use the bounded local projection search.',
+  );
+  assert.strictEqual(diagnostics?.fellBackToFullRoute, false);
+  assert(
+    diagnostics.evaluatedSegmentCount <= 65,
+    `Local projection work must remain bounded, evaluated ${diagnostics.evaluatedSegmentCount} segments.`,
+  );
+  assert(
+    diagnostics.evaluatedSegmentCount < diagnostics.totalSegmentCount / 100,
+    'Repeated progress must not scan the full canonical route.',
+  );
+  assertPoint(
+    projection.coordinate,
+    point(20000 + step * 5, 500),
+    'Bounded search should still project onto canonical long-route geometry',
+  );
+  longRoutePrevious = projection;
+}
+
+let teleportDiagnostics = null;
+const teleportedProjection = findNearestPlausibleRouteProjection({
+  position: point(35000, 500),
+  routeIndex: longRouteIndex,
+  previousProjection: longRoutePrevious,
+  headingDeg: 90,
+  accuracyM: 5,
+  elapsedMs: 1000,
+  speedMps: 5,
+  onSearchDiagnostics: (value) => {
+    teleportDiagnostics = value;
+  },
+});
+assert.strictEqual(
+  teleportDiagnostics?.fellBackToFullRoute,
+  true,
+  'A teleport beyond the local window must fall back to the full canonical route.',
+);
+assertPoint(
+  teleportedProjection?.coordinate,
+  point(35000, 500),
+  'Full-route fallback must recover the correct projection after a teleport',
+);
+
+let farOffRouteDiagnostics = null;
+const farOffRouteProjection = findNearestPlausibleRouteProjection({
+  position: point(30000, 5000),
+  routeIndex: longRouteIndex,
+  previousProjection: longRoutePrevious,
+  accuracyM: 5,
+  onSearchDiagnostics: (value) => {
+    farOffRouteDiagnostics = value;
+  },
+});
+assert.strictEqual(
+  farOffRouteDiagnostics?.fellBackToFullRoute,
+  true,
+  'A fix outside the local acceptance radius must use full-route search for truthful off-route distance.',
+);
+assert(
+  farOffRouteProjection.distanceFromPositionM > 4490 &&
+    farOffRouteProjection.distanceFromPositionM < 4530,
+  `Full-route fallback should preserve truthful off-route distance, got ${farOffRouteProjection.distanceFromPositionM}m.`,
+);
+
+let backtrackDiagnostics = null;
+const farBacktrackProjection = findNearestPlausibleRouteProjection({
+  position: point(5000, 500),
+  routeIndex: longRouteIndex,
+  previousProjection: teleportedProjection,
+  headingDeg: 270,
+  accuracyM: 5,
+  allowBacktracking: true,
+  onSearchDiagnostics: (value) => {
+    backtrackDiagnostics = value;
+  },
+});
+assert.strictEqual(
+  backtrackDiagnostics?.fellBackToFullRoute,
+  true,
+  'Deliberate backtracking beyond the local window must fall back to full-route search.',
+);
+assertPoint(
+  farBacktrackProjection?.coordinate,
+  point(5000, 500),
+  'Full-route fallback must preserve deliberate backtracking',
 );
 
 console.log('guidance route projection tests passed');

@@ -30,23 +30,30 @@ function notIncludes(source, fragment, message) {
   'weather_change: 84',
   'highest_elevation: 82',
   'badge_unlocked: 78',
-  'recap.expeditionEvents.notableMoments',
+  'storyMoments.map((moment) =>',
+  'recap?.expeditionEvents.notableMoments',
   'filter((moment) => isValidCoordinate(moment.coordinate))',
-  'nearestRoutePoint',
+  "moment.routeSource !== 'planned' || moment.routePointIndex != null",
   'buildRecapMapPayload',
-  'features: model.callouts.map',
+  'features: model.focusCallouts.map',
   'properties: { id: callout.id',
-  'onPress={() => setSelectedCalloutId(callout.id)}',
+  'onPress={() => selectCallout(callout.id)}',
+  'controlledSelectedCalloutId',
+  'onCalloutSelected?.(calloutId)',
   'selectedCalloutId',
   'selectedCallout',
   'selectedCalloutPopover',
   "message?.type === 'calloutSelected'",
+  'window.__ECS_RECAP_MAP_SELECT__',
+  'selectedCalloutId={selectedCalloutId}',
+  '.setDOMContent(popupContent)',
   'LeaderLine',
   'calloutLeaderLine',
   'calloutAnchor',
   'calloutCard',
   'placed.length < MIN_CALLOUTS',
-  'if (!recap || width < 300 || projectedRoute.length < 2) return []',
+  "if ((!recap && !storyMoments?.length) || projectedRoute.length < 2) return []",
+  'if (width < 300 || focusCallouts.length === 0) return []',
 ].forEach((snippet) => {
   includes(mapSource, snippet, `Recap map callout foundation should include ${snippet}.`);
 });
@@ -96,6 +103,7 @@ for (const forbidden of [
   'exportExpeditionDebriefPdf',
   'fake callout',
   'placeholder callout',
+  '.setHTML(',
 ]) {
   notIncludes(mapSource, forbidden, `Callout map must avoid forbidden behavior: ${forbidden}`);
 }

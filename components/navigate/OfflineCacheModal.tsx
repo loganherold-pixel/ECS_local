@@ -776,7 +776,7 @@ export default function OfflineCacheModal({
     });
   }, [offlineRoutes, sortedRegions]);
 
-  const renderDownloadedSyncsSection = useCallback((compact = false, scrollEnabled = true) => (
+  const renderDownloadedSyncsSection = useCallback((compact = false) => (
     <View style={[styles.downloadedSyncsSection, compact && styles.downloadedSyncsSectionCompact]}>
       <View style={styles.downloadedSyncsHeader}>
         <View>
@@ -799,16 +799,7 @@ export default function OfflineCacheModal({
           </View>
         </View>
       ) : (
-        <ScrollView
-          style={[
-            styles.downloadedSyncsList,
-            compact && scrollEnabled && downloadedSyncCards.length > 1 && styles.downloadedSyncsListScrollable,
-          ]}
-          contentContainerStyle={styles.downloadedSyncsListContent}
-          scrollEnabled={scrollEnabled}
-          nestedScrollEnabled={scrollEnabled}
-          showsVerticalScrollIndicator={scrollEnabled && downloadedSyncCards.length > 1}
-        >
+        <View style={styles.downloadedSyncsList}>
           {downloadedSyncCards.map((item) => {
             const accentColor = item.tone === 'route' ? TACTICAL.amber : '#66BB6A';
             return (
@@ -914,7 +905,7 @@ export default function OfflineCacheModal({
               </View>
             );
           })}
-        </ScrollView>
+        </View>
       )}
     </View>
   ), [downloadedSyncCards, handleCheckFreshness, handleDeleteDownloadedSync, handleOpenDownloadedSync]);
@@ -1055,7 +1046,7 @@ export default function OfflineCacheModal({
           </Text>
         </TouchableOpacity>
 
-        {renderDownloadedSyncsSection(true, false)}
+        {renderDownloadedSyncsSection(true)}
       </View>
     );
   }
@@ -2506,9 +2497,6 @@ const styles = StyleSheet.create({
   },
   downloadedSyncsList: {
     gap: 10,
-  },
-  downloadedSyncsListScrollable: {
-    maxHeight: 220,
   },
   downloadedSyncsListContent: {
     gap: 10,

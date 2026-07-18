@@ -91,6 +91,7 @@ import {
   guidanceRouteDistanceMeters,
   projectGuidanceRouteAtDistance,
   splitGuidanceRouteAtProjection,
+  type GuidanceRouteDistanceIndex,
 } from '../../lib/navigation/guidanceRouteProjection';
 
 const WEBVIEW_ORIGIN_WHITELIST = ['*'];
@@ -141,6 +142,7 @@ const ROUTE_RENDER_TURN_DELTA_DEGREES = 8;
 const CAMERA_EPSILON = 0.00005;
 const DYNAMIC_COORDINATE_DECIMALS = 5;
 const DYNAMIC_HEADING_DECIMALS = 0;
+const STATIC_MAP_ANCHOR_DECIMALS = 3;
 const PROGRESS_ROUTE_HASH_COORDINATE_DECIMALS = 4;
 const PROGRESS_ROUTE_HASH_STRIDE = 64;
 const DEBUG_MAP_RENDERER =
@@ -548,6 +550,7 @@ export type MapRendererProps = {
   } | null;
   surfaceMode?: 'full' | 'compact';
   standbyMapDisabled?: boolean;
+  preserveWebViewWhenCold?: boolean;
   standbyWakeDisabled?: boolean;
   standbyStaticMapDisabled?: boolean;
   style?: any;
@@ -892,8 +895,13 @@ function normalizeLineCoordinates(
   return normalizeRouteLineCoordinates(out);
 }
 
+const EMPTY_NORMALIZED_POINT_LIST: [number, number][] = [];
+const normalizedPointListCache = new WeakMap<RoutePoint[], [number, number][]>();
+
 function normalizePointList(points?: RoutePoint[]): [number, number][] {
-  if (!points?.length) return [];
+  if (!points?.length) return EMPTY_NORMALIZED_POINT_LIST;
+  const cached = normalizedPointListCache.get(points);
+  if (cached) return cached;
   const out: [number, number][] = [];
 
   for (const p of points) {
@@ -916,7 +924,9 @@ function normalizePointList(points?: RoutePoint[]): [number, number][] {
     }
   }
 
-  return normalizeRouteLineCoordinates(out);
+  const normalized = normalizeRouteLineCoordinates(out);
+  normalizedPointListCache.set(points, normalized);
+  return normalized;
 }
 
 function bearingDegreesBetweenLngLat(start: [number, number], end: [number, number]) {
@@ -1147,6 +1157,26 @@ function quantizeCoordinateForMapState(
 function quantizeHeadingForMapState(value?: number | null) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
   return roundToDecimals(value, DYNAMIC_HEADING_DECIMALS);
+}
+
+/**
+ * The static overlay payload only needs a coarse initial camera anchor when no
+ * route geometry is available. Live GPS, heading, follow mode, and map
+ * interaction travel through the dedicated dynamic-state bridge. Keeping that
+ * high-frequency state out of the static payload prevents every GPS sample
+ * from rebuilding route, marker, MVUM, and route-catalog geometry.
+ */
+export function resolveStaticMapPayloadLocation(input: {
+  routePointCount: number;
+  userLocation?: LatLng | null;
+}): { latitude: number; longitude: number } | null {
+  if (input.routePointCount > 0) return null;
+  const location = normalizeLatLng(input.userLocation ?? null);
+  if (!location) return null;
+  return {
+    latitude: roundToDecimals(location.latitude, STATIC_MAP_ANCHOR_DECIMALS),
+    longitude: roundToDecimals(location.longitude, STATIC_MAP_ANCHOR_DECIMALS),
+  };
 }
 
 function normalizeDebugDetails(details?: unknown): Record<string, any> | undefined {
@@ -1463,7 +1493,14 @@ export function buildCampScoutPinFeatureCollection(
 export const normalizeRenderedCampEndpointMarkers = normalizeRenderedCampScoutMarkers;
 export const buildCampEndpointPinFeatureCollection = buildCampScoutPinFeatureCollection;
 
-type MapOverlayPatchFamily = 'route' | 'markers' | 'routeBuilder' | 'campSearch' | 'presentation';
+type MapOverlayPatchFamily =
+  | 'route'
+  | 'asyncLayers'
+  | 'trailContext'
+  | 'markers'
+  | 'routeBuilder'
+  | 'campSearch'
+  | 'presentation';
 type MapOverlayPayloadPatch = Partial<WebMapPayload> & { patchFamilies: MapOverlayPatchFamily[] };
 
 const MAP_OVERLAY_STYLE_FIELDS: (keyof WebMapPayload)[] = ['mapStyleKey', 'styleUrl'];
@@ -1479,16 +1516,20 @@ const MAP_OVERLAY_PATCH_FIELDS: Record<MapOverlayPatchFamily, (keyof WebMapPaylo
     'bounds',
     'zoom',
     'center',
+  ],
+  asyncLayers: [
     'segments',
     'routeGeometryOverlay',
     'selectedRouteGeometrySegmentIds',
+    'mvumOverlay',
+    'stitchedRoutePreview',
+  ],
+  trailContext: [
     'trailSegments',
     'speedSegments',
     'trailStyle',
     'trailActive',
     'remoteOverlay',
-    'mvumOverlay',
-    'stitchedRoutePreview',
   ],
   markers: ['waypoints', 'bailouts', 'pins', 'campsites', 'campScoutPins', 'convoyMarkers', 'dispatchPingMarkers', 'tiltAlerts'],
   routeBuilder: [
@@ -1545,6 +1586,8 @@ export function buildMapOverlayPayloadHashes(payload: WebMapPayload) {
   route.progressRouteCoords = summarizeProgressRouteCoordsForHash(
     payload.progressRouteCoords,
   ) as never;
+  const asyncLayers = pickPayloadFields(payload, MAP_OVERLAY_PATCH_FIELDS.asyncLayers);
+  const trailContext = pickPayloadFields(payload, MAP_OVERLAY_PATCH_FIELDS.trailContext);
   const markers = pickPayloadFields(payload, MAP_OVERLAY_PATCH_FIELDS.markers);
   const routeBuilder = pickPayloadFields(payload, MAP_OVERLAY_PATCH_FIELDS.routeBuilder);
   const campSearch = pickPayloadFields(payload, MAP_OVERLAY_PATCH_FIELDS.campSearch);
@@ -1553,6 +1596,8 @@ export function buildMapOverlayPayloadHashes(payload: WebMapPayload) {
   return {
     style: stableStringify(style),
     route: stableStringify(route),
+    asyncLayers: stableStringify(asyncLayers),
+    trailContext: stableStringify(trailContext),
     markers: stableStringify(markers),
     routeBuilder: stableStringify(routeBuilder),
     campSearch: stableStringify(campSearch),
@@ -1560,6 +1605,8 @@ export function buildMapOverlayPayloadHashes(payload: WebMapPayload) {
     all: stableStringify({
       style,
       route,
+      asyncLayers,
+      trailContext,
       markers,
       routeBuilder,
       campSearch,
@@ -1749,6 +1796,21 @@ export function buildMapBridgeBatchMessage(messages: unknown[]) {
   };
 }
 
+const canonicalOverlayRouteIndexCache = new WeakMap<
+  [number, number][],
+  GuidanceRouteDistanceIndex
+>();
+
+function getCanonicalOverlayRouteIndex(coordinates: [number, number][]) {
+  const cached = canonicalOverlayRouteIndexCache.get(coordinates);
+  if (cached) return cached;
+  const index = buildGuidanceRouteDistanceIndex(
+    coordinates.map(([lng, lat]) => ({ lat, lng })),
+  );
+  canonicalOverlayRouteIndexCache.set(coordinates, index);
+  return index;
+}
+
 export function buildCanonicalGuidanceOverlayGeometry(input: {
   routeCoords: [number, number][];
   progressCoords: [number, number][];
@@ -1764,12 +1826,8 @@ export function buildCanonicalGuidanceOverlayGeometry(input: {
     };
   }
 
-  const routeIndex = buildGuidanceRouteDistanceIndex(
-    input.routeCoords.map(([lng, lat]) => ({ lat, lng })),
-  );
-  const progressIndex = buildGuidanceRouteDistanceIndex(
-    input.progressCoords.map(([lng, lat]) => ({ lat, lng })),
-  );
+  const routeIndex = getCanonicalOverlayRouteIndex(input.routeCoords);
+  const progressIndex = getCanonicalOverlayRouteIndex(input.progressCoords);
   const routeStart = routeIndex.geometry[0];
   const progressStart = progressIndex.geometry[0];
   if (
@@ -3350,6 +3408,8 @@ function makeMapHtml(
       var initialized = false;
       var bootstrapDone = false;
       var pendingPayload = null;
+      var pendingOverlayPatch = null;
+      var pendingFullPayloadReplay = false;
       var lastRouteLineKey = null;
       var mvumOverlaySourceSignature = null;
       var routeGeometryOverlayAppliedSignature = null;
@@ -3360,6 +3420,10 @@ function makeMapHtml(
       var mvumRenderVerification = null;
       var LAYER_RENDER_VERIFICATION_TIMEOUT_MS = 5000;
       var styleReplayTimer = null;
+      var styleGeneration = 0;
+      var lastReplayedStyleGeneration = -1;
+      var layerPromotionDeferred = false;
+      var layerPromotionPending = false;
       var bootstrapReadyTimer = null;
       var resizePumpTimer = null;
       var resizePumpRemainingTicks = 0;
@@ -3662,6 +3726,7 @@ function makeMapHtml(
         sendLog('style fallback → ' + nextStyle);
 
         try {
+          styleGeneration += 1;
           map.setStyle(nextStyle);
           return true;
         } catch (e) {
@@ -4728,6 +4793,10 @@ function makeMapHtml(
       }
 
       function promoteRouteGuidanceLayers() {
+        if (layerPromotionDeferred) {
+          layerPromotionPending = true;
+          return;
+        }
         [
           EXPLORE_PREVIEW_ROUTE_HALO_LAYER_ID,
           EXPLORE_PREVIEW_ROUTE_LAYER_ID,
@@ -4750,6 +4819,7 @@ function makeMapHtml(
           'route-builder-layer',
           'route-builder-endpoint-halo-layer',
           'route-builder-endpoint-layer',
+          'route-builder-anchor-label-layer',
           'route-profile-focus-halo-layer',
           'route-profile-focus-layer',
           'route-profile-focus-arrow-layer',
@@ -6300,8 +6370,8 @@ function makeMapHtml(
         ensureLineLayer('speed-layer', 'speed-source', ['get', 'color'], 2.25, 0.85, [1, 1]);
         ensureLineLayer('ecs-remote-forecast-halo-line', 'ecs-remote-forecast-v1', 'rgba(4,7,9,0.92)', REMOTE_FORECAST_HALO_WIDTH, REMOTE_FORECAST_HALO_OPACITY);
         ensureLineLayer('ecs-remote-forecast-line', 'ecs-remote-forecast-v1', ['get', 'color'], REMOTE_FORECAST_VISIBLE_WIDTH, REMOTE_FORECAST_VISIBLE_OPACITY);
-        ensureLineLayer('route-builder-halo-layer', 'route-builder-source', ['get', 'color'], 12, 0.22);
-        ensureLineLayer('route-builder-layer', 'route-builder-source', ['get', 'color'], 5.25, 0.98);
+        ensureLineLayer('route-builder-halo-layer', 'route-builder-source', 'rgba(5,10,14,0.94)', 12, 0.78);
+        ensureLineLayer('route-builder-layer', 'route-builder-source', ['get', 'color'], 5.5, 0.98);
         try {
           map.setPaintProperty(
             'route-builder-layer',
@@ -6309,8 +6379,25 @@ function makeMapHtml(
             ['case', ['get', 'provisional'], ['literal', [1.2, 1.1]], ['literal', [1, 0]]]
           );
         } catch (e) {}
-        ensureCircleLayer('route-builder-endpoint-halo-layer', 'route-builder-endpoint-source', ['get', 'color'], 9, 0.18, 'rgba(8,14,18,0.92)', 2);
-        ensureCircleLayer('route-builder-endpoint-layer', 'route-builder-endpoint-source', ['get', 'color'], 4.75, 0.96, 'rgba(8,14,18,0.96)', 2);
+        ensureCircleLayer('route-builder-endpoint-halo-layer', 'route-builder-endpoint-source', 'rgba(5,10,14,0.96)', 12, 0.9, 'rgba(5,10,14,0.98)', 2);
+        ensureCircleLayer('route-builder-endpoint-layer', 'route-builder-endpoint-source', ['get', 'color'], 9, 0.98, 'rgba(5,10,14,0.98)', 2.5);
+        mapLayerRegistry.ensure('route-builder-anchor-label-layer', {
+          id: 'route-builder-anchor-label-layer',
+          type: 'symbol',
+          source: 'route-builder-endpoint-source',
+          layout: {
+            'text-field': ['coalesce', ['get', 'label'], ''],
+            'text-size': 11,
+            'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
+            'text-allow-overlap': true,
+            'text-ignore-placement': true
+          },
+          paint: {
+            'text-color': '#071014',
+            'text-halo-color': 'rgba(255,255,255,0.72)',
+            'text-halo-width': 0.55
+          }
+        });
         ensureCircleLayer('route-profile-focus-halo-layer', 'route-profile-focus-source', '#FF4D4D', 12.5, 0.22, 'rgba(8,14,18,0.94)', 2);
         ensureCircleLayer('route-profile-focus-layer', 'route-profile-focus-source', '#FF4D4D', 5.75, 0.98, 'rgba(8,14,18,0.96)', 2);
         if (!map.getLayer('route-profile-focus-arrow-layer')) {
@@ -8237,6 +8324,10 @@ function makeMapHtml(
           clearTimeout(styleReplayTimer);
           styleReplayTimer = null;
         }
+        if (!pendingFullPayloadReplay && lastReplayedStyleGeneration === styleGeneration) {
+          flushPendingOverlayPatch();
+          return;
+        }
         if (!isMapStyleReady()) {
           if (attempt >= 10) {
             sendLog('style replay skipped before style ready: ' + String(reason || 'unknown'));
@@ -8254,7 +8345,33 @@ function makeMapHtml(
         return merged;
       }
 
-      function applyRouteOverlayPayload(payload) {
+      function mergePendingOverlayPatch(base, patch) {
+        var merged = Object.assign({}, base || {}, patch || {});
+        var families = [];
+        function appendFamilies(value) {
+          (value && Array.isArray(value.patchFamilies) ? value.patchFamilies : []).forEach(function(family) {
+            if (families.indexOf(family) < 0) families.push(family);
+          });
+        }
+        appendFamilies(base);
+        appendFamilies(patch);
+        merged.patchFamilies = families;
+        return merged;
+      }
+
+      function isCurrentStyleGenerationInitialized() {
+        return !!map && lastReplayedStyleGeneration === styleGeneration;
+      }
+
+      function flushPendingOverlayPatch() {
+        if (!pendingOverlayPatch || !isCurrentStyleGenerationInitialized()) return false;
+        var patch = pendingOverlayPatch;
+        pendingOverlayPatch = null;
+        applyPayloadPatch(patch);
+        return true;
+      }
+
+      function applyGuidanceRoutePayload(payload) {
         updateRoute(
           payload.routeCoords || [],
           payload.routeColor,
@@ -8263,14 +8380,29 @@ function makeMapHtml(
           payload.routeGeometryRole
         );
         updateRouteProgress(payload.progressRouteCoords || [], payload.progressColor);
+        promoteRouteGuidanceLayers();
+      }
+
+      function applyAsyncLayerPayload(payload) {
         selectedRouteGeometrySegmentIds = buildDispersedRouteSelectedSet(payload.selectedRouteGeometrySegmentIds || []);
         updateSegments(payload.segments || []);
         updateRouteGeometryOverlay(payload.routeGeometryOverlay || null);
+        updateMvumOverlay(payload.mvumOverlay || null);
+        updateStitchedRoutePreview(payload.stitchedRoutePreview || null);
+        promoteRouteGuidanceLayers();
+      }
+
+      function applyTrailContextPayload(payload) {
         updateTrail(payload.trailSegments || []);
         updateSpeedTrail(payload.speedSegments || []);
         updateRemoteOverlay(payload.remoteOverlay || null);
-        updateMvumOverlay(payload.mvumOverlay || null);
-        updateStitchedRoutePreview(payload.stitchedRoutePreview || null);
+        promoteRouteGuidanceLayers();
+      }
+
+      function applyRouteOverlayPayload(payload) {
+        applyGuidanceRoutePayload(payload);
+        applyAsyncLayerPayload(payload);
+        applyTrailContextPayload(payload);
         promoteRouteGuidanceLayers();
       }
 
@@ -8362,11 +8494,17 @@ function makeMapHtml(
       }
 
       function applyPayloadPatch(payload) {
-        if (!map || !payload || !map.isStyleLoaded()) return;
+        if (!map || !payload || !isCurrentStyleGenerationInitialized()) return;
         var families = Array.isArray(payload.patchFamilies) ? payload.patchFamilies : [];
         if (!families.length) return;
         if (families.indexOf('route') >= 0) {
-          applyRouteOverlayPayload(payload);
+          applyGuidanceRoutePayload(payload);
+        }
+        if (families.indexOf('asyncLayers') >= 0) {
+          applyAsyncLayerPayload(payload);
+        }
+        if (families.indexOf('trailContext') >= 0) {
+          applyTrailContextPayload(payload);
         }
         if (families.indexOf('routeBuilder') >= 0) {
           applyRouteBuilderPayload(payload);
@@ -8394,26 +8532,39 @@ function makeMapHtml(
           lastAppliedStyleUrl = payload.styleUrl;
           attemptedStyles = Object.create(null);
           attemptedStyles[payload.styleUrl] = true;
+          styleGeneration += 1;
           map.setStyle(payload.styleUrl);
-          replayPendingPayloadAfterStyleChange('set_style', 0);
           return;
         }
 
-        resizeMapIfNeeded('payload_apply');
-        reinitializeStyleArtifacts();
-        applyRouteBuilderPayload(payload);
-        applyRouteOverlayPayload(payload);
-        applyCampSearchPayload(payload);
-        applyMarkerPayloadPatch(payload);
+        layerPromotionDeferred = true;
+        layerPromotionPending = false;
+        try {
+          resizeMapIfNeeded('payload_apply');
+          reinitializeStyleArtifacts();
+          applyRouteBuilderPayload(payload);
+          applyRouteOverlayPayload(payload);
+          applyCampSearchPayload(payload);
+          applyMarkerPayloadPatch(payload);
 
-        applyDynamicState(payload);
-        applyPresentationPayload(payload);
+          applyDynamicState(payload);
+          applyPresentationPayload(payload);
 
-        if (!bootstrapDone) {
-          fitInitialPayload(payload);
+          if (!bootstrapDone) {
+            fitInitialPayload(payload);
+          }
+
+          maybeApplyLegacyFallbackCamera(payload);
+          lastReplayedStyleGeneration = styleGeneration;
+          pendingOverlayPatch = null;
+          pendingFullPayloadReplay = false;
+        } finally {
+          layerPromotionDeferred = false;
+          if (layerPromotionPending) {
+            layerPromotionPending = false;
+            promoteRouteGuidanceLayers();
+          }
         }
-
-        maybeApplyLegacyFallbackCamera(payload);
       }
 
       function init() {
@@ -8593,6 +8744,63 @@ function makeMapHtml(
           return isFinite(latitude) && isFinite(longitude)
             ? { latitude: latitude, longitude: longitude }
             : null;
+        }
+
+        function nextRouteBuilderAnchorLabel() {
+          var visibleCount = (routeBuilderAnchors || []).filter(function(anchor) {
+            return anchor && !anchor.hidden && anchor.role !== 'active_guidance_end';
+          }).length;
+          return visibleCount < 26 ? String.fromCharCode(65 + visibleCount) : 'P' + String(visibleCount + 1);
+        }
+
+        function appendOptimisticRouteBuilderAnchorFeedback(coordinate) {
+          if (!routeBuilderActive) return false;
+          var normalized = routeBuilderAnchorCoordinate(coordinate);
+          if (!normalized) return false;
+          var previousAnchor = routeBuilderAnchors && routeBuilderAnchors.length
+            ? routeBuilderAnchors[routeBuilderAnchors.length - 1]
+            : null;
+          var previousCoordinate = routeBuilderLastAnchorTapCoordinate || routeBuilderAnchorCoordinate(previousAnchor);
+          if (
+            previousCoordinate &&
+            Math.abs(previousCoordinate.latitude - normalized.latitude) <= 0.000001 &&
+            Math.abs(previousCoordinate.longitude - normalized.longitude) <= 0.000001
+          ) {
+            return false;
+          }
+
+          var label = nextRouteBuilderAnchorLabel();
+          var optimisticId = 'route-builder-optimistic-' + Date.now() + '-' + label;
+          routeBuilderAnchors = (routeBuilderAnchors || []).concat([{
+            id: optimisticId,
+            label: label,
+            coordinate: normalized,
+            role: 'operator_drop',
+            optimistic: true
+          }]);
+
+          if (previousCoordinate) {
+            routeBuilderDraftSegments = (routeBuilderDraftSegments || []).concat([{
+              id: optimisticId + '-leg',
+              coordinates: [
+                [previousCoordinate.longitude, previousCoordinate.latitude],
+                [normalized.longitude, normalized.latitude]
+              ],
+              rawSegment: [
+                [previousCoordinate.longitude, previousCoordinate.latitude],
+                [normalized.longitude, normalized.latitude]
+              ],
+              snappedSegment: [],
+              snapSource: 'operator_draft',
+              snapStatus: 'blocked',
+              geometryRole: 'raw_user_draft',
+              provisional: true
+            }]);
+          }
+
+          routeBuilderLastAnchorTapCoordinate = normalized;
+          updateRouteBuilder(routeBuilderDraftSegments, routeBuilderColor, routeBuilderAnchors);
+          return true;
         }
 
         function buildRenderedRouteableTraceNetworkAtPoint(point) {
@@ -8962,12 +9170,12 @@ function makeMapHtml(
           if (Date.now() < longPressSuppressClickUntil) return;
           if (routeBuilderActive && Date.now() < routeBuilderSuppressClickUntil) return;
           if (Date.now() < dispersedCampingMapTapSuppressUntil) return;
-          if (routeBuilderMode === 'anchor_trace') {
+          if (routeBuilderActive && routeBuilderMode === 'anchor_trace') {
             var routeableFeature = buildRouteableFeaturePayloadAtPoint(e.point, e.lngLat);
-            routeBuilderLastAnchorTapCoordinate = {
+            appendOptimisticRouteBuilderAnchorFeedback({
               latitude: e.lngLat.lat,
               longitude: e.lngLat.lng
-            };
+            });
             send('mapTap', {
               latitude: e.lngLat.lat,
               longitude: e.lngLat.lng,
@@ -9116,17 +9324,19 @@ function makeMapHtml(
 
         if (msg.type === 'bootstrap' || msg.type === 'update') {
           pendingPayload = msg.payload || null;
+          pendingFullPayloadReplay = true;
           if (map && map.isStyleLoaded()) {
             applyPayload(pendingPayload);
+          } else {
+            replayPendingPayloadAfterStyleChange('bridge_update', 0);
           }
           return;
         }
 
         if (msg.type === 'overlayPatch') {
           pendingPayload = mergePayloadPatch(pendingPayload, msg.payload || null);
-          if (map && map.isStyleLoaded()) {
-            applyPayloadPatch(msg.payload || null);
-          }
+          pendingOverlayPatch = mergePendingOverlayPatch(pendingOverlayPatch, msg.payload || null);
+          flushPendingOverlayPatch();
           return;
         }
 
@@ -9304,6 +9514,7 @@ const MapRenderer = React.memo(function MapRenderer({
   surfaceMode = 'full',
   performanceSurface,
   standbyMapDisabled = false,
+  preserveWebViewWhenCold = false,
   standbyWakeDisabled = false,
   standbyStaticMapDisabled = false,
   style,
@@ -9666,6 +9877,13 @@ const MapRenderer = React.memo(function MapRenderer({
     remountWebView,
   ]);
 
+  const staticMapPayloadLocation = resolveStaticMapPayloadLocation({
+    routePointCount: points.length,
+    userLocation,
+  });
+  const staticMapPayloadLatitude = staticMapPayloadLocation?.latitude ?? null;
+  const staticMapPayloadLongitude = staticMapPayloadLocation?.longitude ?? null;
+
   const payload = useMemo<WebMapPayload>(
     () => {
       const payloadBuildPerformance = tracksNavigatePerformance
@@ -9693,10 +9911,18 @@ const MapRenderer = React.memo(function MapRenderer({
         showTrailEntryEndpointMarker,
         mapStyle,
         mapboxToken,
-        showUserLocation,
-        userLocation,
-        motionPriority,
-        interactive,
+        // Dynamic GPS, heading, follow, and interaction state is merged into
+        // bootstrap and then updated through buildDynamicPayload below.
+        showUserLocation: false,
+        userLocation:
+          staticMapPayloadLatitude != null && staticMapPayloadLongitude != null
+            ? {
+                latitude: staticMapPayloadLatitude,
+                longitude: staticMapPayloadLongitude,
+              }
+            : null,
+        motionPriority: 'cold',
+        interactive: true,
         segments,
         bailoutMarkers,
         pinMarkers,
@@ -9747,10 +9973,8 @@ const MapRenderer = React.memo(function MapRenderer({
       showTrailEntryEndpointMarker,
       mapStyle,
       mapboxToken,
-      showUserLocation,
-      userLocation,
-      motionPriority,
-      interactive,
+      staticMapPayloadLatitude,
+      staticMapPayloadLongitude,
       segments,
       bailoutMarkers,
       pinMarkers,
@@ -9833,10 +10057,13 @@ const MapRenderer = React.memo(function MapRenderer({
   }, [standbyWakeDisabled]);
 
   useEffect(() => {
-    if (!standbyMapActive && motionPriority !== 'cold') return;
+    if (
+      !standbyMapActive &&
+      (motionPriority !== 'cold' || preserveWebViewWhenCold)
+    ) return;
     setWebReady(false);
     clearPendingMapMessages();
-  }, [clearPendingMapMessages, motionPriority, standbyMapActive]);
+  }, [clearPendingMapMessages, motionPriority, preserveWebViewWhenCold, standbyMapActive]);
 
   const routeBuilderFallbackOverlay = useMemo(
     () => buildRouteBuilderFallbackOverlay(payload),
@@ -9947,7 +10174,7 @@ const MapRenderer = React.memo(function MapRenderer({
     shouldLoadMap &&
     !liveMapDisabled &&
     !standbyMapActive &&
-    motionPriority !== 'cold' &&
+    (motionPriority !== 'cold' || preserveWebViewWhenCold) &&
     !webRendererCrashBlocked;
   const shouldRenderFallbackSurface = fallbackVisible && motionPriority !== 'cold';
   const shouldRenderPlaceholder =
@@ -10273,6 +10500,7 @@ const MapRenderer = React.memo(function MapRenderer({
 
   useEffect(() => {
     if (!shouldLoadMap || !webReady) return;
+    if (motionPriority === 'cold') return;
 
     const type = bootstrapSentRef.current ? 'update' : 'bootstrap';
 
@@ -10296,16 +10524,17 @@ const MapRenderer = React.memo(function MapRenderer({
     lastPayloadRef.current = payload;
     lastPayloadHashRef.current = payloadHash;
     lastDynamicPayloadHashRef.current = dynamicPayloadHash;
-  }, [shouldLoadMap, webReady, payload, dynamicPayload, payloadHash, dynamicPayloadHash, postToMap]);
+  }, [shouldLoadMap, webReady, motionPriority, payload, dynamicPayload, payloadHash, dynamicPayloadHash, postToMap]);
 
   useEffect(() => {
     if (!shouldLoadMap || !webReady) return;
+    if (motionPriority === 'cold') return;
     if (!bootstrapSentRef.current) return;
     if (dynamicPayloadHash === lastDynamicPayloadHashRef.current) return;
 
     postToMap({ type: 'dynamicState', payload: dynamicPayload });
     lastDynamicPayloadHashRef.current = dynamicPayloadHash;
-  }, [shouldLoadMap, webReady, dynamicPayload, dynamicPayloadHash, postToMap]);
+  }, [shouldLoadMap, webReady, motionPriority, dynamicPayload, dynamicPayloadHash, postToMap]);
 
   useEffect(() => {
     if (!shouldLoadMap || !webReady) return;

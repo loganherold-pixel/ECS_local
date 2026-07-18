@@ -2,13 +2,32 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const ts = require('typescript');
 
 const root = path.join(__dirname, '..');
 const commandBrief = fs.readFileSync(path.join(root, 'components', 'brief', 'CommandBriefScreen.tsx'), 'utf8');
-const operationalDeltaBrief = fs.readFileSync(path.join(root, 'components', 'brief', 'OperationalDeltaBriefCard.tsx'), 'utf8');
-const tripIntentSelector = fs.readFileSync(path.join(root, 'components', 'readiness', 'TripIntentSelector.tsx'), 'utf8');
 const dashboard = fs.readFileSync(path.join(root, 'app', '(tabs)', 'dashboard.tsx'), 'utf8');
+const tripIntentSelector = fs.readFileSync(path.join(root, 'components', 'readiness', 'TripIntentSelector.tsx'), 'utf8');
 const packageSource = fs.readFileSync(path.join(root, 'package.json'), 'utf8');
+
+require.extensions['.ts'] = function compileTs(module, filename) {
+  const source = fs.readFileSync(filename, 'utf8');
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: filename,
+  });
+  module._compile(output.outputText, filename);
+};
+
+const scoring = require(path.join(root, 'lib', 'readiness', 'expeditionReadinessScoring.ts'));
+const fixtures = require(path.join(root, 'lib', 'readiness', 'expeditionReadinessFixtures.ts'));
+const {
+  buildCommandBriefPresentation,
+} = require(path.join(root, 'lib', 'brief', 'commandBriefPresentation.ts'));
 
 function assertIncludes(source, fragment, message) {
   assert.ok(source.includes(fragment), message);
@@ -26,265 +45,191 @@ function blockBetween(source, startFragment, endFragment) {
   return source.slice(start, end);
 }
 
+const readyAssessment = scoring.buildExpeditionReadiness(fixtures.completeReadyReadinessFixture);
+const cautionAssessment = {
+  ...readyAssessment,
+  status: 'caution',
+  overallScore: 72,
+  confidence: 'medium',
+  blockers: [],
+  warnings: [{
+    id: 'weather-review',
+    categoryId: 'weather_window',
+    label: 'Weather review',
+    detail: 'Forecast freshness needs review before departure.',
+    severity: 'warning',
+  }],
+  recommendations: [
+    'Refresh the weather forecast.',
+    'Confirm the planned departure window.',
+  ],
+};
+const holdAssessment = scoring.buildExpeditionReadiness(fixtures.holdReadinessFixture);
+const staleAssessment = {
+  ...cautionAssessment,
+  sourceFreshness: {
+    ...cautionAssessment.sourceFreshness,
+    weather: {
+      ...cautionAssessment.sourceFreshness.weather,
+      state: 'stale',
+      isStale: true,
+      label: 'Weather forecast',
+    },
+  },
+};
+const missingAssessment = {
+  ...cautionAssessment,
+  sourceFreshness: {
+    ...cautionAssessment.sourceFreshness,
+    weather: {
+      ...cautionAssessment.sourceFreshness.weather,
+      state: 'missing',
+      source: 'missing',
+      isMissing: true,
+      isStale: false,
+      label: 'Weather forecast',
+    },
+  },
+};
+const inferredAssessment = {
+  ...cautionAssessment,
+  sourceFreshness: {
+    ...cautionAssessment.sourceFreshness,
+    route: {
+      ...cautionAssessment.sourceFreshness.route,
+      state: 'inferred',
+      source: 'inferred',
+      isInferred: true,
+      label: 'Route context',
+    },
+  },
+};
+
+const readyPresentation = buildCommandBriefPresentation(readyAssessment);
+const cautionPresentation = buildCommandBriefPresentation(cautionAssessment);
+const holdPresentation = buildCommandBriefPresentation(holdAssessment);
+const stalePresentation = buildCommandBriefPresentation(staleAssessment);
+const missingPresentation = buildCommandBriefPresentation(missingAssessment);
+const inferredPresentation = buildCommandBriefPresentation(inferredAssessment);
+const unavailablePresentation = buildCommandBriefPresentation(null);
+
+assert.strictEqual(readyPresentation.decision.label, 'GO');
+assert.strictEqual(cautionPresentation.decision.label, 'CAUTION');
+assert.strictEqual(holdPresentation.decision.label, 'HOLD');
+assert.strictEqual(unavailablePresentation.decision.label, 'HOLD');
+
+assert.match(readyPresentation.decision.meaning, /^GO means /);
+assert.match(cautionPresentation.decision.meaning, /^CAUTION means /);
+assert.match(holdPresentation.decision.meaning, /^HOLD means /);
+assert.ok(
+  !cautionPresentation.decision.meaning.includes('Forecast freshness needs review'),
+  'Decision meaning must not duplicate the current assessment rationale.',
+);
+assert.ok(
+  !holdPresentation.decision.meaning.includes(holdAssessment.blockers[0].detail),
+  'Hold decision meaning must remain a definition instead of becoming a blocker list.',
+);
+
+for (const presentation of [
+  readyPresentation,
+  cautionPresentation,
+  holdPresentation,
+  stalePresentation,
+  missingPresentation,
+  inferredPresentation,
+  unavailablePresentation,
+]) {
+  assert.ok(
+    presentation.departureAudit.paragraphs.length >= 1
+      && presentation.departureAudit.paragraphs.length <= 2,
+    'Departure Audit must produce one or two paragraphs.',
+  );
+  presentation.departureAudit.paragraphs.forEach((paragraph) => {
+    assert.ok(paragraph.trim().length > 0, 'Departure Audit paragraphs must not be empty.');
+    assert.ok(!/legal campsite|guaranteed safe|AI says/i.test(paragraph), 'Departure Audit must preserve ECS truthfulness language.');
+  });
+}
+
+assert.ok(
+  cautionPresentation.departureAudit.paragraphs.join(' ').includes('Forecast freshness needs review before departure.'),
+  'Departure Audit should explain the deterministic reason for CAUTION.',
+);
+assert.ok(
+  cautionPresentation.departureAudit.paragraphs.join(' ').includes('Refresh the weather forecast'),
+  'Departure Audit should explain how to improve the decision.',
+);
+assert.strictEqual(stalePresentation.departureAudit.sourceState, 'limited');
+assert.match(
+  stalePresentation.departureAudit.paragraphs.join(' '),
+  /stale: Weather forecast/i,
+  'Departure Audit should identify stale source state.',
+);
+assert.match(
+  missingPresentation.departureAudit.paragraphs.join(' '),
+  /missing: Weather forecast/i,
+  'Departure Audit should identify missing source state.',
+);
+assert.match(
+  inferredPresentation.departureAudit.paragraphs.join(' '),
+  /ECS-inferred: Route context/i,
+  'Departure Audit should identify inferred source state.',
+);
+assert.strictEqual(unavailablePresentation.departureAudit.sourceState, 'unavailable');
+
 [
-  'Command Brief',
-  'ECS Expedition Readiness',
-  'No active expedition brief.',
-  'Planning Brief',
-  'Active Expedition Brief',
-  'Preference Influence',
+  '<TripIntentSelector',
+  '<WeakPointAnalyzerPanel assessment={weakPointAssessment} />',
   'Go / Caution / Hold Decision',
+  '<DepartureAuditNarrative',
+  'Share Packet',
+].forEach((fragment) => {
+  assertIncludes(commandBrief, fragment, `Command Brief should keep the requested surface: ${fragment}`);
+});
+
+[
+  'Hold Blockers',
+  'Preference Influence',
   'Route Intelligence',
   'Vehicle Fit',
   'CampOps / Camp Legality Confidence',
-  'Camp Decision Clock',
-  'Weak Point Analyzer',
-  'What breaks first?',
-  'Internal beta / restricted field-test',
-  'Primary weak point:',
-  'Most severe consequence:',
-  'Easiest fix before departure:',
-  'Monitor during travel:',
-  'Assessment completeness:',
-  'Provenance / trace:',
-  'Deterministic ECS ranking. Advisory only.',
-  'Advisory only.',
-  'Continue to planned camp until:',
-  'After that, divert to backup endpoint',
-  'Divert to backup endpoint now.',
-  'Emergency endpoint remains viable until:',
-  'Main risk:',
-  'Feature flagged',
-  'continueCutoffPassed',
   'Weather + Daylight Window',
   'Offline Preparedness',
   'Fuel / Power / Range',
   'Recovery + Bailout Plan',
   'Communications / Signal Confidence',
-  'Share Packet',
-].forEach((fragment) => {
-  assertIncludes(commandBrief, fragment, `Command Brief should render "${fragment}".`);
-});
-
-[
-  'useCurrentExpeditionReadiness',
-  'useReadinessDecision',
-  'useCanStartExpedition',
-  'useExpeditionReadinessState',
-  'campDecisionClock',
-  'campDecisionClockEnabled',
-  'isCampDecisionClockFeatureEnabled',
-  'useCampDecisionClockRuntimeNow',
-  'nextCampDecisionClockDeadlineMs',
-  "AppState.addEventListener('change'",
-  'useFocusEffect',
-  'departureDeltaBriefEnabled',
-  'buildOperationalSnapshotFromReadiness',
-  'isDepartureDeltaBriefFeatureEnabled',
-  'scoreExpeditionWeakPoints',
-  'buildExpeditionReadinessSnapshotForWeakPoints',
-  'assessment.assessmentCompleteness',
-  'assessment.snapshotCoverage.domains',
-].forEach((fragment) => {
-  assertIncludes(commandBrief, fragment, `Command Brief should consume readiness selector "${fragment}".`);
-});
-
-[
-  'Copy packet',
-  'Share packet',
-  'Save locally',
-  "pushRoute('/navigate')",
-  "pushRoute('/discover')",
-].forEach((fragment) => {
-  assertIncludes(commandBrief, fragment, `Command Brief should expose action "${fragment}".`);
-});
-
-[
-  'CollapsibleBriefSection',
-  'accessibilityState={{ expanded }}',
-  'defaultExpanded = false',
-  'expanded ? badge : null',
-  "expanded ? 'chevron-up-outline' : 'chevron-down-outline'",
-].forEach((fragment) => {
-  assertIncludes(commandBrief, fragment, `Command Brief detail sections should use collapsed title-first disclosure: ${fragment}`);
-});
-
-[
-  "import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';",
-  'const commandBriefFleetSurfaceStyle: ViewStyle = {',
-  'backgroundColor: ECS_SURFACE.background.selected',
-  'borderColor: ECS_SURFACE.border.selected',
-  'style={commandBriefFleetSurfaceStyle}',
-  'intentChipStyle={commandBriefFleetSurfaceStyle}',
-  'rowStyle={commandBriefFleetSurfaceStyle}',
-].forEach((fragment) => {
-  assertIncludes(commandBrief, fragment, `Command Brief boxes should match the active Fleet vehicle card surface: ${fragment}`);
-});
-
-assertIncludes(
-  commandBrief,
-  'fitAllIntents',
-  'Command Brief should keep every trip-intent button visible without horizontal scrolling.',
-);
-[
-  'fitAllIntents ? (',
-  '<View style={[styles.intentRow, styles.intentRowFitAll]}>',
-  "flexWrap: 'wrap'",
-  "flexBasis: '47%'",
-  'numberOfLines={fitAllIntents ? 2 : 1}',
-].forEach((fragment) => {
-  assertIncludes(tripIntentSelector, fragment, `Trip intent fit-all layout should include: ${fragment}`);
-});
-
-[
-  'campCandidateRow',
-  'ctaButton',
-  'vehicleHeroRow',
-  'vehicleBriefList',
-  'recoveryMetric',
-  'recoveryInferredNotice',
-  'recoveryPrepList',
-  'campDecisionClockCard',
-  'campDecisionClockLine',
-  'weakPointAnalyzerCard',
-  'weakPointAnalyzerRow',
-  'actionRow',
-].forEach((styleName) => {
-  const start = commandBrief.indexOf(`${styleName}: {`);
-  assert.notStrictEqual(start, -1, `Command Brief should define ${styleName}.`);
-  const end = commandBrief.indexOf('},', start);
-  const block = commandBrief.slice(start, end);
-  assertIncludes(block, 'backgroundColor: ECS_SURFACE.background.selected', `${styleName} should use the Fleet vehicle card background.`);
-  assertIncludes(block, 'borderColor: ECS_SURFACE.border.selected', `${styleName} should use the Fleet vehicle card border.`);
-});
-
-assertNotIncludes(commandBrief, 'Expedition Readiness Summary', 'Command Brief should not duplicate the removed readiness summary card.');
-assertNotIncludes(commandBrief, 'Recommended Actions', 'Command Brief should not render the removed recommended actions container.');
-assertNotIncludes(commandBrief, 'Watch Items', 'Command Brief should not render the removed watch items container.');
-assertNotIncludes(commandBrief, 'MissionBriefCadLog', 'Command Brief should not render the obsolete visual activity log.');
-assertIncludes(
-  commandBrief,
-  'getCachedActiveVehicleReadinessInput',
-  'Command Brief should cache active vehicle readiness snapshots for useSyncExternalStore.',
-);
-assertNotIncludes(
-  commandBrief,
-  '() => buildReadinessVehicleInputFromFleetState(getActiveVehicleState())',
-  'Command Brief must not return a fresh vehicle readiness object from getSnapshot.',
-);
-assertIncludes(dashboard, '<CommandBriefScreen embedded />', 'Dashboard ECS Brief should mount Command Brief without the obsolete activity log.');
-assertIncludes(
-  dashboard,
-  'class DashboardBriefErrorBoundary extends React.Component',
-  'Dashboard ECS Brief should use a local error boundary so a brief render fault cannot crash the whole Dashboard tab.',
-);
-assertIncludes(
-  dashboard,
-  '[DASHBOARD] command_brief_render_failed',
-  'Dashboard ECS Brief render faults should be visible in development diagnostics.',
-);
-assertIncludes(
-  dashboard,
-  'Command Brief unavailable',
-  'Dashboard ECS Brief should show an ECS-styled fallback if the embedded brief render fails.',
-);
-const freshnessCopyFunction = blockBetween(
-  commandBrief,
-  'function getBriefFreshnessCopy(assessment: ExpeditionReadinessAssessment | null) {',
-  'function CommandBriefEmptyState',
-);
-assertIncludes(
-  freshnessCopyFunction,
-  "if (!assessment) return 'Readiness sources have not been evaluated yet.';",
-  'Dashboard ECS Brief should render while readiness assessment is still null instead of crashing on source freshness.',
-);
-assert.ok(
-  freshnessCopyFunction.indexOf('if (!assessment)') < freshnessCopyFunction.indexOf('Object.values(assessment.sourceFreshness)'),
-  'Command Brief freshness copy must guard null assessments before reading assessment.sourceFreshness.',
-);
-assertIncludes(
-  packageSource,
-  '"test:command-brief-readiness": "node ./scripts/test-command-brief-readiness-surface.js"',
-  'package.json should expose the Command Brief readiness regression test.',
-);
-assertIncludes(
-  packageSource,
-  '"test:camp-decision-clock": "node ./scripts/test-camp-decision-clock.js"',
-  'package.json should expose the Camp Decision Clock regression test.',
-);
-assertIncludes(
-  packageSource,
-  '"test:departure-delta-brief": "node ./scripts/test-departure-delta-brief.js"',
-  'package.json should expose the Departure Delta Brief regression test.',
-);
-assertIncludes(
-  packageSource,
-  '"test:expedition-weak-point-analyzer": "node ./scripts/test-expedition-weak-point-analyzer.js"',
-  'package.json should expose the Expedition weak-point analyzer regression test.',
-);
-assertIncludes(
-  commandBrief,
-  'campDecisionClockEnabled ? <CampDecisionClockBriefModule decision={campDecisionClock} /> : null',
-  'Command Brief should render the Camp Decision Clock module only behind the runtime feature flag.',
-);
-assertIncludes(
-  commandBrief,
-  'nowMs >= continueCutoffMs',
-  'Command Brief should transition to divert-now at continueUntil, not after it.',
-);
-assertIncludes(
-  commandBrief,
-  'emergencyViabilityExpired',
-  'Command Brief should stop presenting expired emergency viability as active guidance.',
-);
-assertIncludes(
-  commandBrief,
-  'Emergency endpoint viability expired.',
-  'Command Brief should render an expired emergency endpoint as unavailable/equivalent guidance.',
-);
-assertIncludes(
-  commandBrief,
-  'Camp Decision Clock disabled',
-  'Command Brief should keep disabled Camp Decision Clock guidance out of the user-facing section stack.',
-);
-assertIncludes(
-  commandBrief,
-  'departureDeltaBriefEnabled ? (',
-  'Command Brief should render the Operational Delta Brief card only behind the existing feature flag.',
-);
-assertIncludes(
-  commandBrief,
+  'Coordinate In Dispatch',
+  'Open Mission Command',
+  'MissionCommandProposalAction',
+  'DepartureAuditChecklist',
   '<OperationalDeltaBriefCard',
-  'Command Brief should render the reusable Operational Delta Brief card.',
-);
-[
-  'WHAT CHANGED',
-  'No saved baseline for this route or expedition',
-  'SourceTruthInspectorTrigger',
-  'buildOperationalDeltaResult',
-  'Mark Last Stop',
-  'Acknowledge',
+  '<CampDecisionClockBriefModule',
 ].forEach((fragment) => {
-  assertIncludes(
-    operationalDeltaBrief,
-    fragment,
-    `Operational Delta Brief should include the grounded compact workflow: ${fragment}`,
-  );
+  assertNotIncludes(commandBrief, fragment, `Command Brief should not mount obsolete detail: ${fragment}`);
 });
-assertIncludes(
-  commandBrief,
-  '<WeakPointAnalyzerPanel assessment={weakPointAssessment} />',
-  'Command Brief should render the Weak Point Analyzer panel for every packet-ready brief.',
-);
-assertNotIncludes(
-  commandBrief,
-  'weakPointAnalyzerEnabled ? <WeakPointAnalyzerPanel assessment={weakPointAssessment} /> : null',
-  'Command Brief should not hide the Weak Point Analyzer panel behind a feature flag.',
-);
 
-assertNotIncludes(commandBrief, 'AI says', 'Command Brief must not use generic AI labeling.');
-assertNotIncludes(commandBrief.toLowerCase(), 'legal campsite', 'Command Brief must not guarantee legal campsite status.');
-assertNotIncludes(commandBrief.toLowerCase(), 'safe as', 'Command Brief must not present safety as an absolute guarantee.');
-assertNotIncludes(commandBrief.toLowerCase(), 'onx', 'Command Brief must not contain OnX comparison copy.');
+const decisionBlock = blockBetween(
+  commandBrief,
+  '<View style={[styles.decisionCard, commandBriefFleetSurfaceStyle]}>',
+  '<DepartureAuditNarrative',
+);
+assertNotIncludes(decisionBlock, 'numberOfLines=', 'Decision explanation should render without a line clamp.');
+assertNotIncludes(decisionBlock, 'ReadinessScoreRing', 'Decision card should not duplicate the header score.');
+assertNotIncludes(decisionBlock, 'Confidence:', 'Decision card should leave rationale and confidence to Departure Audit.');
 
-console.log('Command Brief readiness surface checks passed.');
+const auditBlock = blockBetween(
+  commandBrief,
+  'function DepartureAuditNarrative',
+  'function weakPointFact',
+);
+assertNotIncludes(auditBlock, 'numberOfLines=', 'Departure Audit paragraphs should render without a line clamp.');
+assertIncludes(auditBlock, 'ECS Intelligence / deterministic readiness explanation', 'Departure Audit should identify its grounded explanation source.');
+
+assertIncludes(commandBrief, 'fitAllIntents', 'All Trip Intent controls should remain visible.');
+assertIncludes(tripIntentSelector, "flexWrap: 'wrap'", 'Trip Intent should preserve the compact wrapped layout.');
+assertIncludes(commandBrief, 'exportCommandBriefPacket', 'Share Packet should preserve the authoritative export path.');
+assertIncludes(commandBrief, 'getCachedActiveVehicleReadinessInput', 'Weak Point and packet context should retain active Fleet state.');
+assertIncludes(dashboard, '<CommandBriefScreen embedded />', 'Dashboard ECS Brief should mount the canonical Command Brief.');
+assertIncludes(dashboard, 'class DashboardBriefErrorBoundary extends React.Component', 'Dashboard should preserve the Command Brief error boundary.');
+assertIncludes(packageSource, '"test:command-brief-readiness": "node ./scripts/test-command-brief-readiness-surface.js"', 'Package scripts should expose this behavioral contract.');
+
+console.log('Command Brief compact presentation behavior checks passed.');

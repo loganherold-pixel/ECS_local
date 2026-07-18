@@ -9,6 +9,12 @@ import type {
   RoadNavRoute,
 } from '../mapboxRoadNavigation';
 import { getValidatedRoadNavRoute } from '../navigation/roadNavRoutePersistence';
+import {
+  DEFAULT_MAP_STYLE,
+  normalizeMapStyleKey,
+  resolveOfflineTileStyleKey,
+  type MapStyleKey,
+} from '../mapStyleIdentity';
 import type { ImportedRoute, RouteSegment, RouteWaypoint } from '../routeStore';
 import type {
   CampCandidate,
@@ -70,6 +76,12 @@ function routeName(route: TripBuilderRouteInput): string {
 
 function routeId(route: TripBuilderRouteInput): string {
   return String(route.id ?? route.name ?? route.title ?? 'selected-route');
+}
+
+export function getOfflinePrepPackMapStyleKey(
+  input: Pick<OfflinePrepPackInput, 'mapStyleKey'> | null | undefined,
+): MapStyleKey {
+  return normalizeMapStyleKey(input?.mapStyleKey) ?? DEFAULT_MAP_STYLE;
 }
 
 function validCoordinate(latitude: number | null, longitude: number | null): TripBuilderCoordinate | null {
@@ -668,7 +680,7 @@ function routeToImportedRoute(route: TripBuilderRouteInput, points: NormalizedPo
 
 function defaultOfflineMapAdapter(): OfflineMapPreparationAdapter {
   return {
-    prepareRouteRegion({ routeId, routeName, bounds, routePointCount }) {
+    prepareRouteRegion({ routeId, routeName, bounds, routePointCount, styleKey }) {
       if (!bounds || routePointCount < 2) {
         return {
           supported: false,
@@ -701,6 +713,7 @@ function defaultOfflineMapAdapter(): OfflineMapPreparationAdapter {
         const { tileCacheStore } = require('../tileCacheStore');
         const regions = typeof tileCacheStore?.getRegions === 'function' ? tileCacheStore.getRegions() : [];
         const matching = regions.find((region: any) => {
+          if (resolveOfflineTileStyleKey(region.styleKey, region.routeIntent) !== styleKey) return false;
           if (
             region.routeId === routeId &&
             ['complete', 'partial', 'downloading', 'pending', 'error', 'cancelled'].includes(region.status)
@@ -723,7 +736,7 @@ function defaultOfflineMapAdapter(): OfflineMapPreparationAdapter {
             summary: `Offline map region already cached for ${routeName}.`,
             estimatedSizeMB: matching.actualSizeMB ?? matching.estimatedSizeMB ?? null,
             cacheKey: matching.id,
-            metadata: { bounds, regionId: matching.id, cacheStatus: matching.status },
+            metadata: { bounds, regionId: matching.id, cacheStatus: matching.status, styleKey },
           };
         }
         if (matching?.status === 'downloading' || matching?.status === 'pending') {
@@ -737,7 +750,7 @@ function defaultOfflineMapAdapter(): OfflineMapPreparationAdapter {
             summary: `Offline map preparation is ${matching.status === 'downloading' ? `downloading (${percent}%)` : 'queued'} for ${routeName}.`,
             estimatedSizeMB: matching.estimatedSizeMB ?? null,
             cacheKey: matching.id,
-            metadata: { bounds, regionId: matching.id, cacheStatus: matching.status, percent },
+            metadata: { bounds, regionId: matching.id, cacheStatus: matching.status, percent, styleKey },
           };
         }
         if (matching?.status === 'error' || matching?.status === 'cancelled') {
@@ -751,7 +764,7 @@ function defaultOfflineMapAdapter(): OfflineMapPreparationAdapter {
             estimatedSizeMB: matching.estimatedSizeMB ?? null,
             cacheKey: matching.id,
             error: matching.status === 'error' ? matching.errorMessage ?? 'Offline map preparation failed.' : null,
-            metadata: { bounds, regionId: matching.id, cacheStatus: matching.status },
+            metadata: { bounds, regionId: matching.id, cacheStatus: matching.status, styleKey },
           };
         }
         return {
@@ -759,7 +772,7 @@ function defaultOfflineMapAdapter(): OfflineMapPreparationAdapter {
           status: 'not_started',
           availability: 'pending_download',
           summary: 'Offline map preparation can start from Explore and will report route-cache progress here.',
-          metadata: { bounds, routePointCount },
+          metadata: { bounds, routePointCount, styleKey },
         };
       } catch {
         return {
@@ -768,7 +781,7 @@ function defaultOfflineMapAdapter(): OfflineMapPreparationAdapter {
           availability: 'unavailable',
           summary: 'Offline map download is not available yet in this runtime.',
           error: 'Offline map cache adapter unavailable.',
-          metadata: { bounds, routePointCount },
+          metadata: { bounds, routePointCount, styleKey },
         };
       }
     },
@@ -786,6 +799,7 @@ function buildOfflineMapItem(
     routeName: routeName(input.route),
     bounds,
     routePointCount,
+    styleKey: getOfflinePrepPackMapStyleKey(input),
   });
   const error = result.error
     ? makeError('offline-map-unavailable', 'offline_map', result.error)
@@ -1164,7 +1178,11 @@ function buildOfflinePrepPackManifestFromItinerary(
   const route = itineraryAsRouteInput(itinerary, routePoints);
   const routeKey = routeId(route);
   const adapter = options.offlineMapAdapter ?? defaultOfflineMapAdapter();
-  const offlineMapItem = buildOfflineMapItem({ route, capturedAt: generatedAt }, bounds, routePoints.length, adapter);
+  const offlineMapItem = buildOfflineMapItem({
+    route,
+    mapStyleKey: input.mapStyleKey,
+    capturedAt: generatedAt,
+  }, bounds, routePoints.length, adapter);
   const trailheadCoordinate = pointFromGeoPoint(itinerary.trailheadStart?.coordinate ?? itinerary.trailheadStartCandidate?.coordinate ?? null);
   const trailEndCoordinate = pointFromGeoPoint(itinerary.trailEnd?.coordinate ?? null);
   const preTrailStops = flattenPreTrailStops(itinerary);
@@ -1464,6 +1482,42 @@ export function getOfflinePrepPreparedRoadRoute(
   return getValidatedRoadNavRoute(candidate, { requireTurnByTurn: true });
 }
 
+/**
+ * Route identities that can legitimately refer to one prepared package across
+ * Trip Builder, the provider road approach, persistence, and Navigate.
+ */
+export function getOfflinePrepRouteCacheAliases(
+  input: Pick<
+    OfflinePrepPackInput,
+    'route' | 'preparedRoadRoute' | 'itinerary' | 'tripPlan'
+  >,
+): string[] {
+  const metadata = routeRecord(input.route.routeMetadata) ?? {};
+  const lifecycle = readJourneyLinkageFromMetadata(input.route.routeMetadata);
+  const preparedRoadRoute = getOfflinePrepPreparedRoadRoute(input);
+  const values: unknown[] = [
+    routeId(input.route),
+    preparedRoadRoute?.id,
+    input.itinerary?.routeId,
+    input.itinerary?.sourceRouteId,
+    input.itinerary?.suggestedRouteId,
+    input.tripPlan?.route?.routeId,
+    lifecycle?.identity.routeAssetId,
+    metadata.routeId,
+    metadata.sourceRouteId,
+    metadata.tripBuilderCanonicalRouteId,
+  ];
+  const seen = new Set<string>();
+  const aliases: string[] = [];
+  values.forEach((value) => {
+    const alias = typeof value === 'string' ? value.trim() : '';
+    if (!alias || seen.has(alias)) return;
+    seen.add(alias);
+    aliases.push(alias);
+  });
+  return aliases;
+}
+
 function offlineRoadGuidanceUnavailableReason(
   input: Pick<
     OfflinePrepPackInput,
@@ -1536,6 +1590,7 @@ export function buildOfflinePrepPackManifest(
   if (input.itinerary) {
     return buildOfflinePrepPackManifestFromItinerary({
       itinerary: input.itinerary,
+      mapStyleKey: input.mapStyleKey,
       preparedRoadRoute: input.preparedRoadRoute ?? getOfflinePrepPreparedRoadRoute(input),
       preparedRoadRouteUnavailableReason: input.preparedRoadRouteUnavailableReason ?? null,
       weatherSnapshot: input.weatherSnapshot ?? null,

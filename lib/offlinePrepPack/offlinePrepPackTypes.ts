@@ -11,6 +11,7 @@ import type {
 } from '../tripBuilder';
 import type { ECSJourneyLinkage } from '../lifecycle/routeTripExpeditionLifecycle';
 import type { RoadNavRoute } from '../mapboxRoadNavigation';
+import type { MapStyleKey } from '../mapStyleIdentity';
 import type { OfflineReadinessManifest } from './offlineReadinessManifest';
 
 export type OfflinePrepPackItemType =
@@ -140,6 +141,8 @@ export type OfflinePrepPack = {
 
 export type OfflinePrepPackInput = {
   route: TripBuilderRouteInput;
+  /** Exact base-map style included in the offline route package. */
+  mapStyleKey?: MapStyleKey | null;
   /** Provider-normalized road approach, including ordered steps and legs. */
   preparedRoadRoute?: RoadNavRoute | null;
   preparedRoadRouteUnavailableReason?: string | null;
@@ -162,6 +165,8 @@ export type OfflinePrepPackInput = {
 
 export type OfflinePrepPackFromItineraryInput = {
   itinerary: TripItinerary;
+  /** Exact base-map style included in the offline route package. */
+  mapStyleKey?: MapStyleKey | null;
   /** Provider-normalized road approach, including ordered steps and legs. */
   preparedRoadRoute?: RoadNavRoute | null;
   preparedRoadRouteUnavailableReason?: string | null;
@@ -190,5 +195,6 @@ export type OfflineMapPreparationAdapter = {
     routeName: string;
     bounds: OfflinePrepPackBounds | null;
     routePointCount: number;
+    styleKey: MapStyleKey;
   }): OfflineMapPreparationResult;
 };

@@ -58,6 +58,7 @@ const {
   getTilesForBounds,
   getTilesForRouteCorridor,
   countTilesForRouteCorridor,
+  estimateSizeMB,
   lngLatToTile,
   tileCacheStore,
 } = require(path.join(root, 'lib', 'tileCacheStore.ts'));
@@ -169,6 +170,156 @@ assert.strictEqual(
   analysis.tileCount,
   countTilesForRouteCorridor(lShapeRoute, analysis.bufferMiles, analysis.zoomMin, analysis.zoomMax),
   'Route analysis should estimate download size from the route corridor, not the full bounding box.',
+);
+
+tileCacheStore.updateRegion(region.id, {
+  routeId: run.id,
+  status: 'complete',
+  downloadedTiles: region.tileCount,
+});
+
+const tacticalAliasAnalysis = analyzeRoute(run, 'tac');
+assert.strictEqual(
+  tacticalAliasAnalysis.cachedRegion?.id,
+  region.id,
+  'A tactical cache should satisfy the legacy TAC style alias for the same route.',
+);
+
+const ecsStyleAnalysis = analyzeRoute(run, 'ecs');
+assert.strictEqual(
+  ecsStyleAnalysis.cachedRegion,
+  null,
+  'A tactical cache must not satisfy the distinct ECS day style.',
+);
+
+const satelliteStyleAnalysis = analyzeRoute(run, 'sat');
+assert.strictEqual(
+  satelliteStyleAnalysis.cachedRegion,
+  null,
+  'A tactical cache must not satisfy the distinct satellite style.',
+);
+assert.strictEqual(
+  satelliteStyleAnalysis.estimatedSizeMB,
+  estimateSizeMB(satelliteStyleAnalysis.tileCount, 'satellite'),
+  'Route analysis should estimate storage using the requested semantic map style.',
+);
+assert.ok(
+  satelliteStyleAnalysis.estimatedSizeMB > analysis.estimatedSizeMB,
+  'Satellite storage estimates should remain larger than the default tactical estimate.',
+);
+
+tileCacheStore.clearAll();
+const legacyDayRegion = tileCacheStore.createFromRoute(
+  'Route: Legacy day style',
+  lShapeRoute,
+  corridorMiles,
+  zoom,
+  zoom,
+  'day',
+);
+assert.ok(legacyDayRegion, 'A legacy day-style fixture region should be created.');
+tileCacheStore.updateRegion(legacyDayRegion.id, {
+  routeId: run.id,
+  status: 'complete',
+  downloadedTiles: legacyDayRegion.tileCount,
+});
+
+const legacyDayAliasAnalysis = analyzeRoute(run, 'ecs');
+assert.strictEqual(
+  legacyDayAliasAnalysis.cachedRegion?.id,
+  legacyDayRegion.id,
+  'A legacy DAY cache should satisfy the canonical ECS day style.',
+);
+assert.strictEqual(
+  analyzeRoute(run, 'tactical').cachedRegion,
+  null,
+  'A route-tagged day cache must not be reused for tactical rendering.',
+);
+
+tileCacheStore.clearAll();
+const legacyOfflinePrepRegion = tileCacheStore.createFromRoute(
+  'Route: Legacy Offline Prep tactical metadata',
+  lShapeRoute,
+  corridorMiles,
+  zoom,
+  zoom,
+  'tactical',
+);
+assert.ok(legacyOfflinePrepRegion, 'A legacy Offline Prep fixture region should be created.');
+tileCacheStore.updateRegion(legacyOfflinePrepRegion.id, {
+  routeId: run.id,
+  status: 'complete',
+  downloadedTiles: legacyOfflinePrepRegion.tileCount,
+  routeIntent: {
+    syncType: 'route',
+    mapContext: {
+      styleKey: 'tactical',
+      layerContext: ['offline_prep_pack', 'trip_builder_itinerary'],
+    },
+    readinessSnapshot: {
+      offlinePrepManifest: { routeId: run.id },
+    },
+  },
+});
+assert.strictEqual(
+  analyzeRoute(run, 'ecs').cachedRegion?.id,
+  legacyOfflinePrepRegion.id,
+  'A proven legacy Offline Prep tactical record should reuse its identical OSM raster tiles for ECS Day.',
+);
+tileCacheStore.updateRegion(legacyOfflinePrepRegion.id, {
+  styleKey: 'ecs',
+  routeIntent: {
+    syncType: 'route',
+    mapContext: {
+      styleKey: 'ecs',
+      layerContext: ['route-corridor', 'road-preview', 'offline_prep_pack', 'trip_builder_itinerary'],
+    },
+    readinessSnapshot: {
+      offlinePrepManifest: { routeId: run.id },
+    },
+  },
+});
+assert.strictEqual(
+  analyzeRoute(run, 'ecs').cachedRegion?.id,
+  legacyOfflinePrepRegion.id,
+  'Re-preparing a legacy pack should preserve ECS cache reuse after its style/intent metadata is canonicalized.',
+);
+assert.strictEqual(
+  analyzeRoute(run, 'tactical').cachedRegion,
+  null,
+  'A migrated legacy pack must not revert to Tactical after new intent metadata replaces legacy provenance.',
+);
+
+tileCacheStore.clearAll();
+const satelliteCoverageRegion = tileCacheStore.createFromRoute(
+  'Area: Satellite corridor coverage',
+  lShapeRoute,
+  corridorMiles,
+  zoom,
+  zoom,
+  'satellite',
+);
+assert.ok(satelliteCoverageRegion, 'A satellite coverage fixture region should be created.');
+tileCacheStore.updateRegion(satelliteCoverageRegion.id, {
+  routeId: 'another-route',
+  status: 'complete',
+  downloadedTiles: satelliteCoverageRegion.tileCount,
+});
+
+assert.strictEqual(
+  analyzeRoute(run, 'sat').cachedRegion?.id,
+  satelliteCoverageRegion.id,
+  'Coverage-based reuse should accept the SAT alias for a satellite cache.',
+);
+assert.strictEqual(
+  analyzeRoute(run, 'tac').cachedRegion,
+  null,
+  'Coverage-based reuse must ignore a geometrically matching cache for a different style.',
+);
+assert.strictEqual(
+  analyzeRoute(run).cachedRegion?.id,
+  satelliteCoverageRegion.id,
+  'Callers that omit a requested style should retain the existing style-agnostic cache lookup behavior.',
 );
 
 console.log('Route tile corridor trimming regression passed.');

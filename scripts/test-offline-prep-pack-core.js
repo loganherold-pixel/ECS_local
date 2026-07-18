@@ -32,6 +32,8 @@ const {
   buildOfflinePrepPack,
   buildOfflinePrepPackManifest,
   buildOfflinePrepRouteBounds,
+  getOfflinePrepPackMapStyleKey,
+  getOfflinePrepRouteCacheAliases,
   getOfflinePrepRouteCoordinates,
 } = require(path.join(root, 'lib', 'offlinePrepPack', 'offlinePrepPackService.ts'));
 const {
@@ -104,6 +106,21 @@ const pendingMapAdapter = {
   },
 };
 
+let requestedMapStyle = null;
+const styleAwareMapAdapter = {
+  prepareRouteRegion({ bounds, styleKey }) {
+    requestedMapStyle = styleKey;
+    return {
+      supported: true,
+      status: 'ready',
+      availability: 'already_cached',
+      summary: 'Requested style is cached.',
+      cacheKey: 'region-style-aware',
+      metadata: { bounds, styleKey },
+    };
+  },
+};
+
 function itemByType(manifest, type) {
   const found = manifest.items.find((entry) => entry.type === type);
   assert.ok(found, `Expected manifest item ${type}.`);
@@ -114,6 +131,40 @@ const routeOnlyManifest = buildOfflinePrepPackManifest(
   { route, capturedAt: '2026-05-18T12:00:00.000Z' },
   { offlineMapAdapter: unsupportedMapAdapter },
 );
+
+buildOfflinePrepPackManifest(
+  { route, mapStyleKey: 'satellite', capturedAt: '2026-05-18T12:00:00.000Z' },
+  { offlineMapAdapter: styleAwareMapAdapter },
+);
+assert.strictEqual(
+  requestedMapStyle,
+  'satellite',
+  'Offline Prep must pass one exact requested style into the map-cache adapter.',
+);
+assert.strictEqual(
+  getOfflinePrepPackMapStyleKey({ mapStyleKey: null }),
+  'ecs',
+  'Offline Prep must default to the canonical ECS day style when no style was selected.',
+);
+assert.strictEqual(
+  getOfflinePrepPackMapStyleKey({ mapStyleKey: 'ecs' }),
+  'ecs',
+  'The canonical ECS style should remain stable through Offline Prep.',
+);
+const routeAliases = getOfflinePrepRouteCacheAliases({
+  route,
+  preparedRoadRoute: null,
+  itinerary: {
+    id: 'itinerary-offline-prep-route',
+    routeId: 'canonical-itinerary-route',
+    sourceRouteId: 'provider-summary-route',
+    suggestedRouteId: null,
+  },
+  tripPlan: null,
+});
+assert.ok(routeAliases.includes(route.id), 'Offline Prep cache aliases must retain the selected route identity.');
+assert.ok(routeAliases.includes('canonical-itinerary-route'), 'Offline Prep cache aliases must retain the itinerary route identity.');
+assert.ok(routeAliases.includes('provider-summary-route'), 'Offline Prep cache aliases must retain the provider/source route identity.');
 
 assert.strictEqual(routeOnlyManifest.routeId, route.id);
 assert.strictEqual(itemByType(routeOnlyManifest, 'route_line').status, 'ready');

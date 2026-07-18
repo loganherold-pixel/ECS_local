@@ -68,11 +68,11 @@ assert(
   'Education card and store must be reusable through readiness indexes.',
 );
 assert(
-  commandBrief.includes('surface="commandBriefEmpty"')
+  !commandBrief.includes('surface="commandBriefEmpty"')
     && explorePreview.includes('surface="exploreFirstReadiness"')
     && navigateStrip.includes('surface="navigateRoutePreview"')
     && dashboardWidget.includes('surface="dashboardReadinessWidget"'),
-  'Education must be wired into Command Brief, Explore, Navigate, and Dashboard readiness surfaces.',
+  'Compact Command Brief should omit the extra education card while Explore, Navigate, and Dashboard widget onboarding remains available.',
 );
 assert(
   !/\bOnX\b/i.test(uiCopyCorpus),

@@ -32,6 +32,11 @@ import {
 } from './tileCacheStore';
 import type { ECSRun, RunPoint } from './runStore';
 import { connectivity } from './connectivity';
+import {
+  mapStyleKeysMatch,
+  normalizeMapStyleKey,
+  resolveOfflineTileStyleKey,
+} from './mapStyleIdentity';
 
 // ── Types ───────────────────────────────────────────────
 
@@ -205,14 +210,25 @@ function computeCoverage(region: TileCacheRegion, corridorBounds: TileBounds): n
 /**
  * Find existing cached regions that cover this route
  */
-function findExistingCacheForRoute(routeId: string, corridorBounds: TileBounds): {
+function findExistingCacheForRoute(
+  routeId: string,
+  corridorBounds: TileBounds,
+  requestedStyleKey?: string,
+): {
   region: TileCacheRegion | null;
   coverage: number;
 } {
   const regions = tileCacheStore.getRegions();
+  const styleWasRequested = typeof requestedStyleKey === 'string' && requestedStyleKey.trim().length > 0;
+  const matchesRequestedStyle = (region: TileCacheRegion): boolean =>
+    !styleWasRequested || mapStyleKeysMatch(
+      resolveOfflineTileStyleKey(region.styleKey, region.routeIntent),
+      requestedStyleKey,
+    );
 
   // First: look for regions explicitly tagged with this route ID
   const tagged = regions.find(r => r.routeId === routeId &&
+    matchesRequestedStyle(r) &&
     (r.status === 'complete' || r.status === 'downloading' || r.status === 'partial'));
   if (tagged) {
     const coverage = computeCoverage(tagged, corridorBounds);
@@ -225,6 +241,7 @@ function findExistingCacheForRoute(routeId: string, corridorBounds: TileBounds):
 
   for (const region of regions) {
     if (region.status !== 'complete' && region.status !== 'partial') continue;
+    if (!matchesRequestedStyle(region)) continue;
     const coverage = computeCoverage(region, corridorBounds);
     if (coverage > bestCoverage) {
       bestCoverage = coverage;
@@ -238,7 +255,7 @@ function findExistingCacheForRoute(routeId: string, corridorBounds: TileBounds):
 /**
  * Analyze a route and compute caching recommendations
  */
-export function analyzeRoute(run: ECSRun): RouteAnalysis | null {
+export function analyzeRoute(run: ECSRun, requestedStyleKey?: string): RouteAnalysis | null {
   const points = run.points.map(p => ({ lat: p.lat, lng: p.lng }));
   if (points.length < 2) return null;
 
@@ -253,11 +270,16 @@ export function analyzeRoute(run: ECSRun): RouteAnalysis | null {
   if (!corridorBounds) return null;
 
   const tileCount = countTilesForRouteCorridor(points, bufferMiles, recommendation.min, recommendation.max);
-  const estSizeMB = estimateSizeMB(tileCount, 'tactical');
+  const estimateStyleKey = normalizeMapStyleKey(requestedStyleKey) ?? 'tactical';
+  const estSizeMB = estimateSizeMB(tileCount, estimateStyleKey);
   const zoomBreakdown = getRouteCorridorTileBreakdown(points, bufferMiles, recommendation.min, recommendation.max);
 
   // Check existing cache
-  const { region: cachedRegion, coverage: cacheCoverage } = findExistingCacheForRoute(run.id, corridorBounds);
+  const { region: cachedRegion, coverage: cacheCoverage } = findExistingCacheForRoute(
+    run.id,
+    corridorBounds,
+    requestedStyleKey,
+  );
   const hasCachedRegion = cachedRegion !== null && cacheCoverage > 50;
   const cacheComplete = cachedRegion?.status === 'complete' && cacheCoverage >= 90;
 

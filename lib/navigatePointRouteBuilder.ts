@@ -96,6 +96,7 @@ const EARTH_RADIUS_MI = 3958.8;
 const DEFAULT_TRACE_MATCH_THRESHOLD_MI = 0.35;
 const MILES_PER_LATITUDE_DEGREE = 69.0;
 const COORDINATE_EPSILON = 0.0000005;
+const ROUTE_BUILDER_RENDER_EPSILON = 0.000001;
 const TRACE_NETWORK_JOIN_THRESHOLD_MI = 0.012;
 const TRACE_NETWORK_MAX_SEGMENTS = 96;
 const TRACE_NETWORK_MAX_POINTS = 12000;
@@ -149,6 +150,20 @@ function pointsEqual(a: NavigateRouteCoordinate, b: NavigateRouteCoordinate): bo
     Math.abs(a.latitude - b.latitude) <= COORDINATE_EPSILON &&
     Math.abs(a.longitude - b.longitude) <= COORDINATE_EPSILON
   );
+}
+
+function pointsRenderDistinct(a: NavigateRouteCoordinate, b: NavigateRouteCoordinate): boolean {
+  return (
+    Math.abs(a.latitude - b.latitude) > ROUTE_BUILDER_RENDER_EPSILON ||
+    Math.abs(a.longitude - b.longitude) > ROUTE_BUILDER_RENDER_EPSILON
+  );
+}
+
+function hasDrawableLegCoordinates(coordinates: NavigateRouteCoordinate[]): boolean {
+  const normalized = dedupeLine(coordinates);
+  if (normalized.length < 2) return false;
+  const first = normalized[0];
+  return normalized.some((coordinate, index) => index > 0 && pointsRenderDistinct(first, coordinate));
 }
 
 function dedupeLine(line: NavigateRouteCoordinate[]): NavigateRouteCoordinate[] {
@@ -575,12 +590,11 @@ function traceLeg(
   let best:
     | {
         segment: NavigateRouteTraceableSegment;
-        line: NavigateRouteCoordinate[];
-        start: ProjectedPoint;
-        end: ProjectedPoint;
+        snappedLine: NavigateRouteCoordinate[];
         score: number;
       }
     | null = null;
+  let collapsedProjectionFound = false;
 
   for (const segment of normalizedSegments) {
     const line = segment.coordinates;
@@ -594,15 +608,19 @@ function traceLeg(
     ) {
       continue;
     }
+    const snappedLine = extractProjectedLine(line, start, end);
+    if (!hasDrawableLegCoordinates(snappedLine)) {
+      collapsedProjectionFound = true;
+      continue;
+    }
     const score = start.distanceMiles + end.distanceMiles;
     if (!best || score < best.score) {
-      best = { segment, line, start, end, score };
+      best = { segment, snappedLine, score };
     }
   }
 
   let directLeg: NavigateRouteLeg | null = null;
   if (best) {
-    const snappedLine = extractProjectedLine(best.line, best.start, best.end);
     const provider = cleanTraceProvider(best.segment.provider);
     const sourceLabel =
       best.segment.sourceLabel ??
@@ -613,7 +631,7 @@ function traceLeg(
       id: `leg-${from.label}-${to.label}`,
       fromAnchorId: from.id,
       toAnchorId: to.id,
-      coordinates: snappedLine,
+      coordinates: best.snappedLine,
       provider,
       status: 'snapped',
       confidence: cleanConfidence(best.segment.confidence),
@@ -633,7 +651,7 @@ function traceLeg(
   if (directLeg && !anchorsReferenceDifferentSegments) return directLeg;
 
   const connectedPath = traceConnectedNetwork(from, to, normalizedSegments);
-  if (connectedPath) {
+  if (connectedPath && hasDrawableLegCoordinates(connectedPath.coordinates)) {
     const providers = connectedPath.segments.map((segment) => cleanTraceProvider(segment.provider));
     const provider = providers.includes('rendered_features')
       ? 'rendered_features'
@@ -692,7 +710,9 @@ function traceLeg(
     sourceLabel: null,
     dataState: null,
     warnings: [],
-    unavailableReason: 'Point not linked. Tap closer to loaded road or trail geometry.',
+    unavailableReason: collapsedProjectionFound
+      ? 'Point overlaps the previous route position. Drop it farther along the road or trail.'
+      : 'Point not linked. Tap closer to loaded road or trail geometry.',
   };
 }
 
@@ -773,6 +793,9 @@ export function addAnchorToDraft(
   const anchors = [...draft.anchors, anchor];
   const previous = draft.anchors[draft.anchors.length - 1] ?? null;
   if (!previous) return { draft: { anchors, legs: [...draft.legs] }, leg: null };
+  if (!pointsRenderDistinct(previous.coordinate, coordinate)) {
+    return { draft, leg: null };
+  }
   const leg = traceLeg(
     previous,
     anchor,
@@ -882,7 +905,7 @@ export function buildRouteBuilderSegmentsFromDraft(
   draft: NavigateRouteDraft,
 ): RouteBuilderSegmentFromDraft[] {
   return draft.legs
-    .filter((leg) => leg.status === 'snapped' && leg.coordinates.length >= 2)
+    .filter((leg) => leg.status === 'snapped' && hasDrawableLegCoordinates(leg.coordinates))
     .map((leg) => buildSnappedRouteBuilderSegment(draft, leg));
 }
 
@@ -894,7 +917,7 @@ export function buildRouteBuilderPresentationSegmentsFromDraft(
       .map(normalizeCoordinate)
       .filter((point): point is NavigateRouteCoordinate => !!point)
       .map((point) => [point.longitude, point.latitude] as [number, number]);
-    if (coordinates.length < 2) return [];
+    if (coordinates.length < 2 || !hasDrawableLegCoordinates(leg.coordinates)) return [];
     if (leg.status === 'snapped') return [buildSnappedRouteBuilderSegment(draft, leg)];
 
     return [{
@@ -923,6 +946,14 @@ export function buildRouteBuilderPresentationSegmentsFromDraft(
       provisional: true,
     }];
   });
+}
+
+export function isNavigateRouteDraftFullyLinked(draft: NavigateRouteDraft): boolean {
+  if (draft.anchors.length < 2) return false;
+  if (draft.legs.length !== draft.anchors.length - 1) return false;
+  return draft.legs.every(
+    (leg) => leg.status === 'snapped' && hasDrawableLegCoordinates(leg.coordinates),
+  );
 }
 
 export function resolveNearestNavigateRouteAnchor(

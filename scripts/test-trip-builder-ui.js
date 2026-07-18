@@ -125,6 +125,7 @@ assertIncludes(screen, 'testID="trip-builder-planning-map-style-selector"', 'Cam
 assertIncludes(screen, 'testID={`trip-builder-planning-map-style-${style.key}`}', 'Planning map-style actions should have deterministic test identities.');
 assertIncludes(screen, 'const [planningMapStyle, setPlanningMapStyle] = useState', 'Camp and bailout pickers should share one map-style preference.');
 assertIncludes(screen, 'mapStyle={planningMapStyle}', 'Mounted picker overlays should receive the shared map-style preference.');
+assertIncludes(screen, 'mapStyleKey: planningMapStyle', 'Offline Prep should retain the Trip Builder map-style selection.');
 assertIncludes(screen, 'accessibilityState={{ selected, disabled: !available }}', 'Map-style actions should report selected and unavailable states to accessibility services.');
 assertIncludes(screen, 'onMapTap={(coordinate) => onDropPoint(coordinate)}', 'Bailout picker should support operator dropped map points.');
 assertIncludes(screen, 'onRemovePin={handleRemoveBailoutPin}', 'Bailout picker should let operators remove dropped bailout pins.');

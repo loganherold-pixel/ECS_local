@@ -2,6 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const Module = require('module');
+const vm = require('vm');
 const ts = require('typescript');
 
 const root = path.join(__dirname, '..');
@@ -78,7 +79,28 @@ const {
   mergeMapOverlayPayloadPatches,
   normalizeRenderedCampScoutMarkers,
   preserveRouteGeometryForRendering,
+  resolveStaticMapPayloadLocation,
 } = require(mapRendererPath);
+
+assert.deepStrictEqual(
+  resolveStaticMapPayloadLocation({
+    routePointCount: 0,
+    userLocation: { lat: 39.10004, lng: -120.10004 },
+  }),
+  resolveStaticMapPayloadLocation({
+    routePointCount: 0,
+    userLocation: { lat: 39.1004, lng: -120.1004 },
+  }),
+  'GPS movement inside the coarse initial-camera bucket should not invalidate the static map payload.',
+);
+assert.strictEqual(
+  resolveStaticMapPayloadLocation({
+    routePointCount: 2,
+    userLocation: { lat: 39.1, lng: -120.1 },
+  }),
+  null,
+  'Canonical route geometry should own the static map center during active guidance.',
+);
 
 const shapePreservingFixture = Array.from({ length: 201 }, (_, index) => {
   if (index <= 100) return [-122 + index * 0.0001, 38];
@@ -105,6 +127,58 @@ assert(inlineMapScript, 'MapRenderer should emit its inline Mapbox runtime scrip
 assert.doesNotThrow(
   () => new Function(inlineMapScript),
   'The generated Mapbox runtime script must remain syntactically valid.',
+);
+
+const styleReplayFunctionStart = inlineMapScript.indexOf(
+  'function replayPendingPayloadAfterStyleChange(reason, attempt)',
+);
+const styleReplayFunctionEnd = inlineMapScript.indexOf(
+  'function mergePayloadPatch(base, patch)',
+  styleReplayFunctionStart,
+);
+assert(styleReplayFunctionStart >= 0 && styleReplayFunctionEnd > styleReplayFunctionStart);
+const styleReplayFunctionSource = inlineMapScript.slice(
+  styleReplayFunctionStart,
+  styleReplayFunctionEnd,
+);
+const styleReplayContext = {
+  map: { isStyleLoaded: () => true },
+  pendingPayload: { routeCoords: [] },
+  styleReplayTimer: null,
+  styleGeneration: 2,
+  lastReplayedStyleGeneration: -1,
+  pendingFullPayloadReplay: false,
+  applyCount: 0,
+  clearTimeout() {},
+  setTimeout() { throw new Error('A ready style should not schedule a retry.'); },
+  sendLog() {},
+  isMapStyleReady() { return true; },
+  flushPendingOverlayPatch() { return false; },
+};
+styleReplayContext.applyPayload = () => {
+  styleReplayContext.applyCount += 1;
+  styleReplayContext.lastReplayedStyleGeneration = styleReplayContext.styleGeneration;
+};
+vm.runInNewContext(
+  `${styleReplayFunctionSource}\n` +
+    'replayPendingPayloadAfterStyleChange("style.load", 0);' +
+    'replayPendingPayloadAfterStyleChange("styledata", 0);',
+  styleReplayContext,
+);
+assert.strictEqual(
+  styleReplayContext.applyCount,
+  1,
+  'style.load plus repeated styledata events should replay the full map payload once per style generation.',
+);
+styleReplayContext.styleGeneration += 1;
+vm.runInNewContext(
+  `${styleReplayFunctionSource}\nreplayPendingPayloadAfterStyleChange("next-style", 0);`,
+  styleReplayContext,
+);
+assert.strictEqual(
+  styleReplayContext.applyCount,
+  2,
+  'A new style generation should receive exactly one full payload replay.',
 );
 
 const collapsedRoute = buildWebPayload({
@@ -335,6 +409,52 @@ assert.notStrictEqual(
   buildMapOverlayPayloadHash(activeProgressRoute),
   buildMapOverlayPayloadHash(meaningfulProgressRoute),
   'Meaningful active progress-line movement should still update the progress geometry.',
+);
+const progressOnlyPatch = buildMapOverlayPayloadPatch(
+  activeProgressRoute,
+  meaningfulProgressRoute,
+);
+assert.deepStrictEqual(
+  progressOnlyPatch?.patchFamilies,
+  ['route'],
+  'Progress movement should update only the canonical guidance family.',
+);
+assert.ok(
+  !Object.prototype.hasOwnProperty.call(progressOnlyPatch, 'mvumOverlay') &&
+    !Object.prototype.hasOwnProperty.call(progressOnlyPatch, 'routeGeometryOverlay') &&
+    !Object.prototype.hasOwnProperty.call(progressOnlyPatch, 'remoteOverlay'),
+  'Progress movement must not replay unchanged MVUM, ECS route geometry, or remoteness sources.',
+);
+
+const mvumChangedRoute = buildWebPayload({
+  mapboxToken: 'token',
+  routeRenderMode: 'active',
+  points: [
+    { lat: 39.1, lng: -120.1 },
+    { lat: 39.2, lng: -120.2 },
+  ],
+  mvumOverlay: {
+    enabled: true,
+    minZoom: 12,
+    sourceId: 'navigate-mvum-source',
+    sourceType: 'geojson',
+    vectorTileUrl: null,
+    vectorSourceLayer: 'mvum',
+    featureCollection: { type: 'FeatureCollection', features: [] },
+    selectedSourceId: 'navigate-mvum-selected-source',
+    selectedSegmentIds: [],
+  },
+});
+const mvumOnlyPatch = buildMapOverlayPayloadPatch(activeRoute, mvumChangedRoute);
+assert.deepStrictEqual(
+  mvumOnlyPatch?.patchFamilies,
+  ['asyncLayers'],
+  'MVUM changes should update only the asynchronous map-layer family.',
+);
+assert.ok(
+  !Object.prototype.hasOwnProperty.call(mvumOnlyPatch, 'routeCoords') &&
+    !Object.prototype.hasOwnProperty.call(mvumOnlyPatch, 'progressRouteCoords'),
+  'MVUM changes must not resend canonical guidance geometry.',
 );
 
 const dynamicPayload = buildDynamicPayload({

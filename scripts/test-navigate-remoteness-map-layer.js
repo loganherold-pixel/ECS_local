@@ -69,9 +69,19 @@ assert(
   navigate.includes('buildRemoteMapOverlay') && navigate.includes('remoteOverlay={remotenessMapOverlay}'),
   'Navigate should build and pass the remoteness map overlay payload.',
 );
+const remotenessPayloadStart = navigate.indexOf('const remotenessMapOverlay = useMemo');
+const remotenessPayloadEnd = navigate.indexOf('const remotenessOverlayAvailable', remotenessPayloadStart);
+const remotenessPayloadSelector = navigate.slice(remotenessPayloadStart, remotenessPayloadEnd);
 assert(
-  navigate.includes('remotenessOverlayHasVisibleLayer') &&
-    navigate.includes('const remotenessOverlayRouteAvailable = displayedRoutePoints.length > 1;') &&
+  navigate.includes('const DISABLED_REMOTENESS_MAP_OVERLAY: RemoteMapOverlayPayload') &&
+    remotenessPayloadSelector.includes('if (!showRemotenessOverlay || !remotenessOverlayDataAvailable)') &&
+    remotenessPayloadSelector.includes('return DISABLED_REMOTENESS_MAP_OVERLAY;') &&
+    remotenessPayloadSelector.indexOf('return DISABLED_REMOTENESS_MAP_OVERLAY;') <
+      remotenessPayloadSelector.indexOf('return buildRemoteMapOverlay({'),
+  'A hidden remoteness layer must reuse one disabled payload and skip polygon generation entirely.',
+);
+assert(
+  navigate.includes('const remotenessOverlayRouteAvailable = displayedRoutePoints.length > 1;') &&
     navigate.includes('remotenessOverlayRouteAvailable ||') &&
     navigate.includes('REMOTENESS CORRIDOR') &&
     navigate.includes('Remoteness needs an active or selected route'),

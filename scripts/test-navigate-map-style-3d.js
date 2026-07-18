@@ -7,6 +7,7 @@ const root = path.join(__dirname, '..');
 const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8');
 
 const mapConfig = read('lib', 'mapConfig.ts');
+const mapStyleIdentity = read('lib', 'mapStyleIdentity.ts');
 const navigate = read('app', '(tabs)', 'navigate.tsx');
 const mapRenderer = read('components', 'navigate', 'MapRenderer.tsx');
 const offlineCacheModal = read('components', 'navigate', 'OfflineCacheModal.tsx');
@@ -15,7 +16,7 @@ const offlineRouteCacheService = read('lib', 'offlineRouteCacheService.ts');
 const tileCacheStore = read('lib', 'tileCacheStore.ts');
 
 assert(
-  mapConfig.includes("export type MapStyleKey = 'ecs' | 'tactical' | 'satellite' | '3d'"),
+  mapStyleIdentity.includes("export type MapStyleKey = 'ecs' | 'tactical' | 'satellite' | '3d'"),
   'MapStyleKey should include the 3D style key.',
 );
 assert(
@@ -66,10 +67,13 @@ assert(
 );
 assert(
   mapRenderer.includes('function replayPendingPayloadAfterStyleChange(reason, attempt)') &&
+    mapRenderer.includes("mapListenerRegistry.attach('style.load'") &&
+    mapRenderer.includes("replayPendingPayloadAfterStyleChange('style_load', 0)") &&
     mapRenderer.includes("mapListenerRegistry.attach('styledata'") &&
     mapRenderer.includes("replayPendingPayloadAfterStyleChange('styledata', 0)") &&
-    mapRenderer.includes("replayPendingPayloadAfterStyleChange('set_style', 0)"),
-  'MapRenderer should replay active route payloads after Day/Tac/Sat/3D style changes so route lines survive presentation switches.',
+    mapRenderer.includes('lastReplayedStyleGeneration === styleGeneration') &&
+    !mapRenderer.includes("replayPendingPayloadAfterStyleChange('set_style', 0)"),
+  'MapRenderer should replay active route payloads once after the definitive Day/Tac/Sat/3D style generation loads.',
 );
 assert(
   mapRenderer.includes('setTimeout(function() { replayPendingPayloadAfterStyleChange(reason, attempt + 1); },') &&
@@ -78,7 +82,8 @@ assert(
   'MapRenderer style replay should retry until style readiness and then restore every current payload source through the canonical payload adapter.',
 );
 assert(
-  offlineReadiness.includes('Map style ${current.mapStyle.toUpperCase()} is not cached for this route.'),
+  offlineReadiness.includes('Map style ${mapStyleLabel(current.mapStyle') &&
+    offlineReadiness.includes('is not cached for this route.'),
   'Offline readiness should keep style-specific cache mismatch reporting for 3D.',
 );
 assert(

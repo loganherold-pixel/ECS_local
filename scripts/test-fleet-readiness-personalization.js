@@ -248,9 +248,10 @@ assert.ok(exploreSource.includes('buildReadinessVehicleInputFromFleetState(getAc
 assert.ok(exploreSource.includes("if (score >= 60) return 'Caution';"), 'Explore vehicle fit label should use Strong/Caution/Limited language.');
 
 const briefSource = read('components', 'brief', 'CommandBriefScreen.tsx');
-assert.ok(briefSource.includes('VehicleFitBriefSection'), 'Command Brief should render a dedicated Vehicle Fit section.');
+assert.ok(!briefSource.includes('VehicleFitBriefSection'), 'Compact Command Brief should not duplicate a dedicated Vehicle Fit section.');
 assert.ok(briefSource.includes('activeVehicleReadiness'), 'Command Brief should subscribe to active Fleet readiness input.');
-assert.ok(briefSource.includes('Select vehicle for personalized readiness'), 'Command Brief should show no-vehicle personalized readiness copy.');
+assert.ok(briefSource.includes('activeVehicle: activeVehicleReadiness'), 'Command Brief should preserve Fleet state in weak-point and packet context.');
+assert.ok(briefSource.includes('buildReadinessVehicleInputFromFleetState'), 'Command Brief should keep the canonical Fleet readiness adapter.');
 
 const storeSource = read('lib', 'readiness', 'expeditionReadinessStore.ts');
 assert.ok(storeSource.includes('subscribeActiveVehicleState'), 'Readiness store should subscribe to active vehicle changes.');

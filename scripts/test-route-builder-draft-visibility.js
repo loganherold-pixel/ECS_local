@@ -53,7 +53,10 @@ Module._load = function patchedLoad(request, parent, isMain) {
 };
 
 function compileTypescript(module, filename) {
-  const source = fs.readFileSync(filename, 'utf8');
+  let source = fs.readFileSync(filename, 'utf8');
+  if (path.resolve(filename) === path.resolve(mapRendererPath)) {
+    source = source.replace('function makeMapHtml(', 'export function makeMapHtml(');
+  }
   const output = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.CommonJS,
@@ -75,6 +78,7 @@ const {
   buildMapOverlayPayloadPatch,
   buildRouteBuilderFallbackOverlay,
   buildWebPayload,
+  makeMapHtml,
 } = require(mapRendererPath);
 
 function addPoint(draft, latitude, longitude, availableSegments = []) {
@@ -146,6 +150,57 @@ const invalidResult = builder.addAnchorToDraft(pointBDraft, {
   availableSegments: [],
 });
 assert.strictEqual(invalidResult.draft, pointBDraft, 'Invalid points should not mutate the draft.');
+
+const endpointClampSegment = {
+  id: 'endpoint-clamp-road',
+  coordinates: [
+    { latitude: 38, longitude: -110 },
+    { latitude: 38, longitude: -109.99 },
+  ],
+  provider: 'rendered_features',
+  confidence: 'high',
+};
+let endpointClampDraft = addPoint(
+  builder.createNavigateRouteDraft(),
+  38,
+  -110.0001,
+  [endpointClampSegment],
+);
+endpointClampDraft = addPoint(endpointClampDraft, 38, -110.0002, [endpointClampSegment]);
+assert.strictEqual(endpointClampDraft.legs.length, 1);
+assert.strictEqual(
+  endpointClampDraft.legs[0].status,
+  'blocked',
+  'Two taps that clamp to one provider endpoint must not become a one-coordinate snapped leg.',
+);
+assert.match(endpointClampDraft.legs[0].unavailableReason, /farther along/i);
+assert.strictEqual(
+  builder.buildRouteBuilderPresentationSegmentsFromDraft(endpointClampDraft).length,
+  1,
+  'A collapsed provider projection must retain a visible provisional operator leg.',
+);
+assert.strictEqual(
+  builder.isNavigateRouteDraftFullyLinked(endpointClampDraft),
+  false,
+  'A draft with a collapsed provider projection must remain ineligible for save or guidance.',
+);
+const endpointClampThenValidDraft = addPoint(
+  endpointClampDraft,
+  38,
+  -109.995,
+  [endpointClampSegment],
+);
+assert.strictEqual(builder.buildRouteBuilderSegmentsFromDraft(endpointClampThenValidDraft).length, 1);
+assert.strictEqual(
+  builder.isNavigateRouteDraftFullyLinked(endpointClampThenValidDraft),
+  false,
+  'A later valid leg must not make a route saveable while an earlier waypoint leg is still provisional.',
+);
+const duplicateTap = builder.addAnchorToDraft(pointADraft, {
+  coordinate: pointADraft.anchors[0].coordinate,
+  availableSegments: [],
+});
+assert.strictEqual(duplicateTap.draft, pointADraft, 'A duplicate drop should not create an invisible waypoint or zero-length leg.');
 
 const snappedGeometry = [
   { latitude: 38, longitude: -110 },
@@ -233,6 +288,155 @@ const fallbackOverlay = buildRouteBuilderFallbackOverlay(drawingPayload);
 assert.strictEqual(fallbackOverlay.segments.length, 1, 'The fallback renderer should receive the draft before preview.');
 assert.strictEqual(fallbackOverlay.segments[0].provisional, true, 'Raw fallback geometry should stay visually provisional.');
 assert.deepStrictEqual(fallbackOverlay.markers.map((marker) => marker.mapChar), ['A', 'B']);
+
+const mapHtml = makeMapHtml(
+  'pk.route-builder-test',
+  'mapbox://styles/mapbox/dark-v11',
+  [],
+  1,
+  'navigate',
+);
+const inlineMapScript = mapHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+assert(inlineMapScript, 'MapRenderer should emit its mounted inline Mapbox runtime.');
+const optimisticFeedbackStart = inlineMapScript.indexOf(
+  'function nextRouteBuilderAnchorLabel()',
+);
+const optimisticFeedbackEnd = inlineMapScript.indexOf(
+  'function buildRenderedRouteableTraceNetworkAtPoint(point)',
+  optimisticFeedbackStart,
+);
+assert(
+  optimisticFeedbackStart >= 0 && optimisticFeedbackEnd > optimisticFeedbackStart,
+  'The mounted map runtime must include immediate route-builder point feedback.',
+);
+const optimisticFeedbackSource = inlineMapScript.slice(
+  optimisticFeedbackStart,
+  optimisticFeedbackEnd,
+);
+const optimisticFeedbackContext = {
+  routeBuilderActive: true,
+  routeBuilderAnchors: [],
+  routeBuilderDraftSegments: [],
+  routeBuilderLastAnchorTapCoordinate: null,
+  routeBuilderColor: '#65F0D4',
+  snapshots: [],
+  Date: { now: () => 1700000000000 },
+  routeBuilderAnchorCoordinate(anchor) {
+    const coordinate = anchor?.coordinate ?? anchor;
+    const latitude = Number(coordinate?.latitude);
+    const longitude = Number(coordinate?.longitude);
+    return Number.isFinite(latitude) && Number.isFinite(longitude)
+      ? { latitude, longitude }
+      : null;
+  },
+  updateRouteBuilder(segments, color, anchors) {
+    optimisticFeedbackContext.snapshots.push({
+      segments: JSON.parse(JSON.stringify(segments)),
+      anchors: JSON.parse(JSON.stringify(anchors)),
+      color,
+    });
+  },
+};
+vm.runInNewContext(
+  `${optimisticFeedbackSource}\n` +
+    'appendOptimisticRouteBuilderAnchorFeedback({ latitude: 40, longitude: -120 });' +
+    'appendOptimisticRouteBuilderAnchorFeedback({ latitude: 40.1, longitude: -120.1 });' +
+    'appendOptimisticRouteBuilderAnchorFeedback({ latitude: 40.2, longitude: -120.2 });',
+  optimisticFeedbackContext,
+);
+assert.deepStrictEqual(
+  Array.from(optimisticFeedbackContext.routeBuilderAnchors, (anchor) => anchor.label),
+  ['A', 'B', 'C'],
+  'Each dropped route point should receive immediate, ordered visual feedback.',
+);
+assert.strictEqual(
+  optimisticFeedbackContext.routeBuilderDraftSegments.length,
+  2,
+  'Three dropped points should immediately draw two connected provisional legs.',
+);
+assert.deepStrictEqual(
+  JSON.parse(JSON.stringify(optimisticFeedbackContext.routeBuilderDraftSegments[0].coordinates)),
+  [[-120, 40], [-120.1, 40.1]],
+  'Immediate feedback must preserve GeoJSON longitude/latitude order.',
+);
+const liveSourceUpdateStart = inlineMapScript.indexOf('function updateRouteBuilder(segments, color, anchors)');
+const liveSourceUpdateEnd = inlineMapScript.indexOf(
+  'function updateRouteProfileFocus(focus)',
+  liveSourceUpdateStart,
+);
+assert(liveSourceUpdateStart >= 0 && liveSourceUpdateEnd > liveSourceUpdateStart);
+const liveSourceContext = {
+  routeBuilderAnchors: optimisticFeedbackContext.routeBuilderAnchors,
+  routeBuilderColor: '#65F0D4',
+  sources: {},
+  featureCollection(features) { return { type: 'FeatureCollection', features }; },
+  lineFeature(id, coordinates, properties) {
+    return { type: 'Feature', id, properties, geometry: { type: 'LineString', coordinates } };
+  },
+  pointFeature(id, coordinates, properties) {
+    return { type: 'Feature', id, properties, geometry: { type: 'Point', coordinates } };
+  },
+  setGeoJson(id, data) { liveSourceContext.sources[id] = data; },
+  isFinite: Number.isFinite,
+};
+vm.runInNewContext(
+  `${inlineMapScript.slice(liveSourceUpdateStart, liveSourceUpdateEnd)}\n` +
+    `updateRouteBuilder(${JSON.stringify(optimisticFeedbackContext.routeBuilderDraftSegments)}, '#65F0D4', ${JSON.stringify(optimisticFeedbackContext.routeBuilderAnchors)});`,
+  liveSourceContext,
+);
+assert.strictEqual(
+  liveSourceContext.sources['route-builder-source'].features.length,
+  2,
+  'The mounted live GeoJSON source should contain one visual line for each dropped waypoint leg.',
+);
+assert.deepStrictEqual(
+  Array.from(
+    liveSourceContext.sources['route-builder-endpoint-source'].features,
+    (feature) => feature.properties.label,
+  ),
+  ['A', 'B', 'C'],
+  'The mounted live endpoint source should contain every dropped waypoint label.',
+);
+assert(
+  inlineMapScript.includes("id: 'route-builder-anchor-label-layer'") &&
+    inlineMapScript.includes("'text-field': ['coalesce', ['get', 'label'], '']"),
+  'The live Mapbox source must render visible A/B/C labels, not only unlabeled endpoint dots.',
+);
+
+const pendingPatchStart = inlineMapScript.indexOf('function mergePendingOverlayPatch(base, patch)');
+const pendingPatchEnd = inlineMapScript.indexOf(
+  'function applyGuidanceRoutePayload(payload)',
+  pendingPatchStart,
+);
+assert(pendingPatchStart >= 0 && pendingPatchEnd > pendingPatchStart);
+const pendingPatchContext = {
+  map: { isStyleLoaded: () => false },
+  styleGeneration: 4,
+  lastReplayedStyleGeneration: 4,
+  pendingOverlayPatch: null,
+  appliedPatches: [],
+  applyPayloadPatch(patch) {
+    pendingPatchContext.appliedPatches.push(JSON.parse(JSON.stringify(patch)));
+  },
+};
+vm.runInNewContext(
+  `${inlineMapScript.slice(pendingPatchStart, pendingPatchEnd)}\n` +
+    "pendingOverlayPatch = mergePendingOverlayPatch(pendingOverlayPatch, { patchFamilies: ['routeBuilder'], routeBuilderAnchors: [{ label: 'A' }] });" +
+    "pendingOverlayPatch = mergePendingOverlayPatch(pendingOverlayPatch, { patchFamilies: ['routeBuilder'], routeBuilderAnchors: [{ label: 'A' }, { label: 'B' }], routeBuilderSegments: [{ id: 'AB' }] });" +
+    'flushPendingOverlayPatch();',
+  pendingPatchContext,
+);
+assert.strictEqual(
+  pendingPatchContext.appliedPatches.length,
+  1,
+  'A same-style route-builder patch must apply even while unrelated Mapbox sources are loading.',
+);
+assert.deepStrictEqual(
+  JSON.parse(JSON.stringify(pendingPatchContext.appliedPatches[0].routeBuilderAnchors.map((anchor) => anchor.label))),
+  ['A', 'B'],
+  'Coalesced source-busy patches must apply the latest waypoint set instead of losing point B.',
+);
+assert.strictEqual(pendingPatchContext.appliedPatches[0].routeBuilderSegments.length, 1);
 
 const previewPayload = buildWebPayload({
   mapboxToken: 'token',

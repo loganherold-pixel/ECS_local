@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import {
-  AppState,
   Platform,
   Pressable,
   ScrollView,
@@ -9,57 +8,42 @@ import {
   TextStyle,
   View,
   ViewStyle,
-  type AppStateStatus,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useFocusEffect } from '@react-navigation/native';
 
 import { ECSText } from '../ECSText';
 import { ECSBadge, ECSIcon } from '../ECSStatus';
 import ECSOperationalAnnouncer from '../ECSOperationalAnnouncer';
 import {
-  DepartureAuditChecklist,
-  ReadinessCategoryRow,
-  ReadinessConcernList,
   ReadinessDecisionBadge,
-  ReadinessFreshnessLine,
-  ReadinessScoreRing,
   ReadinessAlertToast,
   TripIntentSelector,
-  ReadinessEducationCard,
 } from '../readiness';
 import { ECS, GOLD_RAIL } from '../../lib/theme';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import {
-  EXPEDITION_READINESS_CATEGORY_IDS,
   type ExpeditionReadinessAssessment,
   type ExpeditionReadinessCategory,
   type ExpeditionReadinessCategoryId,
-  type ExpeditionDepartureAuditItem,
   type ExpeditionReadinessInput,
   type ExpeditionTripIntent,
 } from '../../lib/readiness/expeditionReadinessTypes';
 import {
-  buildOperationalSnapshotFromDepartureAudit,
-  buildOperationalSnapshotFromReadiness,
   scoreExpeditionWeakPoints,
   expeditionReadinessStore,
   buildReadinessVehicleInputFromFleetState,
-  isDepartureDeltaBriefFeatureEnabled,
   type ExpeditionReadinessSnapshot,
-  type ExpeditionReadinessCampCandidateInput,
   type ExpeditionReadinessVehicleInput,
   type WeakPointAssessment,
   type WeakPointCandidate,
   type WeakPointSourceFact,
   type WeakPointSourceSystem,
-  useCanStartExpedition,
   useCurrentExpeditionReadiness,
   useExpeditionReadinessState,
   useReadinessDecision,
 } from '../../lib/readiness';
-import { buildReadinessExplanationPayload } from '../../lib/ai/readinessExplanationGuardrails';
 import {
+  buildCommandBriefPresentation,
   exportCommandBriefPacket,
   type CommandBriefExportAction,
   type ECSCommandBriefPacketSource,
@@ -72,33 +56,13 @@ import {
   exportOfflineFailureDrillEvidenceCaptureBundle,
   type OfflineFailureDrillEvidenceExportAction,
 } from '../../lib/offlineFailureDrillEvidenceExport';
-import {
-  campDecisionClockUnavailableDecision,
-  isCampDecisionClockFeatureEnabled,
-  type CampDecisionClockDecision,
-} from '../../lib/campops/campDecisionClock';
 import { navigateRouteSessionStore } from '../../lib/navigateRouteSessionStore';
 import {
   getActiveVehicleState,
   subscribeActiveVehicleState,
 } from '../../lib/fleet/activeVehicleState';
-import {
-  getLoadoutConsequencePreviewSnapshot,
-  subscribeLoadoutConsequencePreview,
-  type CommandBriefLoadoutConsequenceSummary,
-} from '../../lib/fleet/loadoutConsequencePreview';
 import { useApp } from '../../context/AppContext';
-import { stageNavigationFlow } from '../../lib/ecsNavigationFlow';
 import { useConvoyCommandData } from '../dashboard/commandCenter';
-import { OperationalDeltaBriefCard } from './OperationalDeltaBriefCard';
-import MissionCommandProposalAction from '../mission-command/MissionCommandProposalAction';
-import { createDashboardMissionCommandProposal } from '../../lib/dispatchMissionCommandSourceAdapters';
-import type { MissionCommandProposalBuildResult } from '../../lib/dispatchMissionCommandProposal';
-import { buildReadinessAssessmentSourceTruthBinding } from '../../lib/sourceTruthAdapters';
-import {
-  isDispatchFeatureEnabled,
-  resolveDispatchRolloutConfig,
-} from '../../lib/dispatchRolloutConfig';
 
 type CommandBriefScreenProps = {
   embedded?: boolean;
@@ -145,62 +109,6 @@ function routeSessionPointToBriefCoordinate(
   };
 }
 
-const SECTION_DEFINITION: {
-  id: string;
-  title: string;
-  categoryIds: ExpeditionReadinessCategoryId[];
-  emptyCopy: string;
-}[] = [
-  {
-    id: 'route',
-    title: 'Route Intelligence',
-    categoryIds: ['route_risk'],
-    emptyCopy: 'Route intelligence is unavailable until a route preview or active route is selected.',
-  },
-  {
-    id: 'vehicle',
-    title: 'Vehicle Fit',
-    categoryIds: ['vehicle_fit'],
-    emptyCopy: 'Vehicle fit is limited until an active vehicle profile is selected.',
-  },
-  {
-    id: 'camp',
-    title: 'CampOps / Camp Legality Confidence',
-    categoryIds: ['camp_legality_confidence'],
-    emptyCopy: 'Camp Legality Confidence is limited until CampOps candidates or access-confidence inputs are available.',
-  },
-  {
-    id: 'weather',
-    title: 'Weather + Daylight Window',
-    categoryIds: ['weather_window', 'daylight_margin'],
-    emptyCopy: 'Weather and daylight confidence are limited until forecast and arrival-window inputs are available.',
-  },
-  {
-    id: 'offline',
-    title: 'Offline Preparedness',
-    categoryIds: ['offline_preparedness'],
-    emptyCopy: 'Offline preparedness is limited until route package and cache state can be checked.',
-  },
-  {
-    id: 'fuel-power-range',
-    title: 'Fuel / Power / Range',
-    categoryIds: ['fuel_range_margin', 'power_runtime'],
-    emptyCopy: 'Fuel, power, and range margins are limited until vehicle and power inputs are available.',
-  },
-  {
-    id: 'recovery',
-    title: 'Recovery + Bailout Plan',
-    categoryIds: ['recovery_bailout_access'],
-    emptyCopy: 'Recovery and bailout confidence are limited until exits, recovery access, and gear inputs are available.',
-  },
-  {
-    id: 'communications',
-    title: 'Communications / Signal Confidence',
-    categoryIds: ['communications_signal_confidence'],
-    emptyCopy: 'Communications confidence is limited until signal, satellite, or check-in plan inputs are available.',
-  },
-];
-
 const commandBriefFleetSurfaceStyle: ViewStyle = {
   backgroundColor: ECS_SURFACE.background.selected,
   borderColor: ECS_SURFACE.border.selected,
@@ -213,14 +121,6 @@ function useRouteSessionSnapshot() {
     navigateRouteSessionStore.subscribe,
     navigateRouteSessionStore.getSnapshot,
     navigateRouteSessionStore.getSnapshot,
-  );
-}
-
-function useLoadoutConsequencePreviewSnapshot() {
-  return useSyncExternalStore(
-    subscribeLoadoutConsequencePreview,
-    getLoadoutConsequencePreviewSnapshot,
-    getLoadoutConsequencePreviewSnapshot,
   );
 }
 
@@ -250,38 +150,10 @@ function useActiveVehicleReadinessInput() {
   );
 }
 
-function getCategoryMap(assessment: ExpeditionReadinessAssessment | null) {
-  const map = new Map<ExpeditionReadinessCategoryId, ExpeditionReadinessCategory>();
-  assessment?.categories.forEach((category) => {
-    map.set(category.id, category);
-  });
-  return map;
-}
-
 function getBriefModeLabel(hasRoute: boolean, lifecycle: string) {
   if (!hasRoute) return 'No active expedition brief';
   if (lifecycle === 'active' || lifecycle === 'arrived') return 'Active Expedition Brief';
   return 'Planning Brief';
-}
-
-function getDecisionCopy(
-  assessment: ExpeditionReadinessAssessment | null,
-  canStartReason: string,
-  groundedSummary?: string | null,
-) {
-  if (!assessment) {
-    return 'Hold: readiness has not been assessed yet. Select a route and active vehicle to generate deterministic trip readiness.';
-  }
-  if (groundedSummary) {
-    return groundedSummary;
-  }
-  if (assessment.status === 'ready') {
-    return 'Go: ECS deterministic checks show no blockers. Keep source freshness current before departure.';
-  }
-  if (assessment.status === 'caution') {
-    return `Caution: ${canStartReason}`;
-  }
-  return `Hold: ${assessment.blockers[0]?.detail ?? assessment.explanation}`;
 }
 
 function getBriefFreshnessCopy(assessment: ExpeditionReadinessAssessment | null) {
@@ -311,9 +183,8 @@ function CommandBriefEmptyState({ onNavigate, onExplore }: { onNavigate: () => v
         No active expedition brief.
       </ECSText>
       <ECSText variant="body" style={styles.emptyCopy}>
-        Generate a Command Brief from Explore, Navigate, or CampOps. Readiness stays limited until route, vehicle, offline package, Camp Legality Confidence, weather, recovery, and communications inputs are available.
+        Select or build a route in Explore or Navigate to connect this brief to a trip. Missing operational data remains visible in the decision and Departure Audit.
       </ECSText>
-      <ReadinessEducationCard surface="commandBriefEmpty" compact style={commandBriefFleetSurfaceStyle} />
       <View style={styles.emptyCtas}>
         <CommandBriefActionButton label="Open Navigate" icon="navigate-outline" onPress={onNavigate} />
         <CommandBriefActionButton label="Open Explore" icon="map-outline" onPress={onExplore} />
@@ -345,344 +216,44 @@ function CommandBriefActionButton({
   );
 }
 
-function CollapsibleBriefSection({
-  title,
-  badge,
-  children,
-  defaultExpanded = false,
+function DepartureAuditNarrative({
+  paragraphs,
+  sourceState,
 }: {
-  title: string;
-  badge?: React.ReactNode;
-  children: React.ReactNode;
-  defaultExpanded?: boolean;
+  paragraphs: [string] | [string, string];
+  sourceState: 'current' | 'limited' | 'unavailable';
 }) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const sourceLabel = sourceState === 'current'
+    ? 'Current sources'
+    : sourceState === 'limited'
+      ? 'Limited sources'
+      : 'Assessment unavailable';
   return (
-    <View style={[styles.section, commandBriefFleetSurfaceStyle, !expanded && styles.collapsedSection]}>
-      <Pressable
-        onPress={() => setExpanded((value) => !value)}
-        accessibilityRole="button"
-        accessibilityState={{ expanded }}
-        style={({ pressed }) => [styles.collapsibleHeader, pressed && styles.pressed]}
-      >
-        <ECSText variant="cardTitle" style={styles.sectionTitle} numberOfLines={2}>
-          {title}
-        </ECSText>
-        <View style={styles.collapsibleHeaderMeta}>
-          {expanded ? badge : null}
-          <ECSIcon
-            name={expanded ? 'chevron-up-outline' : 'chevron-down-outline'}
-            tier="compact"
-            tone="info"
-          />
-        </View>
-      </Pressable>
-      {expanded ? children : null}
-    </View>
-  );
-}
-
-function CommandBriefSection({
-  title,
-  categories,
-  emptyCopy,
-}: {
-  title: string;
-  categories: ExpeditionReadinessCategory[];
-  emptyCopy: string;
-}) {
-  const hasMissingInputs = categories.some((category) => category.missingInputs.length > 0);
-  return (
-    <CollapsibleBriefSection
-      title={title}
-      badge={hasMissingInputs ? <ECSBadge label="Limited confidence" tone="warning" compact /> : undefined}
-    >
-      {categories.length > 0 ? (
-        <View style={styles.sectionRows}>
-          {categories.map((category) => (
-            <ReadinessCategoryRow key={category.id} category={category} initiallyExpanded={category.status === 'hold'} />
-          ))}
-        </View>
-      ) : (
-        <ECSText variant="helper" style={styles.sectionEmpty} numberOfLines={3}>
-          {emptyCopy}
-        </ECSText>
-      )}
-    </CollapsibleBriefSection>
-  );
-}
-
-function DepartureAuditSection({
-  items,
-  onActionPress,
-}: {
-  items: ExpeditionDepartureAuditItem[];
-  onActionPress: (item: ExpeditionDepartureAuditItem) => void;
-}) {
-  const incomplete = items.filter((item) => item.status !== 'complete').length;
-  return (
-    <View style={[styles.section, commandBriefFleetSurfaceStyle]}>
+    <View style={[styles.departureAuditCard, commandBriefFleetSurfaceStyle]}>
       <View style={styles.sectionHeader}>
-        <ECSText variant="cardTitle" style={styles.sectionTitle} numberOfLines={2}>
+        <ECSText variant="cardTitle" style={styles.sectionTitle}>
           Departure Audit
         </ECSText>
         <ECSBadge
-          label={incomplete === 0 ? 'Complete' : `${incomplete} to review`}
-          tone={incomplete === 0 ? 'ready' : 'warning'}
+          label={sourceLabel}
+          tone={sourceState === 'current' ? 'ready' : 'warning'}
           compact
         />
       </View>
-      <ECSText variant="helper" style={styles.sectionEmpty} numberOfLines={2}>
-        Offline-first checklist for the route package, vehicle, power, communications, and recovery plan before service drops.
+      <View style={styles.departureAuditNarrative}>
+        {paragraphs.map((paragraph, index) => (
+          <ECSText
+            key={`departure-audit-paragraph-${index}`}
+            variant="body"
+            style={styles.departureAuditParagraph}
+          >
+            {paragraph}
+          </ECSText>
+        ))}
+      </View>
+      <ECSText variant="helper" style={styles.departureAuditSourceLabel}>
+        ECS Intelligence / deterministic readiness explanation
       </ECSText>
-      <DepartureAuditChecklist items={items} onActionPress={onActionPress} rowStyle={commandBriefFleetSurfaceStyle} />
-    </View>
-  );
-}
-
-function formatCampScore(candidate: ExpeditionReadinessCampCandidateInput): string {
-  const score = candidate.overallCampScore ?? candidate.suitabilityScore;
-  return typeof score === 'number' && Number.isFinite(score) ? `${Math.round(score)}/100` : 'Limited';
-}
-
-function formatCampConfidence(confidence: ExpeditionReadinessCampCandidateInput['legalAccessConfidence']): string {
-  if (confidence === 'high') return 'High';
-  if (confidence === 'medium') return 'Medium';
-  if (confidence === 'low') return 'Low';
-  return 'Limited';
-}
-
-function campCandidateMissingInputs(candidate: ExpeditionReadinessCampCandidateInput): string[] {
-  return [
-    !candidate.officialConfirmation ? 'official confirmation' : null,
-    candidate.legalAccessConfidence === 'unknown' || !candidate.legalAccessConfidence ? 'Legal Access Confidence' : null,
-    !candidate.vehicleAccessConfidence || candidate.vehicleAccessConfidence === 'unknown' ? 'Vehicle Access Confidence' : null,
-    candidate.terrainSuitabilityScore == null ? 'Terrain Suitability' : null,
-    !candidate.weatherExposureSummary ? 'weather exposure' : null,
-    candidate.bailoutProximityMiles == null ? 'bailout proximity' : null,
-  ].filter((item): item is string => Boolean(item));
-}
-
-function CampOpsBriefSection({
-  candidates,
-  category,
-}: {
-  candidates: ExpeditionReadinessCampCandidateInput[];
-  category?: ExpeditionReadinessCategory;
-}) {
-  return (
-    <CollapsibleBriefSection
-      title="CampOps / Camp Legality Confidence"
-      badge={(
-        <ECSBadge
-          label={category?.confidence === 'high' ? 'Confidence visible' : 'Limited confidence'}
-          tone={category?.confidence === 'high' ? 'ready' : 'warning'}
-          compact
-        />
-      )}
-    >
-      {category ? (
-        <View style={styles.sectionRows}>
-          <ReadinessCategoryRow category={category} initiallyExpanded={category.status === 'hold'} />
-        </View>
-      ) : null}
-      {candidates.length > 0 ? (
-        <View style={styles.campCandidateList}>
-          {candidates.slice(0, 3).map((candidate, index) => {
-            const missing = campCandidateMissingInputs(candidate);
-            return (
-              <View key={candidate.candidateId ?? candidate.id ?? index} style={styles.campCandidateRow}>
-                <View style={styles.campCandidateTopRow}>
-                  <View style={styles.campCandidateLabel}>
-                    <ECSText variant="chip" style={styles.campCandidateLabelText}>
-                      {candidate.label ?? String.fromCharCode(65 + index)}
-                    </ECSText>
-                  </View>
-                  <View style={styles.campCandidateText}>
-                    <ECSText variant="body" style={styles.campCandidateTitle} numberOfLines={1}>
-                      {candidate.name ?? `Camp candidate ${index + 1}`}
-                    </ECSText>
-                    <ECSText variant="helper" style={styles.campCandidateMeta} numberOfLines={2}>
-                      Camp Suitability {formatCampScore(candidate)} / Legal Access Confidence {formatCampConfidence(candidate.legalAccessConfidence)}
-                    </ECSText>
-                  </View>
-                  {candidate.isECSInferred || candidate.isInferred ? (
-                    <ECSBadge label="ECS-inferred" tone="info" compact />
-                  ) : null}
-                </View>
-                <ECSText variant="helper" style={styles.campCandidateReason} numberOfLines={3}>
-                  {candidate.whyECSPickedThis ?? 'CampOps ranked this candidate from available route, access, terrain, and source-confidence signals.'}
-                </ECSText>
-                <View style={styles.campMetricGrid}>
-                  <ECSText variant="helper" style={styles.campMetricText} numberOfLines={1}>
-                    Vehicle access: {formatCampConfidence(candidate.vehicleAccessConfidence)}
-                  </ECSText>
-                  <ECSText variant="helper" style={styles.campMetricText} numberOfLines={1}>
-                    Terrain: {candidate.terrainSuitabilityScore == null ? 'Limited' : `${Math.round(candidate.terrainSuitabilityScore)}/100`}
-                  </ECSText>
-                  <ECSText variant="helper" style={styles.campMetricText} numberOfLines={1}>
-                    Remoteness: {candidate.remotenessScore == null ? 'Limited' : `${Math.round(candidate.remotenessScore)}/100`}
-                  </ECSText>
-                  <ECSText variant="helper" style={styles.campMetricText} numberOfLines={1}>
-                    Route distance: {candidate.routeDistance == null ? 'Limited' : `${candidate.routeDistance.toFixed(candidate.routeDistance < 10 ? 1 : 0)} mi`}
-                  </ECSText>
-                </View>
-                <ECSText variant="helper" style={styles.campCandidateCaution} numberOfLines={2}>
-                  {(candidate.cautionNotes?.[0] ?? (missing.length > 0 ? `Missing: ${missing.slice(0, 3).join(', ')}` : 'Review posted rules and current conditions before committing.'))}
-                </ECSText>
-              </View>
-            );
-          })}
-        </View>
-      ) : (
-        <ECSText variant="helper" style={styles.sectionEmpty} numberOfLines={4}>
-          No CampOps candidates are attached to readiness yet. Legal confidence limited; check official agency rules before treating any dispersed area as usable overnight.
-        </ECSText>
-      )}
-    </CollapsibleBriefSection>
-  );
-}
-
-function formatCampDecisionClockTime(value: string | undefined): string {
-  if (!value) return 'Unavailable';
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) return 'Unavailable';
-  return new Date(parsed).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
-
-function campDecisionClockTone(
-  decision: CampDecisionClockDecision,
-): React.ComponentProps<typeof ECSBadge>['tone'] {
-  if (decision.state === 'continue') return 'ready';
-  if (decision.state === 'divert_now') return 'warning';
-  if (decision.state === 'emergency_only') return 'unavailable';
-  return 'info';
-}
-
-function campDecisionClockDeadlineMs(value: string | undefined): number | null {
-  const parsed = Date.parse(value ?? '');
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function nextCampDecisionClockDeadlineMs(
-  decision: CampDecisionClockDecision | null,
-  nowMs: number = Date.now(),
-): number | null {
-  const deadlines = [
-    campDecisionClockDeadlineMs(decision?.continueUntil),
-    campDecisionClockDeadlineMs(decision?.emergencyViableUntil),
-  ].filter((value): value is number => value != null && value > nowMs);
-  if (deadlines.length === 0) return null;
-  return Math.min(...deadlines);
-}
-
-function useCampDecisionClockRuntimeNow(decision: CampDecisionClockDecision | null): number {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  const refreshNow = useCallback(() => setNowMs(Date.now()), []);
-
-  useFocusEffect(
-    useCallback(() => {
-      refreshNow();
-      return undefined;
-    }, [refreshNow]),
-  );
-
-  useEffect(() => {
-    const nextDeadlineMs = nextCampDecisionClockDeadlineMs(decision, nowMs);
-    const refreshDelayMs = nextDeadlineMs == null
-      ? 60_000
-      : Math.min(Math.max(nextDeadlineMs - nowMs + 100, 250), 60_000);
-    const timeout = setTimeout(refreshNow, refreshDelayMs);
-    return () => clearTimeout(timeout);
-  }, [decision, nowMs, refreshNow]);
-
-  useEffect(() => {
-    const handleAppStateChange = (nextState: AppStateStatus) => {
-      if (nextState === 'active') refreshNow();
-    };
-    const subscription = AppState.addEventListener('change', handleAppStateChange);
-    return () => subscription.remove();
-  }, [refreshNow]);
-
-  return nowMs;
-}
-
-function CampDecisionClockBriefModule({
-  decision,
-}: {
-  decision: CampDecisionClockDecision | null;
-}) {
-  const nowMs = useCampDecisionClockRuntimeNow(decision);
-  const effectiveDecision = decision ?? campDecisionClockUnavailableDecision(
-    'No Safe End Point result is attached to Command Brief. Continue window unavailable until CampOps provides backup endpoint timing.',
-  );
-  const continueCutoffMs = Date.parse(effectiveDecision.continueUntil ?? '');
-  const emergencyViableUntilMs = Date.parse(effectiveDecision.emergencyViableUntil ?? '');
-  const emergencyViabilityExpired =
-    Number.isFinite(emergencyViableUntilMs) &&
-    nowMs >= emergencyViableUntilMs;
-  const runtimeUnavailable = Boolean(effectiveDecision.emergencyViableUntil) && emergencyViabilityExpired;
-  const continueCutoffPassed =
-    effectiveDecision.state === 'continue' &&
-    Number.isFinite(continueCutoffMs) &&
-    nowMs >= continueCutoffMs;
-  const shouldDivertNow = !runtimeUnavailable && (effectiveDecision.state === 'divert_now' || continueCutoffPassed);
-  const firstLine = runtimeUnavailable
-    ? 'Camp decision clock unavailable.'
-    : shouldDivertNow
-    ? 'Divert to backup endpoint now.'
-    : effectiveDecision.state === 'continue'
-    ? `Continue to planned camp until: ${formatCampDecisionClockTime(effectiveDecision.continueUntil)}`
-    : effectiveDecision.state === 'emergency_only'
-        ? 'Emergency endpoint only. Continue window unavailable.'
-        : 'Camp decision clock unavailable.';
-  const backupLine = runtimeUnavailable
-    ? 'Backup endpoint: unavailable'
-    : effectiveDecision.state === 'continue' && !continueCutoffPassed
-    ? 'After that, divert to backup endpoint'
-    : effectiveDecision.backupEndpointId
-      ? `Backup endpoint: ${effectiveDecision.backupEndpointId}`
-      : 'Backup endpoint: unavailable';
-  const emergencyLine = effectiveDecision.emergencyViableUntil && !emergencyViabilityExpired
-    ? `Emergency endpoint remains viable until: ${formatCampDecisionClockTime(effectiveDecision.emergencyViableUntil)}`
-    : effectiveDecision.emergencyViableUntil
-      ? 'Emergency endpoint viability expired.'
-      : 'Emergency endpoint: unavailable';
-
-  return (
-    <View style={styles.campDecisionClockCard}>
-      <View style={styles.sectionHeader}>
-        <ECSText variant="cardTitle" style={styles.sectionTitle}>
-          Camp Decision Clock
-        </ECSText>
-        <ECSBadge label="Feature flagged" tone={campDecisionClockTone(effectiveDecision)} compact />
-      </View>
-      <View style={styles.campDecisionClockLines}>
-        <ECSText variant="body" style={styles.campDecisionClockLine} numberOfLines={2}>
-          {firstLine}
-        </ECSText>
-        <ECSText variant="helper" style={styles.campDecisionClockLine} numberOfLines={2}>
-          {backupLine}
-        </ECSText>
-        <ECSText variant="helper" style={styles.campDecisionClockLine} numberOfLines={2}>
-          {emergencyLine}
-        </ECSText>
-        <ECSText variant="helper" style={styles.campDecisionClockRisk} numberOfLines={3}>
-          Main risk: {effectiveDecision.mainRisk}
-        </ECSText>
-      </View>
-      {effectiveDecision.warnings.length > 0 ? (
-        <View style={styles.campDecisionClockWarnings}>
-          {effectiveDecision.warnings.slice(0, 3).map((warning, index) => (
-            <View key={`camp-decision-clock-warning-${index}`} style={styles.campDecisionClockWarningRow}>
-              <ECSIcon name="alert-circle-outline" tier="compact" tone="warning" />
-              <ECSText variant="helper" style={styles.campDecisionClockWarningText} numberOfLines={3}>
-                {warning}
-              </ECSText>
-            </View>
-          ))}
-        </View>
-      ) : null}
     </View>
   );
 }
@@ -954,312 +525,6 @@ function WeakPointAnalyzerRow({ label, value }: { label: string; value: string }
   );
 }
 
-function formatLoadoutConsequenceLbs(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '--';
-  return `${Math.round(value).toLocaleString()} lb`;
-}
-
-function formatLoadoutConsequencePct(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '--';
-  return `${Math.round(value * 10) / 10}%`;
-}
-
-function loadoutConsequenceTone(status: CommandBriefLoadoutConsequenceSummary['status']): React.ComponentProps<typeof ECSBadge>['tone'] {
-  if (status === 'critical') return 'unavailable';
-  if (status === 'caution' || status === 'watch') return 'warning';
-  if (status === 'clear') return 'ready';
-  return 'info';
-}
-
-function LoadoutConsequenceCommandBriefPanel({
-  summary,
-}: {
-  summary: CommandBriefLoadoutConsequenceSummary;
-}) {
-  const sourceLabel = summary.source === 'committed_loadout'
-    ? 'committed Fleet loadout'
-    : summary.source === 'saved_loadout'
-      ? 'saved Fleet loadout'
-      : 'Fleet staged loadout preview';
-  const mirrorStatus = summary.stale
-    ? `Stale mirror: ${summary.invalidationReason ?? 'expired'}`
-    : `Source: ${sourceLabel}`;
-  return (
-    <View style={styles.loadoutConsequencePanel}>
-      <View style={styles.loadoutConsequenceHeader}>
-        <View style={styles.loadoutConsequenceTitleBlock}>
-          <ECSText variant="chip" style={styles.loadoutConsequenceTitle} numberOfLines={1}>
-            Loadout Consequence Preview
-          </ECSText>
-          <ECSText variant="helper" style={styles.loadoutConsequenceSubtitle} numberOfLines={2}>
-            Current user-facing extension / {mirrorStatus}.
-          </ECSText>
-        </View>
-        <ECSBadge label={summary.status.toUpperCase()} tone={loadoutConsequenceTone(summary.status)} compact />
-      </View>
-      <View style={styles.loadoutConsequenceMetricRow}>
-        <View style={styles.loadoutConsequenceMetric}>
-          <ECSText variant="chip" style={styles.loadoutConsequenceMetricLabel} numberOfLines={1}>
-            Payload after
-          </ECSText>
-          <ECSText variant="helper" style={styles.loadoutConsequenceMetricValue} numberOfLines={1}>
-            {formatLoadoutConsequenceLbs(summary.payloadRemainingAfter)}
-          </ECSText>
-        </View>
-        <View style={styles.loadoutConsequenceMetric}>
-          <ECSText variant="chip" style={styles.loadoutConsequenceMetricLabel} numberOfLines={1}>
-            GVWR use
-          </ECSText>
-          <ECSText variant="helper" style={styles.loadoutConsequenceMetricValue} numberOfLines={1}>
-            {formatLoadoutConsequencePct(summary.gvwrPercentAfter)}
-          </ECSText>
-        </View>
-        <View style={styles.loadoutConsequenceMetric}>
-          <ECSText variant="chip" style={styles.loadoutConsequenceMetricLabel} numberOfLines={1}>
-            Route fit
-          </ECSText>
-          <ECSText variant="helper" style={styles.loadoutConsequenceMetricValue} numberOfLines={1}>
-            {summary.routeSuitability}
-          </ECSText>
-        </View>
-      </View>
-      <ECSText variant="helper" style={styles.loadoutConsequenceRisk} numberOfLines={2}>
-        {summary.mainRisk}
-      </ECSText>
-      <ECSText variant="helper" style={styles.loadoutConsequenceFooter} numberOfLines={1}>
-        {summary.suggestionCount} suggestions / {summary.warningCount} source warnings / last updated {new Date(summary.generatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-      </ECSText>
-    </View>
-  );
-}
-
-function VehicleFitBriefSection({
-  vehicle,
-  category,
-  loadoutConsequenceSummary,
-}: {
-  vehicle: ExpeditionReadinessVehicleInput | null;
-  category?: ExpeditionReadinessCategory;
-  loadoutConsequenceSummary?: CommandBriefLoadoutConsequenceSummary | null;
-}) {
-  const strengths = vehicle?.keyStrengths ?? [];
-  const concerns = vehicle?.keyConcerns ?? [];
-  const missingSpecs = vehicle?.missingSpecs ?? [];
-  const recommendations = vehicle?.recommendations ?? [];
-  return (
-    <CollapsibleBriefSection
-      title="Vehicle Fit"
-      badge={(
-        <ECSBadge
-          label={vehicle ? (category?.status === 'ready' ? 'Fit visible' : 'Review fit') : 'Limited confidence'}
-          tone={vehicle && category?.status === 'ready' ? 'ready' : 'warning'}
-          compact
-        />
-      )}
-    >
-      <View style={styles.vehicleHeroRow}>
-        <ECSIcon name="car-sport-outline" tier="action" tone={vehicle ? 'warning' : 'info'} />
-        <View style={styles.vehicleHeroCopy}>
-          <ECSText variant="body" style={styles.vehicleName} numberOfLines={1}>
-            {vehicle?.label ?? 'No active Fleet vehicle'}
-          </ECSText>
-          <ECSText variant="helper" style={styles.vehicleMeta} numberOfLines={2}>
-            {vehicle
-              ? [vehicle.classificationLabel, vehicle.drivetrain, vehicle.tireSizeInches ? `${vehicle.tireSizeInches} in tires` : null]
-                  .filter(Boolean)
-                  .join(' / ') || 'Vehicle specs are partially available.'
-              : 'Select vehicle for personalized readiness.'}
-          </ECSText>
-        </View>
-      </View>
-      {category ? (
-        <View style={styles.sectionRows}>
-          <ReadinessCategoryRow category={category} initiallyExpanded={category.status === 'hold'} />
-        </View>
-      ) : null}
-      {loadoutConsequenceSummary ? (
-        <LoadoutConsequenceCommandBriefPanel summary={loadoutConsequenceSummary} />
-      ) : null}
-      <View style={styles.vehicleBriefGrid}>
-        <VehicleBriefList title="Key strengths" items={strengths} emptyCopy={vehicle ? 'No material strengths confirmed yet.' : 'Select a vehicle to populate strengths.'} />
-        <VehicleBriefList title="Key concerns" items={concerns} emptyCopy={vehicle ? 'No major concerns from available Fleet inputs.' : 'Vehicle-specific concerns unavailable.'} />
-        <VehicleBriefList title="Missing specs" items={missingSpecs} emptyCopy="Core Fleet specs are present." />
-        <VehicleBriefList title="Recommendations" items={recommendations} emptyCopy="No vehicle-specific recommendations." />
-      </View>
-    </CollapsibleBriefSection>
-  );
-}
-
-function VehicleBriefList({
-  title,
-  items,
-  emptyCopy,
-}: {
-  title: string;
-  items: string[];
-  emptyCopy: string;
-}) {
-  const visibleItems = items.length > 0 ? items.slice(0, 3) : [emptyCopy];
-  return (
-    <View style={styles.vehicleBriefList}>
-      <ECSText variant="chip" style={styles.vehicleBriefListTitle} numberOfLines={1}>
-        {title}
-      </ECSText>
-      {visibleItems.map((item, index) => (
-        <ECSText
-          key={`${title}-${index}`}
-          variant="helper"
-          style={[styles.vehicleBriefListItem, items.length === 0 && styles.vehicleBriefListEmpty]}
-          numberOfLines={2}
-        >
-          {item}
-        </ECSText>
-      ))}
-    </View>
-  );
-}
-
-function RecoveryBriefSection({
-  assessment,
-  category,
-  onOpenDispatch,
-  buildMissionCommandProposal,
-}: {
-  assessment: ExpeditionReadinessAssessment | null;
-  category?: ExpeditionReadinessCategory;
-  onOpenDispatch: () => void;
-  buildMissionCommandProposal?: () => MissionCommandProposalBuildResult;
-}) {
-  const recovery = assessment?.recoveryBrief;
-  const coordinateText = recovery?.currentCoordinates
-    ? `${recovery.currentCoordinates.latitude.toFixed(5)}, ${recovery.currentCoordinates.longitude.toFixed(5)}`
-    : 'Current coordinates unavailable';
-
-  return (
-    <CollapsibleBriefSection
-      title="Recovery + Bailout Plan"
-      badge={(
-        <ECSBadge
-          label={category?.status === 'ready' ? 'Plan visible' : 'Limited confidence'}
-          tone={category?.status === 'ready' ? 'ready' : 'warning'}
-          compact
-        />
-      )}
-    >
-      {category ? (
-        <View style={styles.sectionRows}>
-          <ReadinessCategoryRow category={category} initiallyExpanded={category.status === 'hold'} />
-        </View>
-      ) : null}
-      <View style={styles.recoveryGrid}>
-        <RecoveryBriefMetric label="Nearest bailout" value={recovery?.nearestBailoutSummary ?? 'Nearest bailout is not confirmed.'} />
-        <RecoveryBriefMetric label="Recovery difficulty" value={recovery?.recoveryDifficulty ?? 'unknown'} />
-        <RecoveryBriefMetric label="Comms / signal" value={recovery?.communicationsSummary ?? 'Communications confidence is limited.'} />
-        <RecoveryBriefMetric label="Coordinate packet" value={recovery?.emergencyCoordinatePacketSummary ?? 'Emergency coordinate packet is unavailable.'} />
-        <RecoveryBriefMetric label="Current coordinates" value={coordinateText} mono={Boolean(recovery?.currentCoordinates)} />
-        <RecoveryBriefMetric label="Official contact" value={recovery?.officialContactSummary ?? 'Official contact point is not confirmed. ECS does not invent official contacts.'} />
-      </View>
-      {recovery?.isECSInferred ? (
-        <View style={styles.recoveryInferredNotice}>
-          <ECSIcon name="information-circle-outline" tier="compact" tone="info" />
-          <ECSText variant="helper" style={styles.recoveryInferredText} numberOfLines={2}>
-            ECS-inferred recovery context. Verify bailout and official contact details before relying on them.
-          </ECSText>
-        </View>
-      ) : null}
-      <View style={styles.recoveryPrepList}>
-        <ECSText variant="chip" style={styles.vehicleBriefListTitle} numberOfLines={1}>
-          Recommended recovery prep
-        </ECSText>
-        {(recovery?.recommendedPrep?.length ? recovery.recommendedPrep : ['Review bailout options, communications, and recovery gear before departure.']).slice(0, 4).map((item, index) => (
-          <ECSText key={`recovery-prep-${index}`} variant="helper" style={styles.vehicleBriefListItem} numberOfLines={2}>
-            {item}
-          </ECSText>
-        ))}
-      </View>
-      {buildMissionCommandProposal ? (
-        <MissionCommandProposalAction
-          label="Coordinate Recovery"
-          accessibilityLabel="Coordinate this recovery readiness context in Mission Command"
-          buildProposal={buildMissionCommandProposal}
-          grow
-        />
-      ) : (
-        <CommandBriefActionButton label="Open Dispatch" icon="radio-outline" onPress={onOpenDispatch} />
-      )}
-    </CollapsibleBriefSection>
-  );
-}
-
-function RecoveryBriefMetric({
-  label,
-  value,
-  mono = false,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <View style={styles.recoveryMetric}>
-      <ECSText variant="chip" style={styles.recoveryMetricLabel} numberOfLines={1}>
-        {label}
-      </ECSText>
-      <ECSText variant="helper" style={[styles.recoveryMetricValue, mono && styles.recoveryMetricMono]} numberOfLines={3}>
-        {value}
-      </ECSText>
-    </View>
-  );
-}
-
-function FuelPowerRangeBriefSection({
-  assessment,
-  fuelCategory,
-  powerCategory,
-}: {
-  assessment: ExpeditionReadinessAssessment | null;
-  fuelCategory?: ExpeditionReadinessCategory;
-  powerCategory?: ExpeditionReadinessCategory;
-}) {
-  const power = assessment?.powerBrief;
-  return (
-    <CollapsibleBriefSection
-      title="Fuel / Power / Range"
-      badge={(
-        <ECSBadge
-          label={power?.statusLabel ?? 'Unknown'}
-          tone={power?.status === 'ready' ? 'ready' : power?.status === 'caution' ? 'warning' : 'info'}
-          compact
-        />
-      )}
-    >
-      {fuelCategory || powerCategory ? (
-        <View style={styles.sectionRows}>
-          {fuelCategory ? <ReadinessCategoryRow category={fuelCategory} initiallyExpanded={fuelCategory.status === 'hold'} /> : null}
-          {powerCategory ? <ReadinessCategoryRow category={powerCategory} initiallyExpanded={powerCategory.status === 'hold'} /> : null}
-        </View>
-      ) : null}
-      <View style={styles.powerBriefGrid}>
-        <RecoveryBriefMetric label="Power status" value={power?.sourceSummary ?? 'No power system connected.'} />
-        <RecoveryBriefMetric label="Battery" value={power?.stateOfChargeSummary ?? 'State of charge unavailable.'} />
-        <RecoveryBriefMetric label="Runtime" value={power?.runtimeSummary ?? 'Runtime unknown.'} />
-        <RecoveryBriefMetric label="Power flow" value={power?.flowSummary ?? 'Power flow unavailable.'} />
-        <RecoveryBriefMetric label="Solar" value={power?.solarSummary ?? 'Solar input unavailable.'} />
-        <RecoveryBriefMetric label="Freshness" value={power?.freshnessSummary ?? 'Power data freshness: unknown.'} />
-        <RecoveryBriefMetric label="Recommendation" value={power?.recommendation ?? 'Connect or update power only if powered loads matter.'} />
-      </View>
-      {!power?.connectedSourceAvailable && !power?.powerRelevantForTrip ? (
-        <View style={styles.recoveryInferredNotice}>
-          <ECSIcon name="battery-half-outline" tier="compact" tone="info" />
-          <ECSText variant="helper" style={styles.recoveryInferredText} numberOfLines={2}>
-            Not connected. ECS is not treating connected power hardware as required for this trip context.
-          </ECSText>
-        </View>
-      ) : null}
-    </CollapsibleBriefSection>
-  );
-}
-
 function CommandBriefActionRow({ action }: { action: BriefAction }) {
   return (
     <Pressable
@@ -1302,25 +567,12 @@ export default function CommandBriefScreen({
   const assessment = useCurrentExpeditionReadiness();
   const readinessState = useExpeditionReadinessState();
   const decision = useReadinessDecision();
-  const canStart = useCanStartExpedition();
   const routeSession = useRouteSessionSnapshot();
   const convoyCommandData = useConvoyCommandData();
   const activeVehicleReadiness = useActiveVehicleReadinessInput();
-  const loadoutConsequencePreviewSnapshot = useLoadoutConsequencePreviewSnapshot();
-  const loadoutConsequenceSummary = useMemo(() => {
-    const summary = loadoutConsequencePreviewSnapshot.summary;
-    if (!summary) return null;
-    if (summary.stale) return null;
-    if (activeVehicleReadiness?.vehicleId && summary.vehicleId !== activeVehicleReadiness.vehicleId) return null;
-    return summary;
-  }, [activeVehicleReadiness?.vehicleId, loadoutConsequencePreviewSnapshot.summary]);
   const [briefExportAction, setBriefExportAction] = useState<CommandBriefExportAction | null>(null);
   const [briefExportMessage, setBriefExportMessage] = useState<string | null>(null);
   const [evidenceExportAction, setEvidenceExportAction] = useState<OfflineFailureDrillEvidenceExportAction | null>(null);
-  const missionCommandEnabled = useMemo(
-    () => isDispatchFeatureEnabled(resolveDispatchRolloutConfig(), 'missionCommand'),
-    [],
-  );
 
   useEffect(() => {
     void navigateRouteSessionStore.hydrateFromPersistence().then(() => {
@@ -1328,9 +580,8 @@ export default function CommandBriefScreen({
     });
   }, []);
 
-  const categoryMap = useMemo(() => getCategoryMap(assessment), [assessment]);
-  const readinessExplanation = useMemo(
-    () => assessment ? buildReadinessExplanationPayload(assessment) : null,
+  const presentation = useMemo(
+    () => buildCommandBriefPresentation(assessment),
     [assessment],
   );
   const hasRoute = Boolean(
@@ -1346,37 +597,6 @@ export default function CommandBriefScreen({
   const handleTripIntentChange = useCallback((intent: ExpeditionTripIntent) => {
     expeditionReadinessStore.setTripIntent(intent);
   }, []);
-  const handleAuditAction = useCallback(
-    (item: ExpeditionDepartureAuditItem) => {
-      if (item.disabledActionReason) {
-        setBriefExportMessage(item.disabledActionReason);
-        showToast(item.disabledActionReason);
-        return;
-      }
-      if (item.itemId === 'offline-map-package') {
-        void stageNavigationFlow({
-          source: 'dashboard',
-          target: 'navigate',
-          intent: 'prepare_offline_route_package',
-          label: 'Prepare active route offline package',
-          message: 'ECS is opening the active route offline package.',
-          context: {
-            sourceSurface: 'command_brief_departure_audit',
-            actionItemId: item.itemId,
-          },
-        }).finally(() => {
-          pushRoute('/navigate');
-        });
-        return;
-      }
-      if (item.actionTarget === '/safety?focus=emergency-comms&returnTo=command-brief') {
-        pushRoute('/safety?focus=emergency-comms&returnTo=command-brief');
-        return;
-      }
-      if (item.actionTarget) pushRoute(item.actionTarget);
-    },
-    [pushRoute, showToast],
-  );
   const weakPointSnapshot = useMemo(
     () => buildExpeditionReadinessSnapshotForWeakPoints({
       assessment,
@@ -1620,129 +840,6 @@ export default function CommandBriefScreen({
       onPress: () => void handleEvidenceCaptureExport('share'),
     },
   ]), [assessment, briefExportAction, evidenceExportAction, handleBriefExport, handleEvidenceCaptureExport]);
-  const campCandidates = useMemo(
-    () => (readinessState.inputPatch.campCandidates ?? []).slice(0, 5),
-    [readinessState.inputPatch.campCandidates],
-  );
-  const campDecisionClock = readinessState.inputPatch.campDecisionClock ?? null;
-  const buildRecoveryMissionCommandProposal = useCallback((): MissionCommandProposalBuildResult => {
-    if (!assessment) {
-      return {
-        ok: false,
-        safeCode: 'mission_command_proposal_readiness_missing',
-        reason: 'Readiness must be assessed before coordinating recovery context.',
-      };
-    }
-    const sourceTruth = buildReadinessAssessmentSourceTruthBinding(assessment).ref;
-    return createDashboardMissionCommandProposal({
-      sourceEntityId: `${readinessState.activeTripId ?? readinessState.activeRouteId ?? 'readiness'}:${assessment.updatedAt}`,
-      expeditionId: readinessState.activeTripId,
-      sourceSurface: 'ecs_brief',
-      situation: assessment.status === 'hold' ? 'offline_readiness_blocker' : 'validated_advisory',
-      title: 'Coordinate recovery readiness',
-      summary: assessment.explanation,
-      sourceTruth: [sourceTruth],
-      action: 'create_command',
-      command: {
-        type: 'recovery',
-        priority: assessment.status === 'hold' ? 'high' : 'normal',
-        title: 'Review recovery readiness',
-        instructions: assessment.recoveryBrief.recommendedPrep[0] ?? assessment.explanation,
-      },
-      facts: [
-        { key: 'readiness_status', label: 'Readiness status', value: assessment.status },
-        { key: 'readiness_confidence', label: 'Readiness confidence', value: assessment.confidence },
-      ],
-      operatorRequested: true,
-      offline: offlineExpeditionModeEngine.isOffline(),
-      returnRoute: '/dashboard',
-    });
-  }, [assessment, readinessState.activeRouteId, readinessState.activeTripId]);
-  const buildReadinessMissionCommandProposal = useCallback((): MissionCommandProposalBuildResult => {
-    if (!assessment) {
-      return {
-        ok: false,
-        safeCode: 'mission_command_proposal_readiness_missing',
-        reason: 'Readiness must be assessed before coordinating an ECS Brief situation.',
-      };
-    }
-    const issue = assessment.blockers[0] ?? assessment.warnings[0] ?? null;
-    const categoryId = issue?.categoryId ?? null;
-    const situation = categoryId === 'vehicle_fit'
-      ? 'vehicle_warning'
-      : categoryId === 'weather_window'
-        ? 'weather_warning'
-        : categoryId === 'offline_preparedness'
-          ? 'offline_readiness_blocker'
-          : categoryId === 'camp_legality_confidence' || categoryId === 'daylight_margin'
-            ? 'camp_deadline'
-            : categoryId === 'fuel_range_margin' || categoryId === 'power_runtime'
-              ? 'resource_warning'
-              : 'validated_advisory';
-    const commandType = situation === 'weather_warning'
-      ? 'hazard'
-      : situation === 'vehicle_warning' || situation === 'resource_warning'
-        ? 'resource'
-        : categoryId === 'route_risk' || situation === 'camp_deadline'
-          ? 'route'
-          : 'general';
-    const sourceTruth = buildReadinessAssessmentSourceTruthBinding(assessment).ref;
-    const issueSummary = issue?.detail ?? assessment.explanation;
-    return createDashboardMissionCommandProposal({
-      sourceEntityId: issue?.id ?? `${readinessState.activeTripId ?? readinessState.activeRouteId ?? 'readiness'}:${assessment.updatedAt}`,
-      expeditionId: readinessState.activeTripId,
-      sourceSurface: 'ecs_brief',
-      situation,
-      title: issue ? `Coordinate ${issue.label}` : 'Open Mission Command',
-      summary: issueSummary,
-      sourceTruth: [sourceTruth],
-      action: issue ? 'create_command' : 'open_mission_command',
-      command: issue ? {
-        type: commandType,
-        priority: issue.severity === 'blocker' ? 'high' : 'normal',
-        title: issue.label,
-        instructions: issue.detail,
-      } : null,
-      facts: [
-        { key: 'readiness_status', label: 'Readiness status', value: assessment.status },
-        { key: 'readiness_confidence', label: 'Readiness confidence', value: assessment.confidence },
-        ...(categoryId ? [{ key: 'category', label: 'Readiness category', value: categoryId }] : []),
-      ],
-      operatorRequested: true,
-      offline: offlineExpeditionModeEngine.isOffline(),
-      returnRoute: '/dashboard',
-    });
-  }, [assessment, readinessState.activeRouteId, readinessState.activeTripId]);
-  const campDecisionClockEnabled = isCampDecisionClockFeatureEnabled({
-    campDecisionClock: readinessState.inputPatch.campDecisionClockFeatureEnabled ?? null,
-  });
-  const departureDeltaBriefEnabled = isDepartureDeltaBriefFeatureEnabled({
-    departureDeltaBrief: readinessState.inputPatch.departureDeltaBriefFeatureEnabled ?? null,
-  });
-  const operationalDeltaResolvedInput = expeditionReadinessStore.getResolvedInput();
-  const operationalDeltaSnapshot = buildOperationalSnapshotFromReadiness({
-    assessment,
-    input: {
-      ...operationalDeltaResolvedInput,
-      readinessMode: readinessState.readinessMode,
-    },
-    routeSession,
-    activeVehicle: activeVehicleReadiness,
-    convoy: convoyCommandData,
-    expeditionId: readinessState.activeTripId,
-    routeId: readinessState.activeRouteId ?? routeSession.routeId,
-    capturedAt: assessment?.updatedAt ?? readinessState.lastAssessmentAt ?? routeSession.updatedAt,
-    label: 'Current operational state',
-  });
-  const legacyOperationalDepartureBaseline = useMemo(
-    () => buildOperationalSnapshotFromDepartureAudit(
-      readinessState.inputPatch.previousDepartureAudit ?? null,
-    ),
-    [readinessState.inputPatch.previousDepartureAudit],
-  );
-  const missingCategories = assessment
-    ? EXPEDITION_READINESS_CATEGORY_IDS.filter((id) => !categoryMap.has(id))
-    : EXPEDITION_READINESS_CATEGORY_IDS;
   const staleSourceCount = assessment
     ? Object.values(assessment.sourceFreshness).filter((record) => record.isStale).length
     : 0;
@@ -1807,147 +904,30 @@ export default function CommandBriefScreen({
           />
         ) : null}
 
-        {assessment?.status === 'hold' ? (
-          <View style={[styles.holdBlockers, commandBriefFleetSurfaceStyle]}>
-            <View style={styles.sectionHeader}>
-              <ECSText variant="cardTitle" style={styles.sectionTitle}>
-                Hold Blockers
-              </ECSText>
-              <ECSBadge label={`${assessment.blockers.length || 1} blocker${assessment.blockers.length === 1 ? '' : 's'}`} tone="unavailable" compact />
-            </View>
-            <ReadinessConcernList assessment={assessment} limit={Math.max(3, assessment.blockers.length)} showRecommendations={false} />
-          </View>
-        ) : null}
-
         <View style={styles.sectionStack}>
-          {/* Camp Decision Clock disabled: runtime feature flag keeps continue/divert guidance out of the user-facing section stack. */}
-          {campDecisionClockEnabled ? <CampDecisionClockBriefModule decision={campDecisionClock} /> : null}
-          {departureDeltaBriefEnabled ? (
-            <OperationalDeltaBriefCard
-              currentSnapshot={operationalDeltaSnapshot}
-              legacyDepartureBaseline={legacyOperationalDepartureBaseline}
-              onFeedback={showToast}
-            />
-          ) : null}
           {hasRoute ? <WeakPointAnalyzerPanel assessment={weakPointAssessment} /> : null}
 
           <View style={[styles.decisionCard, commandBriefFleetSurfaceStyle]}>
-            <View style={styles.decisionHeader}>
-              <View style={styles.decisionCopyBlock}>
-                <ECSText variant="cardTitle" style={styles.sectionTitle}>
-                  Go / Caution / Hold Decision
-                </ECSText>
-                <ECSText variant="body" style={styles.decisionCopy} numberOfLines={4}>
-                  {getDecisionCopy(assessment, canStart.reason, readinessExplanation?.groundedSummary)}
-                </ECSText>
-                <ECSText variant="helper" style={styles.confidenceCopy} numberOfLines={3}>
-                  Confidence: {assessment?.confidence ?? 'low'}. {readinessExplanation?.limitedConfidence ? 'ECS Intelligence is using limited-confidence guardrails. ' : ''}{getBriefFreshnessCopy(assessment)}
-                </ECSText>
-              </View>
-              <ReadinessScoreRing
-                score={assessment?.overallScore ?? 0}
-                status={assessment?.status ?? 'hold'}
-                size={92}
+            <View style={styles.sectionHeader}>
+              <ECSText variant="cardTitle" style={styles.sectionTitle}>
+                Go / Caution / Hold Decision
+              </ECSText>
+              <ECSBadge
+                label={presentation.decision.label}
+                tone={presentation.decision.status === 'ready' ? 'ready' : presentation.decision.status === 'caution' ? 'warning' : 'unavailable'}
                 compact
               />
             </View>
-            {assessment ? <ReadinessFreshnessLine assessment={assessment} /> : null}
-            {missionCommandEnabled && assessment ? (
-              <MissionCommandProposalAction
-                label={assessment.blockers.length > 0 || assessment.warnings.length > 0
-                  ? 'Coordinate In Dispatch'
-                  : 'Open Mission Command'}
-                accessibilityLabel="Coordinate this ECS Brief readiness decision in Mission Command"
-                buildProposal={buildReadinessMissionCommandProposal}
-                grow
-              />
-            ) : null}
+            <ECSText variant="body" style={styles.decisionCopy}>
+              {presentation.decision.meaning}
+            </ECSText>
           </View>
 
-          {assessment?.departureAudit?.length ? (
-            <DepartureAuditSection
-              items={assessment.departureAudit}
-              onActionPress={handleAuditAction}
-            />
-          ) : null}
+          <DepartureAuditNarrative
+            paragraphs={presentation.departureAudit.paragraphs}
+            sourceState={presentation.departureAudit.sourceState}
+          />
 
-          {assessment?.preferenceEffects.length ? (
-            <View style={[styles.preferenceCard, commandBriefFleetSurfaceStyle]}>
-              <View style={styles.sectionHeader}>
-                <ECSText variant="cardTitle" style={styles.sectionTitle}>
-                  Preference Influence
-                </ECSText>
-                <ECSBadge label={assessment.readinessPreferences.readinessSensitivity === 'standard' ? 'Standard' : 'Conservative'} tone="info" compact />
-              </View>
-              {assessment.preferenceEffects.slice(0, 3).map((effect) => (
-                <View key={effect.id} style={styles.preferenceEffectRow}>
-                  <ECSIcon
-                    name={effect.severity === 'blocker' ? 'hand-left-outline' : effect.severity === 'warning' ? 'alert-circle-outline' : 'options-outline'}
-                    tier="compact"
-                    tone={effect.severity === 'blocker' ? 'unavailable' : effect.severity === 'warning' ? 'warning' : 'info'}
-                  />
-                  <View style={styles.preferenceEffectCopy}>
-                    <ECSText variant="body" style={styles.preferenceEffectTitle} numberOfLines={1}>
-                      {effect.label}
-                    </ECSText>
-                    <ECSText variant="helper" style={styles.preferenceEffectSummary} numberOfLines={2}>
-                      {effect.summary}
-                    </ECSText>
-                  </View>
-                </View>
-              ))}
-            </View>
-          ) : null}
-
-          {SECTION_DEFINITION.map((section) => (
-            section.id === 'vehicle' ? (
-              <VehicleFitBriefSection
-                key={section.id}
-                vehicle={activeVehicleReadiness}
-                category={categoryMap.get('vehicle_fit')}
-                loadoutConsequenceSummary={loadoutConsequenceSummary}
-              />
-            ) : section.id === 'camp' ? (
-              <CampOpsBriefSection
-                key={section.id}
-                candidates={campCandidates}
-                category={categoryMap.get('camp_legality_confidence')}
-              />
-            ) : section.id === 'recovery' ? (
-              <RecoveryBriefSection
-                key={section.id}
-                assessment={assessment}
-                category={categoryMap.get('recovery_bailout_access')}
-                onOpenDispatch={() => pushRoute('/alert')}
-                buildMissionCommandProposal={missionCommandEnabled ? buildRecoveryMissionCommandProposal : undefined}
-              />
-            ) : section.id === 'fuel-power-range' ? (
-              <FuelPowerRangeBriefSection
-                key={section.id}
-                assessment={assessment}
-                fuelCategory={categoryMap.get('fuel_range_margin')}
-                powerCategory={categoryMap.get('power_runtime')}
-              />
-            ) : (
-              <CommandBriefSection
-                key={section.id}
-                title={section.title}
-                categories={section.categoryIds
-                  .map((id) => categoryMap.get(id))
-                  .filter((category): category is ExpeditionReadinessCategory => Boolean(category))}
-                emptyCopy={section.emptyCopy}
-              />
-            )
-          ))}
-
-          {missingCategories.length > 0 ? (
-            <View style={[styles.dataNotice, commandBriefFleetSurfaceStyle]}>
-              <ECSIcon name="alert-circle-outline" tier="compact" tone="warning" />
-              <ECSText variant="helper" style={styles.dataNoticeText} numberOfLines={3}>
-                ECS Intelligence expected all readiness categories. Missing category outputs: {missingCategories.join(', ')}.
-              </ECSText>
-            </View>
-          ) : null}
 
           <View style={[styles.exportCard, commandBriefFleetSurfaceStyle]}>
             <View style={styles.sectionHeader}>
@@ -2094,6 +1074,22 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 12,
   },
+  departureAuditCard: {
+    padding: 14,
+    gap: 12,
+  },
+  departureAuditNarrative: {
+    gap: 10,
+  },
+  departureAuditParagraph: {
+    color: ECS.text,
+    fontSize: 13,
+    lineHeight: 19,
+  } as TextStyle,
+  departureAuditSourceLabel: {
+    color: ECS.muted,
+    lineHeight: 16,
+  } as TextStyle,
   campDecisionClockCard: {
     padding: 14,
     gap: 10,

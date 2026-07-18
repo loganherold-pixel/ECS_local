@@ -197,7 +197,8 @@ assert.ok(
 assert.ok(
   navigateSource.includes('const rawLocationAccessGranted =') &&
     navigateSource.includes("gps.rawGPS.permissionState === 'granted' && gps.rawGPS.isAvailable") &&
-    navigateSource.includes('const mapRendererUserLocation = destinationSearchMapFrozen || !rawLocationAccessGranted') &&
+    navigateSource.includes('const mapRendererUserLocation = resolveNavigateMapUserLocation({') &&
+    navigateSource.includes('mapFrozen: destinationSearchMapFrozen') &&
     navigateSource.includes('const mapRendererShowUserLocation = !destinationSearchMapFrozen') &&
     navigateSource.includes('destinationSearchMapFrozen || !rawLocationAccessGranted || !navigateMapMotion.allowLiveLocation') &&
     navigateSource.includes('userLocation={mapRendererUserLocation}') &&
@@ -236,9 +237,10 @@ assert.ok(
   'Navigate display GPS should explicitly allow provider/emulator correction jumps to move the visible pin.',
 );
 assert.ok(
-  navigateSource.includes('const mapRendererUserLocation = destinationSearchMapFrozen') &&
-    navigateSource.includes(': (mapDisplayUserLocation ?? stableGpsMapLocation);'),
-  'MapRenderer should receive the route-snapped or stabilized display GPS coordinate, not raw GPS fallback churn.',
+  navigateSource.includes('const mapRendererUserLocation = resolveNavigateMapUserLocation({') &&
+    navigateSource.includes('rawLocation: stableGpsMapLocation,') &&
+    navigateSource.includes('locationAccessGranted: rawLocationAccessGranted,'),
+  'MapRenderer should receive the stabilized authorized raw GPS coordinate while canonical route progress remains separate.',
 );
 assert.ok(
     navigateSource.includes('destinationSearchMapOccluder') &&
@@ -367,6 +369,14 @@ assert.ok(
     mapRendererSource.includes("motionPriority !== 'cold'") &&
     mapRendererSource.includes('!webRendererCrashBlocked'),
   'MapRenderer should preserve standby for eligible secondary maps while sharing the tested surface policy.',
+);
+assert.ok(
+  navigateSource.includes(
+    'preserveWebViewWhenCold={activeNavigationRunning && !destinationSearchMapFrozen}',
+  ) &&
+    mapRendererSource.includes("motionPriority !== 'cold' || preserveWebViewWhenCold") &&
+    mapRendererSource.includes("if (motionPriority === 'cold') return;"),
+  'Unfocused active guidance should retain its primary WebView without continuing hidden GPS/overlay bridge work, avoiding a full Mapbox reconstruction on tab return.',
 );
 assert.ok(
   mapRendererSource.includes("motionPriority === 'cold'") &&

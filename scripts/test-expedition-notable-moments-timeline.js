@@ -94,7 +94,6 @@ for (const snippet of [
 }
 
 for (const todo of [
-  'TODO Expedition Timeline: link timeline rows to recap map callouts',
   'TODO Expedition Timeline: support exploded route annotations',
   'TODO Expedition Timeline: expose badge triggers',
   'TODO Expedition Timeline: add PDF timeline export',
@@ -116,6 +115,15 @@ for (const forbidden of [
   'formatElapsed',
 ]) {
   notIncludes(timelineSource, forbidden, `Timeline should not include forbidden behavior: ${forbidden}`);
+}
+
+for (const behavior of [
+  'selectedMomentId',
+  'onSelectMoment',
+  'accessibilityState={{ selected }}',
+  'onPress={onSelectMoment ? () => onSelectMoment(moment.id) : undefined}',
+]) {
+  includes(timelineSource, behavior, `Timeline should expose interactive map-selection behavior: ${behavior}`);
 }
 
 includes(packageSource, 'test:expedition-notable-moments-timeline', 'package.json should expose the timeline test.');

@@ -299,7 +299,9 @@ assert(
     dispatchCommandCenterSource.includes('handleConvoyLifecycleAction') &&
     dispatchCommandCenterSource.includes('convoyMembershipService.endConvoy') &&
     dispatchCommandCenterSource.includes('convoyMembershipService.leaveConvoy') &&
-    dispatchCommandCenterSource.includes('renderLiveStrip(false)') &&
+    !dispatchCommandCenterSource.includes('renderLiveStrip') &&
+    dispatchCommandCenterSource.includes('testID="dispatch-primary-actions"') &&
+    dispatchCommandCenterSource.includes('testID="dispatch-primary-workspace"') &&
     dispatchCommandCenterSource.includes('styles.feedPanel') &&
     !dispatchCommandCenterSource.includes('COMMAND SURFACE') &&
     !dispatchCommandCenterSource.includes('styles.feedHeader') &&
@@ -310,10 +312,10 @@ assert(
     dispatchCommandCenterSource.includes('handleEmergencyPingButtonPress') &&
     dispatchCommandCenterSource.includes('accessibilityLabel="Create recovery report"') &&
     dispatchCommandCenterSource.includes('showEmergencyOverlay={false}') &&
-    dispatchCommandCenterSource.includes('await loadConvoyLifecycleControl()') &&
+    dispatchCommandCenterSource.includes('loadConvoyLifecycleControl()') &&
     dispatchCommandCenterSource.includes('convoyLifecycleRevision={convoyLifecycleRevision}') &&
     dispatchCommandCenterSource.includes("presentation={isLandscapeDispatch ? 'signals' : 'feed'}"),
-  'Dispatch CAD screen should remove the redundant setup/team card and command-surface banner while keeping compact header actions, convoy lifecycle controls, emergency ping wiring, SYNC DISPATCH reconciliation, and the larger Convoy Command surface.',
+  'Dispatch CAD screen should remove redundant summary/setup surfaces while keeping compact header actions, convoy lifecycle controls, emergency ping wiring, background reconciliation, and the larger Convoy Command surface.',
 );
 assert(
   dispatchCommandCenterSource.includes('const hasDispatchConvoyContext = Boolean(activeConvoyControl?.convoyId)') &&

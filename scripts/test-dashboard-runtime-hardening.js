@@ -113,6 +113,150 @@ const standbyPresentation = selectors.selectDashboardExpeditionPresentation({
 assert.strictEqual(standbyPresentation.completedSummaryRecord.id, 'complete-1');
 assert.strictEqual(standbyPresentation.routeCompleted, true);
 
+const plannedRouteGeometry = [
+  { lat: 39.1, lng: -120.1, ele: 1600 },
+  { lat: 39.2, lng: -120.2, ele: 1900 },
+];
+const completedGuidanceRouteSummary = selectors.buildDashboardCompletedGuidanceRouteSummary({
+  routeProgress: {
+    guidanceSessionId: 'navigate-guidance-session-7',
+    activeRouteId: 'canonical-route-4',
+    routeLabel: 'Mendocino Traverse',
+    destinationLabel: 'Trail end',
+    totalDistance: 76,
+    completedMiles: 76,
+    source: 'trail-guidance',
+    lastUpdated: '2026-07-18T18:00:00.000Z',
+    updatedAt: '2026-07-18T18:00:00.000Z',
+    routePoints: plannedRouteGeometry,
+    progressPoints: [{ lat: 39.1, lng: -120.1 }],
+  },
+  routeProgressCompleted: true,
+  expeditionId: 'expedition-9',
+  gpsElevationFt: 6250,
+});
+assert.strictEqual(completedGuidanceRouteSummary.guidanceSessionId, 'navigate-guidance-session-7');
+assert.strictEqual(completedGuidanceRouteSummary.routeId, 'canonical-route-4');
+assert.strictEqual(completedGuidanceRouteSummary.expeditionId, 'expedition-9');
+assert.strictEqual(
+  completedGuidanceRouteSummary.id,
+  'navigate-guidance-session-7',
+  'A reusable route ID must not collapse separate completed guidance sessions into one trip record.',
+);
+assert.deepStrictEqual(completedGuidanceRouteSummary.plannedRouteGeometry, plannedRouteGeometry);
+assert.notStrictEqual(
+  completedGuidanceRouteSummary.plannedRouteGeometry,
+  plannedRouteGeometry,
+  'Dashboard completion payload must take an immutable snapshot of canonical route geometry.',
+);
+assert.strictEqual(
+  Object.prototype.hasOwnProperty.call(completedGuidanceRouteSummary, 'routeGeometry'),
+  false,
+  'Canonical planned geometry must not be mislabeled as a recorded GPS trace.',
+);
+assert.strictEqual(
+  Object.prototype.hasOwnProperty.call(completedGuidanceRouteSummary, 'progressPoints'),
+  false,
+  'Projected progress geometry must not be persisted as the recorded GPS trace.',
+);
+assert.strictEqual(
+  selectors.buildDashboardCompletedGuidanceRouteSummary({
+    routeProgress: completedGuidanceRouteSummary,
+    routeProgressCompleted: false,
+  }),
+  null,
+  'An incomplete route must not produce a completion payload.',
+);
+
+const mergedCompletionPresentation = selectors.selectDashboardExpeditionPresentation({
+  expeditionState: 'standby',
+  currentRecord: null,
+  retainedCompletedRecord: {
+    id: 'expedition-9',
+    state: 'complete',
+    expeditionName: 'Mendocino Expedition',
+    routeAssetId: 'route:canonical-route-4',
+    lifecycle: { identity: { guidanceSessionId: 'guidance:navigate-guidance-session-7' } },
+  },
+  latestCompletedLog: null,
+  completedGuidanceSummary: completedGuidanceRouteSummary,
+  routeProgressCompleted: true,
+});
+assert.strictEqual(mergedCompletionPresentation.completedSummaryRecord.id, 'expedition-9');
+assert.strictEqual(
+  mergedCompletionPresentation.completedSummaryRecord.guidanceSessionId,
+  'navigate-guidance-session-7',
+  'A retained Expedition completion should retain the matching Navigate guidance identity.',
+);
+assert.deepStrictEqual(
+  mergedCompletionPresentation.completedSummaryRecord.plannedRouteGeometry,
+  plannedRouteGeometry,
+  'A matching geometry-free Expedition completion should retain canonical route geometry from guidance.',
+);
+assert.strictEqual(
+  Object.prototype.hasOwnProperty.call(mergedCompletionPresentation.completedSummaryRecord, 'routeGeometry'),
+  false,
+  'Merging completion metadata must not relabel planned route geometry as a GPS trace.',
+);
+
+const mismatchedCompletionPresentation = selectors.selectDashboardExpeditionPresentation({
+  expeditionState: 'standby',
+  currentRecord: null,
+  retainedCompletedRecord: {
+    id: 'unrelated-expedition',
+    state: 'complete',
+    routeAssetId: 'route:other-route',
+  },
+  latestCompletedLog: null,
+  completedGuidanceSummary: completedGuidanceRouteSummary,
+  routeProgressCompleted: true,
+});
+assert.strictEqual(
+  mismatchedCompletionPresentation.completedSummaryRecord.plannedRouteGeometry,
+  undefined,
+  'Guidance geometry must not be attached to a completed Expedition with a conflicting route identity.',
+);
+
+const ambiguousCompletionPresentation = selectors.selectDashboardExpeditionPresentation({
+  expeditionState: 'standby',
+  currentRecord: null,
+  retainedCompletedRecord: {
+    id: 'opaque-completion-without-linkage',
+    state: 'complete',
+  },
+  latestCompletedLog: null,
+  completedGuidanceSummary: completedGuidanceRouteSummary,
+  routeProgressCompleted: true,
+});
+assert.strictEqual(
+  ambiguousCompletionPresentation.completedSummaryRecord.plannedRouteGeometry,
+  undefined,
+  'Absence of an identity conflict is not proof that guidance geometry belongs to a completed Expedition.',
+);
+
+const lateGeometryRenderBase = {
+  expeditionRouteCompleted: true,
+  completedExpeditionRecord: {
+    id: 'expedition-9',
+    expeditionId: 'expedition-9',
+    guidanceSessionId: 'navigate-guidance-session-7',
+    routeId: 'canonical-route-4',
+    state: 'complete',
+    updatedAt: '2026-07-18T18:00:00.000Z',
+  },
+};
+assert.notStrictEqual(
+  selectors.selectDashboardExpeditionHubRenderKey(lateGeometryRenderBase),
+  selectors.selectDashboardExpeditionHubRenderKey({
+    ...lateGeometryRenderBase,
+    completedExpeditionRecord: {
+      ...lateGeometryRenderBase.completedExpeditionRecord,
+      plannedRouteGeometry,
+    },
+  }),
+  'Late geometry enrichment must invalidate the mounted Expedition Hub render key.',
+);
+
 assert.strictEqual(selectors.selectDashboardGeofenceEnabled('vehicle-1', 'standby'), true);
 assert.strictEqual(selectors.selectDashboardGeofenceEnabled('vehicle-1', 'active'), true);
 assert.strictEqual(selectors.selectDashboardGeofenceEnabled('vehicle-1', 'paused'), false);

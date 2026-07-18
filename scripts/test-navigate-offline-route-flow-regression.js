@@ -41,8 +41,8 @@ assertIncludes(
     'const { showToast, user, operatorInfo } = useApp();',
     'useThrottledGPS',
     '<GPSStatusOverlay',
-    'gpsStatus={gps.gpsStatus}',
-    'hasFix={gps.hasFix}',
+    'gpsStatus={gps.rawGPS.gpsStatus}',
+    'hasFix={gps.rawGPS.hasFix}',
   ],
   'Navigate should still hydrate logged-in user context and render GPS/current-location lock state.',
 );
@@ -294,7 +294,9 @@ assertIncludes(
 assertIncludes(
   navigate,
   [
-    'currentRouteContext: route',
+    'buildNavigationOfflineReadinessContext({',
+    'currentRouteContext: navigationOfflineContext.currentRouteContext',
+    'runCacheManifestOwnerMatches: navigationOfflineContext.activeRunMatchesContext',
     'downloadedRoutes: offlineRouteReadinessState.routes',
     'tileSyncJobs: offlineTileSyncSnapshot.jobs',
     'buildRouteGuidanceReadinessViewModel({',

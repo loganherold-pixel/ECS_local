@@ -57,23 +57,21 @@ assert.ok(
   'Operational Delta UI must not expose provider secrets or raw responses.',
 );
 
-[
-  'buildOperationalSnapshotFromReadiness',
-  'buildOperationalSnapshotFromDepartureAudit',
-  '<OperationalDeltaBriefCard',
-  'currentSnapshot={operationalDeltaSnapshot}',
-  'legacyDepartureBaseline={legacyOperationalDepartureBaseline}',
-  'departureDeltaBriefEnabled ? (',
-  'expeditionReadinessStore.getResolvedInput()',
-].forEach((fragment) => includes(commandBrief, fragment));
-
 assert.ok(
-  !commandBrief.includes('departureDeltaBriefEnabled ? <DepartureDeltaBriefPanel result={departureDeltaBrief} /> : null'),
-  'Command Brief must not render the superseded section-heavy Departure Delta panel.',
+  !commandBrief.includes('<OperationalDeltaBriefCard'),
+  'Compact Command Brief must not mount the additional Operational Delta card.',
+);
+assert.ok(
+  !commandBrief.includes('buildOperationalSnapshotFromReadiness'),
+  'Compact Command Brief must not calculate an unmounted Operational Delta presentation.',
+);
+assert.ok(
+  commandBrief.includes('<DepartureAuditNarrative'),
+  'Command Brief should use the requested concise Departure Audit narrative instead.',
 );
 assert.ok(
   dashboard.includes('<CommandBriefScreen embedded />'),
-  'Operational Delta should remain inside the existing Dashboard ECS Brief layout.',
+  'Dashboard should continue mounting the canonical compact Command Brief.',
 );
 
 [

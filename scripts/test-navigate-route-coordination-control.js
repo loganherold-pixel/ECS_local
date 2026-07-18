@@ -62,6 +62,11 @@ assert.strictEqual(
   'A valid canonical route should enable Route Coordination without a convoy.',
 );
 assert.strictEqual(validSolo.disabledReason, null);
+assert.strictEqual(
+  validSolo.badgeLabel,
+  'SOLO',
+  'A valid personal route should visibly identify Route Coordination as a solo-capable action.',
+);
 assert.match(
   validSolo.subtitle,
   /personal|mission command|coordinate/i,
@@ -113,6 +118,10 @@ assert.match(
   'An in-flight handoff should expose a terminally understandable busy reason.',
 );
 
+const validConvoy = resolve({ hasActiveConvoy: true });
+assert.strictEqual(validConvoy.enabled, true);
+assert.strictEqual(validConvoy.badgeLabel, 'CONVOY');
+
 const navigateSource = fs.readFileSync(navigatePath, 'utf8');
 assert.match(
   navigateSource,
@@ -137,6 +146,11 @@ assert.match(
   cardSource,
   /disabled=\{!routeCoordinationControl\.enabled\}/,
   'Route Coordination should disable the mounted action when the resolver rejects it.',
+);
+assert.match(
+  cardSource,
+  /badge=\{routeCoordinationControl\.badgeLabel\}/,
+  'The mounted action should expose whether coordination is personal, convoy-backed, or waiting on route state.',
 );
 
 const handlerStart = navigateSource.indexOf('const handleOpenRouteMissionCommand');

@@ -1,3 +1,5 @@
+import type { ActiveRouteProgressSnapshot } from '../activeRouteProgress';
+
 type DashboardWidgetData = Record<string, any> | null | undefined;
 
 export type DashboardWidgetRenderSnapshot = {
@@ -39,6 +41,92 @@ type ExpeditionRecordLike = {
   state?: string | null;
   endTime?: string | null;
 } | null;
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function nestedValue(value: unknown, ...path: string[]): Record<string, unknown> | null {
+  let current = objectValue(value);
+  for (const key of path) {
+    current = current ? objectValue(current[key]) : null;
+    if (!current) return null;
+  }
+  return current;
+}
+
+function cleanIdentity(value: unknown, prefixes: string[] = []): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  let result = value.trim();
+  for (const prefix of prefixes) {
+    if (result.startsWith(`${prefix}:`)) result = result.slice(prefix.length + 1);
+  }
+  return result || null;
+}
+
+function completedRecordWithGuidanceGeometry(primary: unknown, guidance: unknown): unknown {
+  const primaryRecord = objectValue(primary);
+  const guidanceRecord = objectValue(guidance);
+  if (!primaryRecord) return guidance;
+  if (!guidanceRecord) return primary;
+
+  const primaryLifecycleIdentity = nestedValue(primaryRecord, 'lifecycle', 'identity');
+  const primaryGuidanceId = cleanIdentity(
+    primaryRecord.guidanceSessionId ?? primaryLifecycleIdentity?.guidanceSessionId,
+    ['guidance'],
+  );
+  const guidanceId = cleanIdentity(guidanceRecord.guidanceSessionId, ['guidance']);
+  const guidanceIdentityMatches = Boolean(
+    primaryGuidanceId && guidanceId && primaryGuidanceId === guidanceId,
+  );
+  if (primaryGuidanceId && guidanceId && !guidanceIdentityMatches) return primary;
+
+  const primaryRouteIds = [
+    primaryRecord.routeId,
+    primaryRecord.routeAssetId,
+    primaryLifecycleIdentity?.routeAssetId,
+  ]
+    .map((value) => cleanIdentity(value, ['route']))
+    .filter((value): value is string => !!value);
+  const guidanceRouteId = cleanIdentity(guidanceRecord.routeId, ['route']);
+  const routeIdentityMatches = Boolean(
+    guidanceRouteId && primaryRouteIds.includes(guidanceRouteId),
+  );
+  if (!guidanceIdentityMatches && guidanceRouteId && primaryRouteIds.length > 0 && !routeIdentityMatches) {
+    return primary;
+  }
+
+  const guidanceExpeditionId = cleanIdentity(guidanceRecord.expeditionId, ['expedition']);
+  const primaryExpeditionIds = [
+    primaryRecord.expeditionId,
+    primaryLifecycleIdentity?.expeditionId,
+    primaryRecord.id,
+  ]
+    .map((value) => cleanIdentity(value, ['expedition']))
+    .filter((value): value is string => !!value);
+  const expeditionIdentityMatches = Boolean(
+    guidanceExpeditionId && primaryExpeditionIds.includes(guidanceExpeditionId),
+  );
+  if (!guidanceIdentityMatches && !routeIdentityMatches && !expeditionIdentityMatches) return primary;
+
+  const primaryPlannedGeometry = Array.isArray(primaryRecord.plannedRouteGeometry)
+    ? primaryRecord.plannedRouteGeometry
+    : [];
+  const guidancePlannedGeometry = Array.isArray(guidanceRecord.plannedRouteGeometry)
+    ? guidanceRecord.plannedRouteGeometry
+    : [];
+
+  return {
+    ...guidanceRecord,
+    ...primaryRecord,
+    expeditionId: cleanIdentity(primaryRecord.expeditionId) ?? cleanIdentity(primaryRecord.id),
+    guidanceSessionId: primaryGuidanceId ?? guidanceId,
+    routeId: cleanIdentity(primaryRecord.routeId) ?? cleanIdentity(guidanceRecord.routeId),
+    plannedRouteGeometry: primaryPlannedGeometry.length >= 2
+      ? primaryPlannedGeometry
+      : guidancePlannedGeometry,
+  };
+}
 
 type DashboardAssessmentContextLike = {
   expeditionId?: string | null;
@@ -86,12 +174,44 @@ function arraySignature(values: unknown, limit = 8): string {
 function completedExpeditionSignature(value: unknown): string {
   if (!value || typeof value !== 'object') return '';
   const record = value as Record<string, unknown>;
+  const lifecycleIdentity = nestedValue(record, 'lifecycle', 'identity');
+  const geometrySignature = (geometry: unknown): string => {
+    if (!Array.isArray(geometry) || geometry.length === 0) return '0';
+    const coordinate = (point: unknown): string => {
+      const candidate = objectValue(point);
+      const lat = finite(candidate?.lat ?? candidate?.latitude);
+      const lng = finite(candidate?.lng ?? candidate?.lon ?? candidate?.longitude);
+      return lat == null || lng == null ? 'invalid' : `${lat.toFixed(5)},${lng.toFixed(5)}`;
+    };
+    let elevationCount = 0;
+    let minElevation = Number.POSITIVE_INFINITY;
+    let maxElevation = Number.NEGATIVE_INFINITY;
+    for (const point of geometry) {
+      const candidate = objectValue(point);
+      const elevation = finite(candidate?.elevationFt ?? candidate?.elevationFeet ?? candidate?.ele);
+      if (elevation == null) continue;
+      elevationCount += 1;
+      minElevation = Math.min(minElevation, elevation);
+      maxElevation = Math.max(maxElevation, elevation);
+    }
+    const middleIndex = Math.floor((geometry.length - 1) / 2);
+    const elevationSignature = elevationCount > 0
+      ? `${elevationCount}:${minElevation.toFixed(1)}:${maxElevation.toFixed(1)}`
+      : '0';
+    return `${geometry.length}:${coordinate(geometry[0])}:${coordinate(geometry[middleIndex])}:${coordinate(geometry[geometry.length - 1])}:elev:${elevationSignature}`;
+  };
   return [
     record.id ?? '',
+    record.expeditionId ?? lifecycleIdentity?.expeditionId ?? '',
+    record.guidanceSessionId ?? lifecycleIdentity?.guidanceSessionId ?? '',
+    record.routeId ?? record.routeAssetId ?? lifecycleIdentity?.routeAssetId ?? '',
     record.state ?? '',
     record.endTime ?? '',
+    record.updatedAt ?? record.lastUpdatedAt ?? '',
     record.distance ?? record.totalDistanceMiles ?? record.completedMiles ?? '',
     record.duration ?? record.totalDurationSeconds ?? record.durationSeconds ?? '',
+    geometrySignature(record.routeGeometry ?? record.recordedRouteGeometry ?? record.gpsTrace),
+    geometrySignature(record.plannedRouteGeometry ?? record.routePoints ?? record.canonicalRouteGeometry),
   ].join(':');
 }
 
@@ -357,18 +477,90 @@ export function selectDashboardExpeditionPresentation(input: {
     };
   }
 
+  const primaryCompletedRecord =
+    input.retainedCompletedRecord ??
+    (currentComplete ? input.currentRecord : null) ??
+    (input.expeditionState === 'standby'
+      ? input.latestCompletedLog ?? input.completedGuidanceSummary
+      : input.completedGuidanceSummary);
+
   return {
-    completedSummaryRecord:
-      input.retainedCompletedRecord ??
-      (currentComplete ? input.currentRecord : null) ??
-      (input.expeditionState === 'standby'
-        ? input.latestCompletedLog ?? input.completedGuidanceSummary
-        : input.completedGuidanceSummary),
+    completedSummaryRecord: input.routeProgressCompleted
+      ? completedRecordWithGuidanceGeometry(primaryCompletedRecord, input.completedGuidanceSummary)
+      : primaryCompletedRecord,
     routeCompleted:
       currentComplete ||
       Boolean(input.retainedCompletedRecord) ||
       input.routeProgressCompleted ||
       (input.expeditionState === 'standby' && Boolean(input.latestCompletedLog)),
+  };
+}
+
+export type DashboardCompletedGuidanceRouteSummary = {
+  id: string;
+  expeditionId: string | null;
+  guidanceSessionId: string | null;
+  routeId: string | null;
+  state: 'complete';
+  expeditionName?: string;
+  destination?: string;
+  totalDistanceMiles: number | null;
+  completedMiles: number | null;
+  maxElevationFt: number | null;
+  durationSeconds: null;
+  source: string;
+  updatedAt: string | null;
+  /** Canonical route plan. This is intentionally not the recorded GPS trace. */
+  plannedRouteGeometry: NonNullable<ActiveRouteProgressSnapshot['routePoints']>;
+};
+
+function cleanDashboardIdentity(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function firstFiniteDashboardNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+export function buildDashboardCompletedGuidanceRouteSummary(input: {
+  routeProgress: ActiveRouteProgressSnapshot | null | undefined;
+  routeProgressCompleted: boolean;
+  expeditionId?: string | null;
+  gpsElevationFt?: number | null;
+}): DashboardCompletedGuidanceRouteSummary | null {
+  const progress = input.routeProgress;
+  if (!progress || !input.routeProgressCompleted) return null;
+
+  const guidanceSessionId = cleanDashboardIdentity(progress.guidanceSessionId);
+  const routeId = cleanDashboardIdentity(progress.activeRouteId);
+  const expeditionId = cleanDashboardIdentity(input.expeditionId);
+  const routeLabel = cleanDashboardIdentity(progress.routeLabel);
+  const plannedRouteGeometry = (progress.routePoints ?? []).map((point) => ({ ...point }));
+
+  return {
+    id: guidanceSessionId ?? expeditionId ?? routeId ?? routeLabel ?? 'completed-guidance-route',
+    expeditionId,
+    guidanceSessionId,
+    routeId,
+    state: 'complete',
+    expeditionName: routeLabel ?? undefined,
+    destination: cleanDashboardIdentity(progress.destinationLabel) ?? undefined,
+    totalDistanceMiles: firstFiniteDashboardNumber(
+      progress.totalDistance,
+      progress.completedMiles,
+    ),
+    completedMiles: firstFiniteDashboardNumber(
+      progress.completedMiles,
+      progress.totalDistance,
+    ),
+    maxElevationFt: firstFiniteDashboardNumber(input.gpsElevationFt),
+    durationSeconds: null,
+    source: progress.source ?? 'active-route-progress',
+    updatedAt: progress.lastUpdated ?? progress.updatedAt ?? null,
+    plannedRouteGeometry,
   };
 }
 

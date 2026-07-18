@@ -54,6 +54,8 @@ export type ActiveRouteProgress = {
 };
 
 export type ActiveRouteProgressSnapshot = ActiveRouteProgress & {
+  /** Stable guidance attempt identity; distinct from the reusable route asset id. */
+  guidanceSessionId: string | null;
   source: RouteProgressSourceKind;
   hasRoute: boolean;
   isActive: boolean;
@@ -291,6 +293,7 @@ export function getNavigateSessionProgressSnapshot(
   const routeDestination = navigateSession.routePoints[navigateSession.routePoints.length - 1] ?? null;
 
   return withContractFields({
+    guidanceSessionId: navigateSession.sessionId,
     source: getNavigateRouteProgressSource(navigateSession),
     routeId: navigateSession.routeId ?? navigateSession.sessionId ?? null,
     hasRoute: true,
@@ -528,6 +531,7 @@ export function getRoadProgressSnapshot(
   const destinationPoint = routePoints[routePoints.length - 1] ?? null;
 
   return withContractFields({
+    guidanceSessionId: session.sessionId,
     source: 'road-guidance',
     routeId: session.sessionId ?? session.destination?.id ?? null,
     hasRoute: true,
@@ -635,6 +639,7 @@ export function getTrailProgressSnapshot(
   const destinationPoint = routePoints[routePoints.length - 1] ?? null;
 
   return withContractFields({
+    guidanceSessionId: session.sessionId,
     source: 'trail-guidance',
     routeId: session.sessionId ?? session.payload?.id ?? null,
     hasRoute: true,
@@ -823,6 +828,7 @@ export function getImportedRouteProgressSnapshot(params: {
   const destinationPoint = routePoints[routePoints.length - 1] ?? null;
 
   return withContractFields({
+    guidanceSessionId: null,
     source: 'imported-route',
     routeId: activeRoute.id,
     hasRoute: true,

@@ -174,13 +174,16 @@ assert.ok(navigateSource.includes('mergeReadinessCampCandidateSets'), 'Navigate 
 assert.ok(navigateSource.includes("campScoutAreaMode === 'results'"), 'Dispersed camping scan/filter state should affect readiness context.');
 
 const briefSource = read('components', 'brief', 'CommandBriefScreen.tsx');
-assert.ok(briefSource.includes('CampOpsBriefSection'), 'Command Brief should render a CampOps readiness section.');
-assert.ok(briefSource.includes('Legal Access Confidence'), 'Command Brief CampOps section should show Legal Access Confidence.');
-assert.ok(briefSource.includes('official agency rules'), 'Command Brief should recommend official agency verification.');
+const briefPresentationSource = read('lib', 'brief', 'commandBriefPresentation.ts');
+assert.ok(!briefSource.includes('CampOpsBriefSection'), 'Compact Command Brief should not duplicate a dedicated CampOps section.');
+assert.ok(briefSource.includes('buildCommandBriefPresentation'), 'Command Brief should adapt the full readiness assessment into its narrative audit.');
+assert.ok(briefPresentationSource.includes('explanation.blockers'), 'Departure Audit narrative should retain CampOps blockers from deterministic readiness.');
+assert.ok(briefPresentationSource.includes('explanation.recommendedActions'), 'Departure Audit narrative should retain grounded CampOps improvements.');
 
 const combinedCopy = [
   read('lib', 'readiness', 'campReadinessAdapter.ts'),
   read('lib', 'readiness', 'expeditionReadinessScoring.ts'),
+  briefPresentationSource,
   briefSource,
   navigateSource,
 ].join('\n');

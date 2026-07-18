@@ -145,6 +145,8 @@ export interface OfflineCachedRoute {
 
 export interface CacheOfflineRouteInput {
   run: ECSRun;
+  /** Canonical/provider route identities that refer to this same route package. */
+  routeIdAliases?: Array<string | null | undefined>;
   health?: RunHealthResult | null;
   segmentRiskAnalysis?: SegmentRiskAnalysisSnapshot;
   offlineTileRegionId?: string | null;
@@ -411,13 +413,21 @@ function includesRouteAlias(route: OfflineCachedRoute, id: string): boolean {
   );
 }
 
-function mergeRouteAliases(existing: OfflineCachedRoute | null, runId: string): string[] {
+function mergeRouteAliases(
+  existing: OfflineCachedRoute | null,
+  runId: string,
+  requestedAliases: Array<string | null | undefined> = [],
+): string[] {
   const aliases = new Set<string>();
   if (existing?.sourceRouteId) aliases.add(existing.sourceRouteId);
   if (Array.isArray(existing?.routeIdAliases)) {
     for (const alias of existing.routeIdAliases) aliases.add(alias);
   }
   aliases.add(runId);
+  requestedAliases.forEach((value) => {
+    const alias = typeof value === 'string' ? value.trim() : '';
+    if (alias) aliases.add(alias);
+  });
   return Array.from(aliases);
 }
 
@@ -703,7 +713,7 @@ export async function cacheOfflineRoute(input: CacheOfflineRouteInput): Promise<
     source: normalizeSource(run.source),
     sourceRouteId: run.id,
     stableRouteKey,
-    routeIdAliases: mergeRouteAliases(existing, run.id),
+    routeIdAliases: mergeRouteAliases(existing, run.id, input.routeIdAliases),
     name: run.title,
     createdAt: existing?.createdAt ?? cachedAt,
     cachedAt,

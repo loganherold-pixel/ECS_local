@@ -201,7 +201,9 @@ const offlineCacheOuterScrollCount = (
 assert(
   offlineCacheOuterScrollCount === 1 &&
     offlineCachePopupSource.includes('style={styles.mapPopupScroll}') &&
-    offlineCachePopupSource.includes('contentContainerStyle={styles.mapPopupScrollContent}'),
+    offlineCachePopupSource.includes('contentContainerStyle={styles.offlineCachePopupScrollContent}') &&
+    offlineCachePopupSource.includes('nestedScrollEnabled') &&
+    offlineCachePopupSource.includes('testID="navigate-offline-cache-scroll"'),
   `Mounted Offline Cache should have exactly one outer ScrollView using the shared popup layout; found ${offlineCacheOuterScrollCount}.`,
 );
 
@@ -212,13 +214,12 @@ assert(
 );
 
 assert(
-  offlineCacheEmbeddedSource.includes('renderDownloadedSyncsSection(true, false)') &&
-    offlineCacheModalSource.includes('scrollEnabled={scrollEnabled}') &&
-    offlineCacheModalSource.includes('nestedScrollEnabled={scrollEnabled}') &&
-    offlineCacheModalSource.includes(
-      'compact && scrollEnabled && downloadedSyncCards.length > 1 && styles.downloadedSyncsListScrollable',
-    ),
-  'Embedded Downloaded Syncs should disable its internal scroll/max-height cap and grow naturally inside the parent popup ScrollView.',
+  offlineCacheEmbeddedSource.includes('renderDownloadedSyncsSection(true)') &&
+    offlineCacheModalSource.includes('const renderDownloadedSyncsSection = useCallback((compact = false) => (') &&
+    offlineCacheModalSource.includes('<View style={styles.downloadedSyncsList}>') &&
+    !offlineCacheModalSource.includes('scrollEnabled={scrollEnabled}') &&
+    !offlineCacheModalSource.includes('styles.downloadedSyncsListScrollable'),
+  'Downloaded Syncs should use a plain View so its containing sheet owns every vertical gesture and the list grows naturally.',
 );
 
 assert(
@@ -261,14 +262,14 @@ assert(
 );
 
 assert(
-  source.includes('const refreshSavedRouteAssets = useCallback(() => {') &&
-    source.includes('setSavedRoutesRefreshKey((key) => key + 1);') &&
-    source.includes('const unsubscribeRoutes = routeStore.subscribe(refreshSavedRouteAssets);') &&
+  source.includes('const savedRouteAssetInventory = useSyncExternalStore(') &&
+    source.includes('subscribeSavedRouteAssetInventory,') &&
+    source.includes('getSavedRouteAssetInventorySnapshot,') &&
     source.includes('const unsubscribeRuns = runStore.subscribe(loadRuns);') &&
-    source.includes('refreshSavedRouteAssets();') &&
-    source.includes('[refreshSavedRouteAssets]') &&
-    toolsPopupSource.includes('subtitle={formatSavedRouteAssetCountSummary(savedRouteAssetCounts)}'),
-  'Route Command Center preview should react to route/run changes and format the same complete inventory shown by the detail popup.',
+    toolsPopupSource.includes('subtitle={savedRouteAssetInventory.summary}') &&
+    source.includes('const savedRouteAssets = savedRouteAssetInventory.assets;') &&
+    source.includes('const savedRouteAssetCounts = savedRouteAssetInventory.counts;'),
+  'Route Command Center preview and detail should subscribe to one complete reactive inventory snapshot.',
 );
 
 const mapPresentationIndex = requireIndex(toolsPopupSource, 'MAP PRESENTATION', 'Tools should put the map presentation selector first.');

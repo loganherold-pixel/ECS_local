@@ -2,6 +2,11 @@ import type { CacheReadinessSnapshot } from './offlineCacheAwarenessEngine';
 import type { OfflineCachedRoute } from './offlineRouteCacheService';
 import type { OfflineExpeditionReadiness } from './offlineExpeditionDbTypes';
 import type { RunOfflineCacheManifest } from './runStore';
+import {
+  isLegacyOfflinePrepTacticalTileRecord,
+  normalizeMapStyleKey,
+  resolveOfflineTileStyleKey,
+} from './mapStyleIdentity';
 import { getWeatherFreshness, type WeatherFreshnessInput } from './weatherFreshness';
 
 export type OfflineReadinessLevel = 'ready' | 'partial' | 'not_ready' | 'unknown';
@@ -20,6 +25,8 @@ export interface OfflineReadinessInput {
   cacheSnapshot?: CacheReadinessSnapshot | null;
   offlineRoute?: OfflineCachedRoute | null;
   runCacheManifest?: RunOfflineCacheManifest | null;
+  /** Caller-proven active-run ownership for legacy manifests without route IDs. */
+  runCacheManifestOwnerMatches?: boolean | null;
   expeditionReadiness?: OfflineExpeditionReadiness | null;
   weatherSnapshot?: WeatherFreshnessInput | null;
   closureAccessSnapshot?: {
@@ -53,6 +60,133 @@ export interface OfflineReadinessRouteContext {
   geometry?: OfflineReadinessCoordinate[] | null;
   mapStyle?: string | null;
   requiredLayers?: string[] | null;
+}
+
+export interface NavigationOfflineReadinessRouteInput {
+  id: string;
+  /** Stable cached/catalog identity when the provider creates a transient preview ID. */
+  canonicalRouteId?: string | null;
+  destination: {
+    coordinate: OfflineReadinessCoordinate;
+    title?: string | null;
+  };
+  geometry: OfflineReadinessCoordinate[];
+}
+
+export interface NavigationOfflineReadinessPayloadInput {
+  id: string;
+  title?: string | null;
+  trailGeometry?: OfflineReadinessCoordinate[] | null;
+  trailGeometrySegments?: OfflineReadinessCoordinate[][] | null;
+}
+
+export interface NavigationOfflineReadinessRunInput {
+  id: string;
+  title?: string | null;
+  sourceRouteId?: string | null;
+  sourceAssetId?: string | null;
+  geometry?: OfflineReadinessCoordinate[] | null;
+}
+
+export interface NavigationOfflineReadinessContextResult {
+  currentRouteContext: OfflineReadinessRouteContext | null;
+  /** Whether the active run owns the displayed context and may supply its cache manifest. */
+  activeRunMatchesContext: boolean;
+}
+
+export function selectNavigationOfflineReadinessPayload<T>(
+  activeTrailPayload: T | null | undefined,
+  explorePayload: T | null | undefined,
+): T | null {
+  return activeTrailPayload ?? explorePayload ?? null;
+}
+
+function hasUsableReadinessGeometry(
+  geometry: OfflineReadinessCoordinate[] | null | undefined,
+): geometry is OfflineReadinessCoordinate[] {
+  return Array.isArray(geometry) && geometry.length > 1;
+}
+
+/**
+ * Adapts mounted Navigate route ownership into the route-specific offline
+ * presentation contract. Disconnected preview segments deliberately omit a
+ * destination because their array order does not prove a canonical trail end.
+ */
+export function buildNavigationOfflineReadinessContext(input: {
+  roadRoute?: NavigationOfflineReadinessRouteInput | null;
+  navigationPayload?: NavigationOfflineReadinessPayloadInput | null;
+  activeRun?: NavigationOfflineReadinessRunInput | null;
+  mapStyle?: string | null;
+}): NavigationOfflineReadinessContextResult {
+  const payload = input.navigationPayload ?? null;
+  const activeRun = input.activeRun ?? null;
+  const activeRunMatchesPayload = Boolean(
+    activeRun && (
+      !payload ||
+      activeRun.id === payload.id ||
+      activeRun.sourceRouteId === payload.id ||
+      activeRun.sourceAssetId === payload.id
+    ),
+  );
+
+  if (input.roadRoute) {
+    const routeId = payload?.id ?? input.roadRoute.canonicalRouteId ?? input.roadRoute.id;
+    const activeRunMatchesContext = Boolean(
+      activeRun && (
+        activeRunMatchesPayload && Boolean(payload) ||
+        activeRun.id === routeId ||
+        activeRun.sourceRouteId === routeId ||
+        activeRun.sourceAssetId === routeId
+      ),
+    );
+    return {
+      currentRouteContext: {
+        routeId,
+        destination: {
+          ...input.roadRoute.destination.coordinate,
+          label: input.roadRoute.destination.title ?? null,
+        },
+        geometry: input.roadRoute.geometry,
+        mapStyle: input.mapStyle ?? null,
+        requiredLayers: ['route-corridor', 'road-preview'],
+      },
+      activeRunMatchesContext,
+    };
+  }
+
+  const payloadGeometry = hasUsableReadinessGeometry(payload?.trailGeometry)
+    ? payload.trailGeometry
+    : null;
+  const runGeometry = activeRunMatchesPayload && hasUsableReadinessGeometry(activeRun?.geometry)
+    ? activeRun.geometry
+    : null;
+  const continuousGeometry = payloadGeometry ?? runGeometry;
+  const segmentOnlyGeometry = continuousGeometry
+    ? null
+    : [...(payload?.trailGeometrySegments ?? [])]
+        .reverse()
+        .find(hasUsableReadinessGeometry) ?? null;
+  const geometry = continuousGeometry ?? segmentOnlyGeometry;
+  if (!geometry) {
+    return { currentRouteContext: null, activeRunMatchesContext: false };
+  }
+
+  const destination = continuousGeometry
+    ? {
+        ...continuousGeometry[continuousGeometry.length - 1],
+        label: payload?.title ?? activeRun?.title ?? null,
+      }
+    : null;
+  return {
+    currentRouteContext: {
+      routeId: payload?.id ?? activeRun?.id ?? null,
+      destination,
+      geometry,
+      mapStyle: input.mapStyle ?? null,
+      requiredLayers: ['route-corridor'],
+    },
+    activeRunMatchesContext: activeRunMatchesPayload,
+  };
 }
 
 export interface OfflineReadinessTileRegion {
@@ -137,6 +271,15 @@ function routeIntentDestination(intent: unknown): OfflineReadinessCoordinate | n
   return getCoordinate(getRecord(intent)?.destination);
 }
 
+function routeIntentRouteIds(intent: unknown): string[] {
+  const readinessSnapshot = getRecord(getRecord(intent)?.readinessSnapshot);
+  const offlinePrepManifest = getRecord(readinessSnapshot?.offlinePrepManifest);
+  return dedupe([
+    getString(offlinePrepManifest?.routeId),
+    getString(offlinePrepManifest?.routeAssetId),
+  ]);
+}
+
 function metersBetween(a: OfflineReadinessCoordinate, b: OfflineReadinessCoordinate): number {
   const earthRadiusMeters = 6_371_000;
   const toRadians = (value: number) => (value * Math.PI) / 180;
@@ -163,7 +306,8 @@ function routeIdMatches(currentRouteId: string | null | undefined, route: Offlin
   return (
     route.id === currentRouteId ||
     route.sourceRouteId === currentRouteId ||
-    (Array.isArray(route.routeIdAliases) && route.routeIdAliases.includes(currentRouteId))
+    (Array.isArray(route.routeIdAliases) && route.routeIdAliases.includes(currentRouteId)) ||
+    routeIntentRouteIds(route.routeIntent).includes(currentRouteId)
   );
 }
 
@@ -180,17 +324,64 @@ function routeContextMatchesIntent(
   intent: unknown,
 ): boolean {
   if (!current) return false;
+  if (current.routeId) return routeIntentRouteIds(intent).includes(current.routeId);
   return destinationMatches(current, routeIntentDestination(intent));
+}
+
+function mapStylesDiffer(currentStyle: string | null | undefined, cachedStyle: string | null | undefined): boolean {
+  if (!currentStyle || !cachedStyle) return false;
+  const current = normalizeMapStyleKey(currentStyle);
+  const cached = normalizeMapStyleKey(cachedStyle);
+  if (current && cached) return current !== cached;
+  return currentStyle.trim().toLowerCase() !== cachedStyle.trim().toLowerCase();
+}
+
+function mapStyleLabel(style: string): string {
+  return (normalizeMapStyleKey(style) ?? style.trim()).toUpperCase();
 }
 
 function normalizeLayerSet(values: string[] | null | undefined): Set<string> {
   return new Set((values ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean));
 }
 
-function routeIntentLayerSet(route: OfflineCachedRoute, region?: OfflineReadinessTileRegion | null): Set<string> {
-  const layers = normalizeLayerSet(route.routeIntent?.mapContext?.layerContext ?? null);
+function offlineIntentLayerSet(intent: unknown, region?: OfflineReadinessTileRegion | null): Set<string> {
+  const mapContext = getRecord(getRecord(intent)?.mapContext);
+  const layers = normalizeLayerSet(getStringArray(mapContext?.layerContext));
   if (region?.sourceType === 'route-corridor' || region?.syncType === 'route') layers.add('route-corridor');
+  if (isLegacyOfflinePrepTacticalTileRecord(region?.styleKey, region?.routeIntent ?? intent)) {
+    // Legacy Offline Prep cached the same route corridor used by preview but
+    // predated the explicit road-preview layer declaration.
+    layers.add('road-preview');
+  }
   return layers;
+}
+
+function routeIntentLayerSet(route: OfflineCachedRoute, region?: OfflineReadinessTileRegion | null): Set<string> {
+  return offlineIntentLayerSet(route.routeIntent, region);
+}
+
+function routeIntentUsesCriticalSegmentFallback(intent: unknown): boolean {
+  const record = getRecord(intent);
+  const readinessSnapshot = getRecord(record?.readinessSnapshot);
+  if (getString(readinessSnapshot?.offlinePrepFallbackFor) === 'full_route_map_limit') return true;
+
+  const layerContext = getStringArray(getRecord(record?.mapContext)?.layerContext)
+    .map((layer) => layer.toLowerCase());
+  if (layerContext.includes('critical_offline_segments')) return true;
+
+  const offlinePrepManifest = getRecord(readinessSnapshot?.offlinePrepManifest);
+  const items = Array.isArray(offlinePrepManifest?.items) ? offlinePrepManifest.items : [];
+  const fullRouteTooLarge = items.some((item) => {
+    const itemRecord = getRecord(item);
+    return itemRecord?.type === 'offline_map' &&
+      getRecord(itemRecord.metadata)?.fullRouteTooLarge === true;
+  });
+  const hasCriticalSegments = items.some((item) => getRecord(item)?.type === 'critical_offline_segments');
+  return fullRouteTooLarge && hasCriticalSegments;
+}
+
+function routeSyncUsesCriticalSegmentFallback(...intents: unknown[]): boolean {
+  return intents.some(routeIntentUsesCriticalSegmentFallback);
 }
 
 function offlineRouteRegionIds(route: OfflineCachedRoute | null | undefined): string[] {
@@ -215,6 +406,29 @@ function requiredRegionsComplete(
 
 function routeIntentStyleKey(intent: unknown): string | null {
   return getString(getRecord(getRecord(intent)?.mapContext)?.styleKey);
+}
+
+function physicalRegionStyleKey(
+  region: OfflineReadinessTileRegion | null | undefined,
+  fallbackIntent?: unknown,
+): string | null {
+  const styleKey = getString(region?.styleKey) ?? routeIntentStyleKey(region?.routeIntent ?? fallbackIntent);
+  return resolveOfflineTileStyleKey(styleKey, region?.routeIntent ?? fallbackIntent);
+}
+
+function requiredRegionsMatchStyle(
+  regionIds: string[],
+  regions: OfflineReadinessTileRegion[],
+  currentStyle: string | null | undefined,
+  fallbackIntent?: unknown,
+): boolean {
+  if (!currentStyle) return true;
+  if (regionIds.length === 0) return false;
+  return regionIds.every((regionId) => {
+    const region = regions.find((candidate) => candidate.id === regionId);
+    const cachedStyle = physicalRegionStyleKey(region, fallbackIntent);
+    return Boolean(cachedStyle) && !mapStylesDiffer(currentStyle, cachedStyle);
+  });
 }
 
 function routeSyncStyleKey(
@@ -259,6 +473,13 @@ function findMatchingRoute(
     route.offlineTileRegionId ||
     (route.offlineTileRegionIds?.length ?? 0) > 0
   ));
+  // A nearby route can legitimately share the same trailhead. Prefer the
+  // canonical identity before using destination proximity as a compatibility
+  // fallback, otherwise array order can select the wrong downloaded package.
+  const exactIdentityMatch = current?.routeId
+    ? routeSyncs.find((route) => routeIdMatches(current.routeId, route)) ?? null
+    : null;
+  if (current?.routeId) return exactIdentityMatch;
   return routeSyncs.find((route) => routeContextMatchesRoute(current, route)) ?? null;
 }
 
@@ -372,7 +593,6 @@ function routeSpecificReadyResult(
       missingAssets: [],
       staleAssets: ['route catalog source freshness'],
       reason: catalog.freshnessWarnings[0],
-      recommendedAction: ACTION_PREPARE_OFFLINE,
     };
   }
 
@@ -383,6 +603,24 @@ function routeSpecificReadyResult(
     missingAssets: [],
     staleAssets: [],
     reason: 'Route corridor and active map style are cached for this preview.',
+  };
+}
+
+function criticalSegmentFallbackResult(
+  catalog: ReturnType<typeof routeCatalogSourceMetadata>,
+): OfflineReadinessResult {
+  return {
+    level: 'partial',
+    label: 'Partial Map Coverage',
+    readyAssets: dedupe([
+      'route geometry',
+      'low-signal map segments',
+      'active map style',
+      catalog.sourceMetadataAvailable ? 'route catalog source metadata' : null,
+    ]),
+    missingAssets: ['full route corridor tiles'],
+    staleAssets: catalog.freshnessWarnings.length > 0 ? ['route catalog source freshness'] : [],
+    reason: 'Only the selected low-signal route segments are cached; full-route offline map coverage is not available.',
   };
 }
 
@@ -414,7 +652,9 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
   );
   const manifestDestination = getCoordinate(input.runCacheManifest?.gpx_metadata?.final_destination);
   const manifestMatches =
-    routeContextMatchesIntent(current, manifestIntent) || destinationMatches(current, manifestDestination);
+    routeContextMatchesIntent(current, manifestIntent) ||
+    input.runCacheManifestOwnerMatches === true ||
+    (!current.routeId && destinationMatches(current, manifestDestination));
   const manifestRegionIds = dedupe([
     ...(input.runCacheManifest?.tile_region_ids ?? []),
     input.runCacheManifest?.tile_region_id ?? null,
@@ -424,8 +664,9 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
     : null;
 
   if (!matchingRoute && manifestMatches) {
-    const manifestTilesComplete = input.runCacheManifest?.tile_cache_status === 'complete' &&
-      requiredRegionsComplete(manifestRegionIds, regions);
+    // Physical region completion is authoritative. Persisted manifests can lag
+    // a sync that completed while the Offline Prep screen was unmounted.
+    const manifestTilesComplete = requiredRegionsComplete(manifestRegionIds, regions);
     const manifestProgress = resolveProgressPercent(null, manifestRegion);
     if (!manifestTilesComplete) {
       return {
@@ -441,17 +682,33 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
       };
     }
 
-    const manifestContext = getRecord(manifestIntent)?.mapContext;
-    const cachedStyle =
-      (getRecord(manifestContext)?.styleKey as string | undefined) ?? manifestRegion?.styleKey ?? null;
-    if (current.mapStyle && cachedStyle && current.mapStyle !== cachedStyle) {
+    if (!requiredRegionsMatchStyle(manifestRegionIds, regions, current.mapStyle, manifestIntent)) {
       return {
         level: 'partial',
         label: 'Style Not Cached',
         readyAssets: ['route geometry', 'route corridor tiles'],
         missingAssets: ['active map style'],
         staleAssets: [],
-        reason: `Map style ${current.mapStyle.toUpperCase()} is not cached for this route.`,
+        reason: `Map style ${mapStyleLabel(current.mapStyle ?? 'active')} is not cached for this route.`,
+        recommendedAction: ACTION_PREPARE_OFFLINE,
+      };
+    }
+
+    if (routeSyncUsesCriticalSegmentFallback(manifestIntent, manifestRegion?.routeIntent)) {
+      return criticalSegmentFallbackResult(routeCatalogSourceMetadata(manifestIntent));
+    }
+
+    const manifestLayers = offlineIntentLayerSet(manifestIntent, manifestRegion);
+    const missingManifestLayers = (current.requiredLayers ?? [])
+      .filter((layer) => !manifestLayers.has(layer.trim().toLowerCase()));
+    if (missingManifestLayers.length > 0) {
+      return {
+        level: 'partial',
+        label: 'Layer Not Cached',
+        readyAssets: ['route geometry', 'route corridor tiles', 'active map style'],
+        missingAssets: missingManifestLayers.map((layer) => `${layer} layer`),
+        staleAssets: [],
+        reason: `${missingManifestLayers[0]} layer is not cached for this route.`,
         recommendedAction: ACTION_PREPARE_OFFLINE,
       };
     }
@@ -466,24 +723,31 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
   const regionComplete = matchingRouteRegionIds.length > 0
     ? requiredRegionsComplete(matchingRouteRegionIds, regions)
     : matchingRegion?.status === 'complete';
-  const routeTilesComplete = matchingRoute?.tileCacheStatus === 'complete' && regionComplete;
+  // The linked physical regions are authoritative after hydration; the route
+  // cache's aggregate status is a persisted projection and may be one event
+  // behind a completed background sync.
+  const routeTilesComplete = Boolean(matchingRoute && regionComplete);
   if (matchingRoute && routeTilesComplete) {
-    const cachedStyle = matchingRoute.routeIntent?.mapContext?.styleKey ?? matchingRegion?.styleKey ?? null;
-    if (current.mapStyle && cachedStyle && current.mapStyle !== cachedStyle) {
+    const requiredRegionIds = matchingRouteRegionIds.length > 0
+      ? matchingRouteRegionIds
+      : matchingRegion
+        ? [matchingRegion.id]
+        : [];
+    if (!requiredRegionsMatchStyle(requiredRegionIds, regions, current.mapStyle, matchingRoute.routeIntent)) {
       return {
         level: 'partial',
         label: 'Style Not Cached',
         readyAssets: ['route geometry', 'route corridor tiles'],
         missingAssets: ['active map style'],
         staleAssets: [],
-        reason: `Map style ${current.mapStyle.toUpperCase()} is not cached for this route.`,
+        reason: `Map style ${mapStyleLabel(current.mapStyle ?? 'active')} is not cached for this route.`,
         recommendedAction: ACTION_PREPARE_OFFLINE,
       };
     }
 
     const cachedLayers = routeIntentLayerSet(matchingRoute, matchingRegion);
     const missingLayers = (current.requiredLayers ?? [])
-      .filter((layer) => cachedLayers.size > 0 && !cachedLayers.has(layer.trim().toLowerCase()));
+      .filter((layer) => !cachedLayers.has(layer.trim().toLowerCase()));
     if (missingLayers.length > 0) {
       return {
         level: 'partial',
@@ -496,6 +760,10 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
       };
     }
 
+    if (routeSyncUsesCriticalSegmentFallback(matchingRoute.routeIntent, matchingRegion?.routeIntent)) {
+      return criticalSegmentFallbackResult(matchingCatalog);
+    }
+
     return routeSpecificReadyResult(
       ['route geometry', 'route corridor tiles', 'active map style'],
       matchingCatalog,
@@ -504,14 +772,14 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
 
   if (matchingJob?.status === 'running' || matchingJob?.status === 'pending') {
     const activeSyncStyle = routeSyncStyleKey(matchingRoute, matchingRegion, matchingJob);
-    if (current.mapStyle && activeSyncStyle && current.mapStyle !== activeSyncStyle) {
+    if (current.mapStyle && activeSyncStyle && mapStylesDiffer(current.mapStyle, activeSyncStyle)) {
       return {
         level: 'partial',
         label: 'Style Not Cached',
         readyAssets: matchingRoute ? ['route geometry'] : [],
         missingAssets: ['active map style'],
         staleAssets: [],
-        reason: `Map style ${current.mapStyle.toUpperCase()} is not cached for this route.`,
+        reason: `Map style ${mapStyleLabel(current.mapStyle)} is not cached for this route.`,
         recommendedAction: ACTION_PREPARE_OFFLINE,
       };
     }
@@ -595,21 +863,21 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
   }
 
   const cachedStyle = matchingRoute.routeIntent?.mapContext?.styleKey ?? matchingRegion?.styleKey ?? null;
-  if (current.mapStyle && cachedStyle && current.mapStyle !== cachedStyle) {
+  if (current.mapStyle && cachedStyle && mapStylesDiffer(current.mapStyle, cachedStyle)) {
     return {
       level: 'partial',
       label: 'Style Not Cached',
       readyAssets: ['route geometry', 'route corridor tiles'],
       missingAssets: ['active map style'],
       staleAssets: [],
-      reason: `Map style ${current.mapStyle.toUpperCase()} is not cached for this route.`,
+      reason: `Map style ${mapStyleLabel(current.mapStyle)} is not cached for this route.`,
       recommendedAction: ACTION_PREPARE_OFFLINE,
     };
   }
 
   const cachedLayers = routeIntentLayerSet(matchingRoute, matchingRegion);
   const missingLayers = (current.requiredLayers ?? [])
-    .filter((layer) => cachedLayers.size > 0 && !cachedLayers.has(layer.trim().toLowerCase()));
+    .filter((layer) => !cachedLayers.has(layer.trim().toLowerCase()));
   if (missingLayers.length > 0) {
     return {
       level: 'partial',

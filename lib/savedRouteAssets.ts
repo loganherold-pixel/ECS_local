@@ -1,5 +1,6 @@
 import {
   getExploreFavoritesSnapshot,
+  subscribeExploreFavorites,
   type FavoriteTrailPlan,
   type FavoriteTrailRecord,
 } from './exploreFavoritesStore';
@@ -65,6 +66,18 @@ export interface SavedRouteAssetCounts {
   recorded: number;
   other: number;
 }
+
+export interface SavedRouteAssetInventorySnapshot {
+  assets: SavedRouteAsset[];
+  counts: SavedRouteAssetCounts;
+  summary: string;
+}
+
+type SavedRouteAssetInventoryListener = () => void;
+
+let savedRouteAssetInventorySnapshot: SavedRouteAssetInventorySnapshot | null = null;
+const savedRouteAssetInventoryListeners = new Set<SavedRouteAssetInventoryListener>();
+let unsubscribeSavedRouteAssetSources: (() => void) | null = null;
 
 function formatSourceLabel(source: string | null | undefined): string {
   const normalized = String(source ?? '').toLowerCase();
@@ -343,6 +356,61 @@ export function formatSavedRouteAssetCountSummary(counts: SavedRouteAssetCounts)
     .filter(([count]) => count > 0)
     .map(([count, label]) => `${count} ${label}`);
   return [`${counts.all} total`, ...visibleCategories].join(' · ');
+}
+
+export function getSavedRouteAssetInventorySnapshot(): SavedRouteAssetInventorySnapshot {
+  if (savedRouteAssetInventorySnapshot) return savedRouteAssetInventorySnapshot;
+
+  const assets = getSavedRouteAssets();
+  const counts = calculateSavedRouteAssetCounts(assets);
+  savedRouteAssetInventorySnapshot = {
+    assets,
+    counts,
+    summary: formatSavedRouteAssetCountSummary(counts),
+  };
+  return savedRouteAssetInventorySnapshot;
+}
+
+function invalidateSavedRouteAssetInventory(): void {
+  savedRouteAssetInventorySnapshot = null;
+  savedRouteAssetInventoryListeners.forEach((listener) => {
+    try {
+      listener();
+    } catch {
+      // A presentation listener must not block canonical route persistence.
+    }
+  });
+}
+
+function connectSavedRouteAssetSources(): void {
+  if (unsubscribeSavedRouteAssetSources) return;
+  // A source may have changed while no Route Command Center consumer was mounted.
+  // React rechecks getSnapshot after subscribing, so clear the dormant cache here
+  // without emitting a synthetic inventory mutation.
+  savedRouteAssetInventorySnapshot = null;
+  const unsubscribeRoutes = routeStore.subscribe(invalidateSavedRouteAssetInventory);
+  const unsubscribeRuns = runStore.subscribe(invalidateSavedRouteAssetInventory);
+  const unsubscribeFavorites = subscribeExploreFavorites(invalidateSavedRouteAssetInventory);
+  unsubscribeSavedRouteAssetSources = () => {
+    unsubscribeRoutes();
+    unsubscribeRuns();
+    unsubscribeFavorites();
+    unsubscribeSavedRouteAssetSources = null;
+  };
+}
+
+export function subscribeSavedRouteAssetInventory(
+  listener: SavedRouteAssetInventoryListener,
+): () => void {
+  savedRouteAssetInventoryListeners.add(listener);
+  connectSavedRouteAssetSources();
+  return () => {
+    savedRouteAssetInventoryListeners.delete(listener);
+    if (savedRouteAssetInventoryListeners.size === 0) {
+      unsubscribeSavedRouteAssetSources?.();
+      savedRouteAssetInventorySnapshot = null;
+    }
+  };
 }
 
 function matchesFilter(asset: SavedRouteAsset, filter: SavedRouteAssetFilter): boolean {

@@ -208,7 +208,7 @@ export function buildLoadoutConsequencePreviewProductionReadinessResult(options 
     ),
     check(
       'loadout_consequence_ui_and_command_brief_mirror_present',
-      'Fleet loadout editor renders the preview and Command Brief mirrors only valid aggregate impact.',
+      'Fleet loadout editor renders the preview while compact Command Brief consumes authoritative active-vehicle readiness.',
       panel.includes('Loadout Consequence Preview') &&
         panel.includes('sourceWarnings') &&
         panel.includes('Remove or relocate') &&
@@ -217,12 +217,13 @@ export function buildLoadoutConsequencePreviewProductionReadinessResult(options 
         fleetModal.includes('applyLoadoutSuggestionAction') &&
         fleetModal.includes('invalidateLoadoutConsequenceMirror') &&
         fleetModal.includes('publishLoadoutConsequencePreview') &&
-        commandBrief.includes('LoadoutConsequenceCommandBriefPanel') &&
-        commandBrief.includes('useLoadoutConsequencePreviewSnapshot') &&
-        commandBrief.includes('summary.stale') &&
-        commandBrief.includes('invalidationReason'),
+        commandBrief.includes('activeVehicleReadiness') &&
+        commandBrief.includes('buildReadinessVehicleInputFromFleetState') &&
+        commandBrief.includes('buildExpeditionReadinessSnapshotForWeakPoints') &&
+        !commandBrief.includes('LoadoutConsequenceCommandBriefPanel') &&
+        !commandBrief.includes('useLoadoutConsequencePreviewSnapshot'),
       [relPath(root, paths.panel), relPath(root, paths.fleetModal), relPath(root, paths.commandBrief)],
-      ['Keep Fleet and Command Brief surfaces wired to the same deterministic preview result and stale-mirror metadata.'],
+      ['Keep Fleet preview output deterministic and feed committed active-vehicle state into Command Brief readiness without duplicating the preview panel.'],
     ),
     check(
       'loadout_consequence_evidence_events_registered',
@@ -275,7 +276,7 @@ export function buildLoadoutConsequencePreviewProductionReadinessResult(options 
       'Multi-vehicle evidence confirms preview state follows the active vehicle and does not bleed across profiles.',
       manifestCheckPassed(manifestValidation, 'multi_vehicle_evidence'),
       [relPath(root, paths.evidence)],
-      ['Run multi-vehicle active selection evidence and verify Command Brief filtering.'],
+      ['Run multi-vehicle active selection evidence and verify Command Brief readiness follows the active vehicle.'],
     ),
     check(
       'scale_ticket_evidence',

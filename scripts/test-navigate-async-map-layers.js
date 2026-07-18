@@ -430,6 +430,52 @@ function testOfflineCacheAndLayerIsolation() {
   );
 }
 
+function testAdjacentMvumRefreshPreservesLastGoodGeometry() {
+  const viewportAResult = resultFromSegments([makeRawSegment('viewport-a-visible')]);
+  let state = beginECSAsyncSurfaceRequest(createSurface('navigate_mvum_segments'), {
+    requestFingerprint: 'mvum:viewport-a',
+    now: 500,
+  });
+  state = settleECSAsyncSurfaceRequest(state, {
+    requestId: state.requestId,
+    generation: state.generation,
+    requestFingerprint: state.requestFingerprint,
+    status: 'ready',
+    data: viewportAResult,
+    source: 'live',
+    freshness: 'live',
+    now: 510,
+  }).state;
+
+  const adjacentRefresh = beginECSAsyncSurfaceRequest(state, {
+    requestFingerprint: 'mvum:viewport-b',
+    preserveData: true,
+    preserveLastGood: true,
+    now: 520,
+  });
+  assert.strictEqual(adjacentRefresh.status, 'loading');
+  assert.strictEqual(
+    adjacentRefresh.data,
+    viewportAResult,
+    'An adjacent MVUM viewport refresh should retain the last-good drawable geometry while loading',
+  );
+
+  const terminalError = settleECSAsyncSurfaceRequest(adjacentRefresh, {
+    requestId: adjacentRefresh.requestId,
+    generation: adjacentRefresh.generation,
+    requestFingerprint: adjacentRefresh.requestFingerprint,
+    status: 'error',
+    source: 'unavailable',
+    freshness: 'unavailable',
+    safeErrorCode: 'PROVIDER_UNAVAILABLE',
+    retryEligible: true,
+    now: 530,
+  }).state;
+  assert.strictEqual(terminalError.status, 'error');
+  assert.strictEqual(terminalError.data, viewportAResult);
+  assert.strictEqual(terminalError.completedAt, 530);
+}
+
 function testRetryBypassesCacheAndIssuesNewRequest() {
   const coordinator = new NavigateMapLayerCoordinator();
   const key = 'retry-fingerprint';
@@ -678,11 +724,18 @@ function testMountedPathContract() {
     routeLegend.includes('Showing stale cached route geometry until live data completes.'),
     'A stale-cache refresh must stay explicitly labeled while loading live geometry',
   );
+  const mvumLoaderStart = navigate.indexOf('const clearMvumFetchTimer = () =>');
+  const routeGeometryLoaderStart = navigate.indexOf('const clearRouteGeometryFetchTimer = () =>', mvumLoaderStart);
+  const mountedMvumLoader = navigate.slice(mvumLoaderStart, routeGeometryLoaderStart);
   assert(
-    (navigate.match(/preserveData: false/g) ?? []).length >= 3 &&
-      navigate.includes('preserveData: true') &&
-      navigate.includes('data: activeResult'),
-    'Cleared geometry must not remain active after unavailable/offline transitions, while an in-flight refresh may preserve explicit last-good data',
+    (mountedMvumLoader.match(/preserveData: true/g) ?? []).length >= 2 &&
+      !mountedMvumLoader.includes('preserveData: false') &&
+      !/setMvumViewportResult\(null\);\s*setMvumViewportUiState\(\(current\)\s*=>\s*beginRouteGeometryViewportUiRequest/.test(mountedMvumLoader),
+    'MVUM adjacent live and offline refreshes must preserve last-good drawable geometry instead of tearing down the map source',
+  );
+  assert(
+    navigate.includes('preserveData: false') && navigate.includes('data: activeResult'),
+    'Explicit unavailable transitions may still clear mismatched geometry while stale-cache fallbacks retain last-good data',
   );
 
   const diagnosticContract = `${navigate}\n${renderer}\n${coordinator}\n${diagnosticModel}`;
@@ -705,6 +758,7 @@ function main() {
   testStaleAndRapidViewports();
   testToggleOffAndCancellation();
   testOfflineCacheAndLayerIsolation();
+  testAdjacentMvumRefreshPreservesLastGoodGeometry();
   testRetryBypassesCacheAndIssuesNewRequest();
   testBothLayersAndNoLoadingContamination();
   testDiagnosticSafety();

@@ -116,7 +116,7 @@ export default function RouteTileCacheCard({
   useEffect(() => {
     if (!run || run.points.length < 2) return;
 
-    const result = analyzeRoute(run);
+    const result = analyzeRoute(run, mapStyle);
     if (!mountedRef.current) return;
     setAnalysis(result);
     setStorage(getStorageOverview());
@@ -138,7 +138,7 @@ export default function RouteTileCacheCard({
     } else {
       setCardState('prompt');
     }
-  }, [run]);
+  }, [mapStyle, run]);
 
   // ── Progress animation ────────────────────────────────
   useEffect(() => {
@@ -191,7 +191,7 @@ export default function RouteTileCacheCard({
       if (prog.status === 'complete') {
         setCardState('cached');
         setStorage(getStorageOverview());
-        const updated = analyzeRoute(run);
+        const updated = analyzeRoute(run, mapStyle);
         if (updated && mountedRef.current) setAnalysis(updated);
         showToast?.(`OFFLINE READY: ${prog.downloadedTiles} tiles, ${formatStorageSize(prog.downloadedSizeMB)}`);
         if (prog.regionId) {
@@ -248,7 +248,7 @@ export default function RouteTileCacheCard({
       setCardState('prompt');
       setProgress(null);
       setStorage(getStorageOverview());
-      const updated = analyzeRoute(run);
+      const updated = analyzeRoute(run, mapStyle);
       if (updated && mountedRef.current) setAnalysis(updated);
       showToast?.('OFFLINE READINESS CLEARED');
     };
@@ -261,7 +261,7 @@ export default function RouteTileCacheCard({
         { text: 'Delete', style: 'destructive', onPress: doDelete },
       ]);
     }
-  }, [run, showToast]);
+  }, [mapStyle, run, showToast]);
 
   const handleDismiss = useCallback(() => {
     markAutoCacheOffered(run.id);

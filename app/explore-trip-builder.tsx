@@ -7187,6 +7187,7 @@ export default function ExploreTripBuilderScreen() {
       const itineraryForOfflinePrep = editableTripItinerary ?? selectedTripItinerary ?? null;
       saveOfflinePrepPackHandoff({
         route,
+        mapStyleKey: planningMapStyle,
         preparedRoadRoute,
         preparedRoadRouteUnavailableReason,
         itinerary: itineraryForOfflinePrep,
@@ -7218,6 +7219,7 @@ export default function ExploreTripBuilderScreen() {
     getTripPlanOutputSpine,
     itineraryEditMode,
     plan,
+    planningMapStyle,
     prepareTripPlanRoadRoute,
     readinessReference,
     pushSingleFlight,

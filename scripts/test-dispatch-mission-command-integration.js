@@ -123,8 +123,11 @@ async function main() {
     path.join(root, 'components', 'mission-command', 'MissionCommandProposalAction.tsx'),
     'utf8',
   );
+  const ecsBriefSource = fs.readFileSync(
+    path.join(root, 'components', 'brief', 'CommandBriefScreen.tsx'),
+    'utf8',
+  );
   const producerSources = [
-    ['ECS Brief', path.join(root, 'components', 'brief', 'CommandBriefScreen.tsx'), 'createDashboardMissionCommandProposal'],
     ['Navigate', path.join(root, 'app', '(tabs)', 'navigate.tsx'), 'createNavigateMissionCommandProposal'],
     ['Explore', path.join(root, 'app', '(tabs)', 'discover.tsx'), 'createExploreMissionCommandProposal'],
     ['Trip Builder', path.join(root, 'app', 'explore-trip-builder.tsx'), 'createExploreMissionCommandProposal'],
@@ -140,6 +143,8 @@ async function main() {
   assert.match(proposalActionSource, /missionCommandProposalHandoffAdapter\.stage\(proposalResult\.proposal\)/);
   assert.match(proposalActionSource, /router\.push\('\/alert'/);
   assert.doesNotMatch(proposalActionSource, /buildMissionCommandFromComposer|persistMissionCommandMutation/);
+  assert.doesNotMatch(ecsBriefSource, /createDashboardMissionCommandProposal|MissionCommandProposalAction/);
+  assert.doesNotMatch(ecsBriefSource, /Coordinate In Dispatch|Open Mission Command/);
   producerSources.forEach(([label, filename, adapterName]) => {
     const source = fs.readFileSync(filename, 'utf8');
     assert.match(source, new RegExp(adapterName), `${label} must use its typed Mission Command source adapter.`);

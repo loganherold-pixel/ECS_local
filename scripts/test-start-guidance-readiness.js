@@ -157,8 +157,8 @@ assertIncludes(
 );
 assertIncludes(
   navigateSource,
-  'extractStartGuidanceVehicleFit(exploreNavigationPayload)',
-  'Navigate Start Guidance should read existing Vehicle Fit from route payload data.',
+  'extractStartGuidanceVehicleFit(readinessNavigationPayload)',
+  'Navigate Start Guidance should read Vehicle Fit from the active or restored route payload.',
 );
 assertIncludes(navigateSource, 'campIntelSites', 'Navigate Start Guidance should use existing Camp Intel candidate data.');
 assertIncludes(

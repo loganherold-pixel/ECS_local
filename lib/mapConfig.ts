@@ -37,10 +37,19 @@ import { supabase } from './supabase';
 import type { RunPoint, RunHealthLevel } from './runStore';
 import { ecsLog } from './ecsLogger';
 import { reportRecoverableFailure } from './ecsIssueReporter';
+import {
+  DEFAULT_MAP_STYLE,
+  type MapStyleKey,
+} from './mapStyleIdentity';
+
+export {
+  DEFAULT_MAP_STYLE,
+  mapStyleKeysMatch,
+  normalizeMapStyleKey,
+} from './mapStyleIdentity';
+export type { MapStyleKey } from './mapStyleIdentity';
 
 // ── Map Styles ──────────────────────────────────────────────
-export type MapStyleKey = 'ecs' | 'tactical' | 'satellite' | '3d' | 'route-progress';
-
 export interface MapStyleDef {
   key: MapStyleKey;
   label: string;
@@ -50,7 +59,6 @@ export interface MapStyleDef {
   icon: string; // Ionicons name
 }
 
-export const DEFAULT_MAP_STYLE: MapStyleKey = 'ecs';
 export const MAPBOX_3D_STYLE_URL = 'mapbox://styles/expeditioncommand/cmonsduoz000b01spgl7bepey';
 export const MAPBOX_3D_RENDER_BASE_STYLE_URL = 'mapbox://styles/mapbox/satellite-streets-v12';
 

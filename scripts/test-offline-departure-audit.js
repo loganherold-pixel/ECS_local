@@ -534,29 +534,14 @@ assert.match(expiredWeatherItem?.summary ?? '', /expired/i);
 assert.match(expiredWeatherItem?.summary ?? '', /last-known/i);
 
 const commandBrief = read('components', 'brief', 'CommandBriefScreen.tsx');
-const safetyTab = read('app', '(tabs)', 'safety.tsx');
-const editCommsModal = read('components', 'emergency', 'EditCommsModal.tsx');
 assert.ok(commandBrief.includes('Departure Audit'), 'Command Brief should render Departure Audit.');
-assert.ok(commandBrief.includes('DepartureAuditChecklist'), 'Command Brief should use the reusable DepartureAuditChecklist.');
-assert.ok(commandBrief.includes('disabledActionReason'), 'Command Brief should surface disabled route-dependent audit action reasons.');
-assert.ok(commandBrief.includes("intent: 'prepare_offline_route_package'"), 'Command Brief offline package action should stage route-specific offline prep.');
-assert.ok(commandBrief.includes("sourceSurface: 'command_brief_departure_audit'"), 'Command Brief offline package action should identify the departure audit source.');
+assert.ok(commandBrief.includes('buildCommandBriefPresentation'), 'Command Brief should derive its concise Departure Audit from the guarded presentation model.');
+assert.ok(commandBrief.includes('<DepartureAuditNarrative'), 'Command Brief should render the concise narrative audit.');
+assert.ok(!commandBrief.includes('DepartureAuditChecklist'), 'Command Brief should not render the action-heavy checklist in the compact brief.');
+assert.ok(!commandBrief.includes("intent: 'prepare_offline_route_package'"), 'Command Brief should not duplicate offline-prep navigation inside the narrative audit.');
 assert.ok(commandBrief.includes('buildOfflineFailureDrillEvidenceCaptureBundle'), 'Command Brief should be able to export a QA evidence capture bundle.');
 assert.ok(commandBrief.includes('readinessAssessment: assessment'), 'Command Brief evidence capture should include the current Departure Audit readiness assessment.');
 assert.ok(commandBrief.includes('share-offline-drill-evidence-capture'), 'Command Brief should expose the focused Offline Failure Drill evidence capture action.');
-assert.ok(
-  commandBrief.includes("item.actionTarget === '/safety?focus=emergency-comms&returnTo=command-brief'"),
-  'Command Brief should special-case Confirm Comms Plan so the comms reference can return to Command Brief after confirmation.',
-);
-assert.ok(
-  commandBrief.includes("pushRoute('/safety?focus=emergency-comms&returnTo=command-brief')"),
-  'Command Brief Confirm Comms Plan should deep-link to emergency comms reference instead of a generic Safety tab.',
-);
-assert.ok(safetyTab.includes("params.focus === 'emergency-comms'"), 'Safety tab should focus the emergency comms reference from the Command Brief handoff.');
-assert.ok(safetyTab.includes('commsStore.confirmPlan()'), 'Safety tab should persist a user-controlled comms plan confirmation.');
-assert.ok(safetyTab.includes("router.replace('/dashboard?focus=command-brief'"), 'Safety tab should return to Command Brief after a Command Brief comms confirmation.');
-assert.ok(safetyTab.includes("saveLabel={returningToCommandBrief ? 'Save and Confirm' : undefined}"), 'Safety tab editor should show Save and Confirm for Command Brief handoffs.');
-assert.ok(editCommsModal.includes('onAfterSave?.()'), 'Comms editor should support save-and-confirm callbacks without separate placeholder flows.');
 
 const departureAuditChecklist = read('components', 'readiness', 'DepartureAuditChecklist.tsx');
 assert.ok(departureAuditChecklist.includes('statusBadgeComplete'), 'Departure Audit should use a stronger stoplight-green Complete badge style.');

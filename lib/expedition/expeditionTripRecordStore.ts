@@ -153,11 +153,33 @@ function normalizeGeometry(points: unknown, recordedAt?: string | null): Expedit
 
 function downsampleGeometry(points: ExpeditionTripCoordinate[], maxPoints = MAX_ROUTE_POINTS): ExpeditionTripCoordinate[] {
   if (points.length <= maxPoints) return points;
-  const step = Math.ceil(points.length / maxPoints);
-  const sampled = points.filter((_, index) => index === 0 || index === points.length - 1 || index % step === 0);
-  return sampled[sampled.length - 1] === points[points.length - 1]
-    ? sampled
-    : [...sampled, points[points.length - 1]];
+  let minimumElevationIndex: number | null = null;
+  let maximumElevationIndex: number | null = null;
+  for (let index = 0; index < points.length; index += 1) {
+    const elevation = points[index].elevationFt;
+    if (elevation == null || !Number.isFinite(elevation)) continue;
+    if (
+      minimumElevationIndex == null ||
+      elevation < (points[minimumElevationIndex].elevationFt ?? Number.POSITIVE_INFINITY)
+    ) minimumElevationIndex = index;
+    if (
+      maximumElevationIndex == null ||
+      elevation > (points[maximumElevationIndex].elevationFt ?? Number.NEGATIVE_INFINITY)
+    ) maximumElevationIndex = index;
+  }
+
+  const selectedIndices = new Set<number>([0, points.length - 1]);
+  if (minimumElevationIndex != null) selectedIndices.add(minimumElevationIndex);
+  if (maximumElevationIndex != null) selectedIndices.add(maximumElevationIndex);
+  const uniformBudget = Math.max(0, maxPoints - selectedIndices.size);
+  for (let slot = 1; slot <= uniformBudget; slot += 1) {
+    selectedIndices.add(Math.round((slot * (points.length - 1)) / (uniformBudget + 1)));
+  }
+
+  return [...selectedIndices]
+    .sort((left, right) => left - right)
+    .slice(0, maxPoints)
+    .map((index) => points[index]);
 }
 
 function computeBounds(points: ExpeditionTripCoordinate[]): ExpeditionTripBounds | null {

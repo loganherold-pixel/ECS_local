@@ -84,11 +84,10 @@ import {
 
 import { routeStore, waitForRouteStoreHydration, type ImportedRoute } from '../../lib/routeStore';
 import {
-  calculateSavedRouteAssetCounts,
   filterSavedRouteAssets,
-  formatSavedRouteAssetCountSummary,
   getSavedRouteAssetEmptyState,
-  getSavedRouteAssets,
+  getSavedRouteAssetInventorySnapshot,
+  subscribeSavedRouteAssetInventory,
   type SavedRouteAsset,
   type SavedRouteAssetFilter,
 } from '../../lib/savedRouteAssets';
@@ -158,7 +157,6 @@ import {
   hydrateExploreFavoritesStore,
   removeFavoriteTrailBySourceId,
   removeFavoriteTrailPlan,
-  subscribeExploreFavorites,
   upsertFavoriteTrailPlan,
 } from '../../lib/exploreFavoritesStore';
 import { vehicleSessionState } from '../../lib/vehicleSessionState';
@@ -325,6 +323,7 @@ import {
   clearNavigateRouteDraft,
   createNavigateRouteDraft,
   createNavigateRouteDraftHistory,
+  isNavigateRouteDraftFullyLinked,
   recordNavigateRouteDraft,
   redoNavigateRouteDraftHistory,
   resolveNearestNavigateRouteAnchor,
@@ -688,7 +687,10 @@ import {
   isCommunityCampsitesFeatureEnabled,
 } from '../../lib/communityCampsitesRolloutConfig';
 import type { RemotenessIndexOutput } from '../../lib/remotenessTypes';
-import { buildRemoteMapOverlay } from '../../lib/remote/mapOverlay';
+import {
+  buildRemoteMapOverlay,
+  type RemoteMapOverlayPayload,
+} from '../../lib/remote/mapOverlay';
 import { getRemoteCacheFallbackScore } from '../../lib/remote/offlineRemoteCache';
 import { buildNavigateRouteConfidenceSummary } from '../../lib/remote/routeConfidenceSummary';
 import {
@@ -825,7 +827,11 @@ import { useTrailNavigation } from '../../lib/useTrailNavigation';
 import { shouldHybridStartWithTrail } from '../../lib/hybridGuidanceStart';
 import { analyzeRoute, type RouteAnalysis } from '../../lib/routeTileCacheEngine';
 import { evaluateCacheReadiness } from '../../lib/offlineCacheAwarenessEngine';
-import { deriveOfflineReadiness } from '../../lib/offlineReadinessPresentation';
+import {
+  buildNavigationOfflineReadinessContext,
+  deriveOfflineReadiness,
+  selectNavigationOfflineReadinessPayload,
+} from '../../lib/offlineReadinessPresentation';
 import { deriveRouteConfidence } from '../../lib/routeConfidencePresentation';
 import {
   buildRouteGuidanceReadinessViewModel,
@@ -1265,6 +1271,11 @@ function disableRouteGeometryViewportUiState(
 const EMPTY_ROUTE_CATALOG_VIEWPORT_FEATURE_COLLECTION: RouteCatalogViewportFeatureCollection = {
   type: 'FeatureCollection',
   features: [],
+};
+const DISABLED_REMOTENESS_MAP_OVERLAY: RemoteMapOverlayPayload = {
+  enabled: false,
+  heatmapAreas: [],
+  forecastSegments: [],
 };
 
 function bboxForMvumSegment(
@@ -3749,7 +3760,6 @@ useEffect(() => subscribeActiveVehicleState(() => {
 const [stitchSegmentIds, setStitchSegmentIds] = useState<string[]>([]);
 const [stitchName, setStitchName] = useState('Stitched Expedition');
 const [stitchSaving, setStitchSaving] = useState(false);
-  const [savedRoutesRefreshKey, setSavedRoutesRefreshKey] = useState(0);
 const [savedRoutesQuery, setSavedRoutesQuery] = useState('');
 const [savedRoutesFilter, setSavedRoutesFilter] = useState<SavedRouteAssetFilter>('all');
 const [renamingSavedRouteAssetId, setRenamingSavedRouteAssetId] = useState<string | null>(null);
@@ -4863,6 +4873,7 @@ const queueMapCameraCommand = useCallback((
   const [trailStats, setTrailStats] = useState<TrailStats | null>(null);
   const [trailSegments, setTrailSegments] = useState<TrailSegmentData[]>([]);
   const [routeBuilderActive, setRouteBuilderActive] = useState(false);
+  const routeBuilderActiveRef = useRef(false);
   const [routeBuilderDrawing, setRouteBuilderDrawing] = useState(false);
   const [routeBuilderSegments, setRouteBuilderSegments] = useState<RouteBuilderSegmentData[]>([]);
   const [routeBuilderDraft, setRouteBuilderDraft] = useState<NavigateRouteDraft>(() => createNavigateRouteDraft());
@@ -4919,7 +4930,6 @@ const queueMapCameraCommand = useCallback((
   const campsitePolygonLocateRequestRef = useRef<string | null>(null);
   const [savedCampsiteDrawings, setSavedCampsiteDrawings] = useState<SavedCampsiteSearchDrawing[]>([]);
   const [routeDesignContext, setRouteDesignContext] = useState<PolygonRouteDesignContext | null>(null);
-  const [customRouteRefreshKey, setCustomRouteRefreshKey] = useState(0);
   const routeBuilderStagedRunIdRef = useRef<string | null>(null);
   const routeBuilderStagedRouteIdRef = useRef<string | null>(null);
   const [trailExportVisible, setTrailExportVisible] = useState(false);
@@ -6074,17 +6084,16 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       navigateMapLayerCoordinatorRef.current.syncLocalLayer({
         layer: 'mvum',
         enabled: true,
-        itemCount: 0,
+        itemCount: mvumViewportUiStateRef.current.featureCount,
         sourceState: 'offline',
         renderPriority: 'high',
       });
-      setMvumViewportResult(null);
       setMvumViewportUiState((current) =>
         beginRouteGeometryViewportUiRequest(current, {
           requestFingerprint: offlineCacheKey,
           bbox: plan.bbox,
           cacheKey: offlineCacheKey,
-          preserveData: false,
+          preserveData: true,
         }),
       );
       let cancelled = false;
@@ -6092,6 +6101,14 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         .then((entry) => {
           if (cancelled) return;
           if (!entry) {
+            setMvumViewportResult(null);
+            navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+              layer: 'mvum',
+              enabled: true,
+              itemCount: 0,
+              sourceState: 'offline',
+              renderPriority: 'high',
+            });
             setMvumViewportUiState((current) =>
               settleRouteGeometryViewportUiRequest(current, {
                 status: 'error',
@@ -6148,6 +6165,14 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         })
         .catch(() => {
           if (cancelled) return;
+          setMvumViewportResult(null);
+          navigateMapLayerCoordinatorRef.current.syncLocalLayer({
+            layer: 'mvum',
+            enabled: true,
+            itemCount: 0,
+            sourceState: 'offline',
+            renderPriority: 'high',
+          });
           setMvumViewportUiState((current) =>
             settleRouteGeometryViewportUiRequest(current, {
               status: 'error',
@@ -6263,13 +6288,12 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       sourceId: 'navigate-mvum-source',
       layerIds: ['navigate-mvum-line-layer', 'navigate-mvum-selected-layer'],
     });
-    setMvumViewportResult(null);
     setMvumViewportUiState((current) =>
       beginRouteGeometryViewportUiRequest(current, {
         requestFingerprint: plan.cacheKey,
         bbox: plan.bbox,
         cacheKey: plan.cacheKey,
-        preserveData: false,
+        preserveData: true,
       }),
     );
 
@@ -10218,6 +10242,7 @@ const handleRouteBuilderAnchorTap = useCallback((
   closeTopPopup();
   setLongPressContext(null);
   setLongPressInfoExpanded(false);
+  routeBuilderActiveRef.current = true;
   setRouteBuilderActive(true);
   setPinDropMode(false);
   setShowCrosshair(false);
@@ -11608,7 +11633,7 @@ const handleDirectMapTapForPin = useCallback(
     longitude: number;
     routeableFeature?: any;
   }) => {
-    if (routeBuilderActive) {
+    if (routeBuilderActiveRef.current) {
       const coordinate = toNavigateRouteCoordinate({ latitude, longitude });
       if (coordinate) {
         handleRouteBuilderAnchorTap(coordinate, segmentPayloadToLongPressFeature(routeableFeature));
@@ -11713,7 +11738,6 @@ const handleDirectMapTapForPin = useCallback(
     campsiteDrawMode,
     campsiteDrawingClosed,
     campsiteDrawingPoints,
-    routeBuilderActive,
     handleRouteBuilderAnchorTap,
     resetDrawAreaKnownCampsiteSources,
     pinDropMode,
@@ -12293,7 +12317,6 @@ const handleCreateRun = useCallback(() => {
     }
 
     if (linkedAny) {
-      setCustomRouteRefreshKey((key) => key + 1);
       loadRuns();
     }
 
@@ -12374,7 +12397,6 @@ const handleCreateRun = useCallback(() => {
         );
         runStore.setActive(stitchedRun.id);
         loadRuns();
-        setSavedRoutesRefreshKey((key) => key + 1);
 
         const previewPayload = buildNavigationPayloadFromRun(stitchedRun, {
           segmentCount: stitched.segmentCount,
@@ -13701,7 +13723,6 @@ const handleCreateRun = useCallback(() => {
       active: routeLifecycleState.phase === 'navigating',
       routePoints: displayedRoutePoints,
       progressPoints: baseProgressPoints,
-      currentLocation: safeUserLocation,
     });
   }, [
     displayedRoutePoints,
@@ -13711,7 +13732,6 @@ const handleCreateRun = useCallback(() => {
     pendingHybridTrailTransition,
     roadRouteProgressPoints,
     routeLifecycleState.phase,
-    safeUserLocation,
     trailNavigation.session.progressGeometry,
     trailNavigation.session.payload?.tripMode,
   ]);
@@ -14481,15 +14501,12 @@ const handleCreateRun = useCallback(() => {
     );
   }, [aiRouteSnapshotVersion, userLocation?.lat, userLocation?.lng]);
 
-  const savedRouteAssets = useMemo(
-    () => {
-      void customRouteRefreshKey;
-      void runs.length;
-      void savedRoutesRefreshKey;
-      return getSavedRouteAssets();
-    },
-    [customRouteRefreshKey, runs, savedRoutesRefreshKey],
+  const savedRouteAssetInventory = useSyncExternalStore(
+    subscribeSavedRouteAssetInventory,
+    getSavedRouteAssetInventorySnapshot,
+    getSavedRouteAssetInventorySnapshot,
   );
+  const savedRouteAssets = savedRouteAssetInventory.assets;
 
   const localExploreRouteOverlayBuild = useMemo(() => {
     const { opportunities, results } = exploreCompatibilityContext;
@@ -15138,19 +15155,20 @@ const handleCreateRun = useCallback(() => {
   });
   const remotenessOverlayDataAvailable =
     remotenessOverlayRouteAvailable ||
-    remotenessOverlaySegmentDataAvailable ||
-    Number.isFinite(remotenessIndex?.score ?? cachedRemoteRemotenessScore);
-  const remotenessOverlayCandidate = useMemo(
-    () =>
-      remotenessOverlayDataAvailable
-        ? buildRemoteMapOverlay({
-            enabled: true,
-            routePoints: displayedRoutePoints,
-            progressPoints: displayedRouteProgressPoints,
-            segmentFeatures: displayedSegmentFeatures,
-            remotenessScore: remotenessIndex?.score ?? cachedRemoteRemotenessScore,
-          })
-        : { enabled: false, heatmapAreas: [], forecastSegments: [] },
+    remotenessOverlaySegmentDataAvailable;
+  const remotenessMapOverlay = useMemo(
+    () => {
+      if (!showRemotenessOverlay || !remotenessOverlayDataAvailable) {
+        return DISABLED_REMOTENESS_MAP_OVERLAY;
+      }
+      return buildRemoteMapOverlay({
+        enabled: true,
+        routePoints: displayedRoutePoints,
+        progressPoints: displayedRouteProgressPoints,
+        segmentFeatures: displayedSegmentFeatures,
+        remotenessScore: remotenessIndex?.score ?? cachedRemoteRemotenessScore,
+      });
+    },
     [
       cachedRemoteRemotenessScore,
       displayedRoutePoints,
@@ -15158,19 +15176,10 @@ const handleCreateRun = useCallback(() => {
       displayedSegmentFeatures,
       remotenessOverlayDataAvailable,
       remotenessIndex?.score,
+      showRemotenessOverlay,
     ],
   );
-  const remotenessOverlayHasVisibleLayer =
-    remotenessOverlayCandidate.heatmapAreas.length > 0 ||
-    remotenessOverlayCandidate.forecastSegments.length > 0;
-  const remotenessMapOverlay = useMemo(
-    () =>
-      showRemotenessOverlay && remotenessOverlayHasVisibleLayer
-        ? remotenessOverlayCandidate
-        : { enabled: false, heatmapAreas: [], forecastSegments: [] },
-    [remotenessOverlayCandidate, remotenessOverlayHasVisibleLayer, showRemotenessOverlay],
-  );
-  const remotenessOverlayAvailable = remotenessOverlayHasVisibleLayer;
+  const remotenessOverlayAvailable = remotenessOverlayDataAvailable;
 
   const displayedTrailSegments = useMemo<TrailSegmentData[]>(
     () =>
@@ -15745,7 +15754,7 @@ const handleCreateRun = useCallback(() => {
         ? 132
         : 116;
   const remotenessLegendVisible =
-    remotenessOverlayHasVisibleLayer && (showRemotenessOverlay || remotenessLegendMounted);
+    remotenessOverlayAvailable && (showRemotenessOverlay || remotenessLegendMounted);
   const remotenessLegendTopOffset =
     topRouteSurfaceVisible
       ? roadNavigationSurfaceTopOffset +
@@ -16195,35 +16204,48 @@ const handleTopToolboxLayout = useCallback(
 
   const navigationStartReadinessStack = (() => {
     const route = roadNavigation.session.route;
+    const readinessNavigationPayload = selectNavigationOfflineReadinessPayload(
+      trailNavigation.session.payload,
+      exploreNavigationPayload,
+    );
+    const navigationOfflineContext = buildNavigationOfflineReadinessContext({
+      roadRoute: route
+        ? {
+            ...route,
+            canonicalRouteId: safeString((route.destination.raw as any)?.routeId, '') || null,
+          }
+        : null,
+      navigationPayload: readinessNavigationPayload,
+      activeRun: activeRun
+        ? {
+            id: activeRun.id,
+            title: activeRun.title,
+            sourceRouteId: activeRun.source_route_id,
+            sourceAssetId: activeRun.source_asset_id,
+            geometry: validatedRunPoints,
+          }
+        : null,
+      mapStyle,
+    });
     const routeHasGeometry =
       (route?.geometry?.length ?? 0) > 1 ||
-      (exploreNavigationPayload?.trailGeometry?.length ?? 0) > 1 ||
-      safeArray(exploreNavigationPayload?.trailGeometrySegments).some((segment) => safeArray(segment).length > 1) ||
+      (readinessNavigationPayload?.trailGeometry?.length ?? 0) > 1 ||
+      safeArray(readinessNavigationPayload?.trailGeometrySegments).some((segment) => safeArray(segment).length > 1) ||
       (activeRun?.points?.length ?? 0) > 1;
     const routeConfidence = deriveRouteConfidence(
       buildRouteConfidenceInputFromPreview({
-        payload: exploreNavigationPayload,
+        payload: readinessNavigationPayload,
         activeRun,
         routeHasGeometry,
       }),
     );
     const offlineReadiness = deriveOfflineReadiness({
       cacheSnapshot: evaluateCacheReadiness(),
-      runCacheManifest: activeRun?.offline_cache ?? null,
-      currentRouteContext: route
-        ? {
-            routeId: route.id,
-            destination: {
-              lat: route.destination.coordinate.lat,
-              lng: route.destination.coordinate.lng,
-              label: route.destination.title,
-            },
-            geometry: route.geometry,
-            mapStyle,
-            // Campsite layers stay outside tile readiness until their data is cache-backed.
-            requiredLayers: ['route-corridor', 'road-preview'],
-          }
+      runCacheManifest: navigationOfflineContext.activeRunMatchesContext
+        ? activeRun?.offline_cache ?? null
         : null,
+      runCacheManifestOwnerMatches: navigationOfflineContext.activeRunMatchesContext,
+      currentRouteContext: navigationOfflineContext.currentRouteContext,
       downloadedRoutes: offlineRouteReadinessState.routes,
       tileRegions: navigateTileCacheSnapshot.regions,
       tileSyncJobs: offlineTileSyncSnapshot.jobs,
@@ -16231,13 +16253,13 @@ const handleTopToolboxLayout = useCallback(
     });
 
     return buildRouteGuidanceReadinessViewModel({
-      routeId: exploreNavigationPayload?.id ?? activeRun?.id ?? route?.id ?? roadNavigation.session.destination?.id ?? null,
-      routeType: explorePreviewMode ?? exploreNavigationPayload?.tripMode ?? 'road',
-      vehicleFit: extractStartGuidanceVehicleFit(exploreNavigationPayload),
+      routeId: readinessNavigationPayload?.id ?? activeRun?.id ?? route?.id ?? roadNavigation.session.destination?.id ?? null,
+      routeType: explorePreviewMode ?? readinessNavigationPayload?.tripMode ?? 'road',
+      vehicleFit: extractStartGuidanceVehicleFit(readinessNavigationPayload),
       routeConfidence,
       offlineReadiness,
       campIntelSites,
-      isCustomRoute: isCustomNavigationPreview(exploreNavigationPayload, activeRun),
+      isCustomRoute: isCustomNavigationPreview(readinessNavigationPayload, activeRun),
       routeConfidenceSummary: navigateRouteConfidenceSummary,
     });
   })();
@@ -18048,32 +18070,11 @@ useEffect(() => {
 }, [recentSearchesVisible, roadNavigation.query]);
 const showIntelPopup = intelOpen && isMapUIReady;
 const activeImportedRoute = routeStore.getActive();
-const refreshSavedRouteAssets = useCallback(() => {
-  setSavedRoutesRefreshKey((key) => key + 1);
-}, []);
 useEffect(() => {
-  let cancelled = false;
-  void hydrateExploreFavoritesStore().finally(() => {
-    if (!cancelled) {
-      refreshSavedRouteAssets();
-    }
-  });
+  void hydrateExploreFavoritesStore();
+}, []);
 
-  const unsubscribeFavorites = subscribeExploreFavorites(refreshSavedRouteAssets);
-  const unsubscribeRoutes = routeStore.subscribe(refreshSavedRouteAssets);
-  refreshSavedRouteAssets();
-
-  return () => {
-    cancelled = true;
-    unsubscribeFavorites();
-    unsubscribeRoutes();
-  };
-}, [refreshSavedRouteAssets]);
-
-const savedRouteAssetCounts = useMemo(
-  () => calculateSavedRouteAssetCounts(savedRouteAssets),
-  [savedRouteAssets],
-);
+const savedRouteAssetCounts = savedRouteAssetInventory.counts;
 const visibleSavedRouteAssets = useMemo(
   () => filterSavedRouteAssets(savedRouteAssets, savedRoutesFilter, savedRoutesQuery),
   [savedRouteAssets, savedRoutesFilter, savedRoutesQuery],
@@ -19079,8 +19080,11 @@ const routeBuilderHasBlockedSnap =
   routeBuilderDraftPresentationSegments.some(
     (segment) => segment.geometryRole === 'raw_user_draft' || segment.snapStatus === 'blocked',
   );
+const routeBuilderAnchorDraftComplete =
+  routeBuilderDraft.anchors.length === 0 || isNavigateRouteDraftFullyLinked(routeBuilderDraft);
 const routeBuilderCanSave =
   !routeBuilderDrawing &&
+  routeBuilderAnchorDraftComplete &&
   routeBuilderSavableSegments.length > 0 &&
   routeBuilderPointCount > 1 &&
   !routeBuilderHasPendingSnap &&
@@ -19440,6 +19444,7 @@ const scanCampsiteDrawing = useCallback(() => {
 
 const resetBuildRouteDraft = useCallback((options?: { clearDesignContext?: boolean; keepActive?: boolean }) => {
   if (!options?.keepActive) {
+    routeBuilderActiveRef.current = false;
     setRouteBuilderActive(false);
     setDispersedRouteBuildActive(false);
     setDispersedRouteBuildStatus(null);
@@ -19466,7 +19471,6 @@ const resetBuildRouteDraft = useCallback((options?: { clearDesignContext?: boole
   if (options?.clearDesignContext) {
     setRouteDesignContext(null);
   }
-  setCustomRouteRefreshKey((key) => key + 1);
 }, []);
 
 const startCampScoutDrawing = useCallback(() => {
@@ -19611,6 +19615,7 @@ const buildRouteOverCampsiteDrawing = useCallback(() => {
   setActiveTopPopup(null);
   setFollowUser(false);
   setUserHasManuallyMovedMap(true);
+  routeBuilderActiveRef.current = true;
   setRouteBuilderActive(true);
   setRouteBuilderDrawing(false);
   setRouteBuilderSnapSource(null);
@@ -19687,6 +19692,7 @@ const startDispersedRouteSegmentBuild = useCallback(() => {
   setShowCrosshair(false);
   setFollowUser(false);
   setUserHasManuallyMovedMap(true);
+  routeBuilderActiveRef.current = true;
   setRouteBuilderActive(true);
   setRouteBuilderDrawing(false);
   setRouteBuilderSnapSource(null);
@@ -19739,6 +19745,7 @@ const handleDispersedRouteLegTap = useCallback((payload: DispersedRouteLegSelect
     .reverse()
     .find((segment) => Array.isArray(segment.coordinates) && segment.coordinates.length > 1);
 
+  routeBuilderActiveRef.current = true;
   setRouteBuilderActive(true);
   setDispersedRouteBuildActive(true);
   setRouteBuilderSegments(nextSegments);
@@ -19802,8 +19809,6 @@ const clearStagedBuildRoutePreview = useCallback(() => {
   if (cleared) {
     loadRuns();
     void clearExploreNavigationPayload();
-    setCustomRouteRefreshKey((key) => key + 1);
-    setSavedRoutesRefreshKey((key) => key + 1);
   }
 
   return cleared;
@@ -19895,8 +19900,6 @@ const saveVerifiedRouteBuilderDraft = useCallback(async (options?: {
     routeBuilderStagedRunIdRef.current = savedRun.id;
     routeStore.attachRun(savedRoute.id, savedRun.id);
     loadRuns();
-    setCustomRouteRefreshKey((key) => key + 1);
-    setSavedRoutesRefreshKey((key) => key + 1);
 
     if (options?.stage) {
       routeStore.setActive(savedRoute.id);
@@ -20284,8 +20287,6 @@ const ensureSavedRouteAssetRun = useCallback((asset: SavedRouteAsset): ECSRun | 
   const createdRun = runStore.createFromRoute(route, activeRun?.build_snapshot);
   routeStore.attachRun(route.id, createdRun.id);
   loadRuns();
-  setCustomRouteRefreshKey((key) => key + 1);
-  setSavedRoutesRefreshKey((key) => key + 1);
   return createdRun;
 }, [activeRun?.build_snapshot, loadRuns, showToast]);
 
@@ -20695,8 +20696,6 @@ const confirmPreflightLaunch = useCallback(() => {
 
 const refreshSavedRoutesCommandCenter = useCallback(() => {
   loadRuns();
-  setCustomRouteRefreshKey((key) => key + 1);
-  setSavedRoutesRefreshKey((key) => key + 1);
 }, [loadRuns]);
 
 const beginRenameSavedRouteAsset = useCallback((asset: SavedRouteAsset) => {
@@ -21262,8 +21261,6 @@ const toggleRemotenessOverlay = useCallback(() => {
     const savedRun = runStore.createFromRoute(savedRoute, activeRun?.build_snapshot);
     routeStore.attachRun(savedRoute.id, savedRun.id);
     loadRuns();
-    setCustomRouteRefreshKey((key) => key + 1);
-    setSavedRoutesRefreshKey((key) => key + 1);
     return { savedRoute, savedRun, routeSegments, persistenceKey };
   }, [activeRun?.build_snapshot, loadRuns]);
 
@@ -21581,8 +21578,6 @@ const toggleRemotenessOverlay = useCallback(() => {
       const savedRun = runStore.createFromRoute(savedRoute, activeRun?.build_snapshot);
       routeStore.attachRun(savedRoute.id, savedRun.id);
       loadRuns();
-      setCustomRouteRefreshKey((key) => key + 1);
-      setSavedRoutesRefreshKey((key) => key + 1);
       setEcsRouteActionStatus('idle');
       showToast('ECS ROUTE SAVED - AVAILABLE IN TOOLS STITCH');
     } catch (error) {
@@ -23128,6 +23123,7 @@ const mapRendererElement = useMemo(() => (
     followUser={mapRendererFollowUser}
     userLocation={mapRendererUserLocation}
     motionPriority={navigateMapMotion.motionPriority}
+    preserveWebViewWhenCold={activeNavigationRunning && !destinationSearchMapFrozen}
     performanceSurface="navigate"
     liveMapDisabled={activeRerouteMapStandby}
     interactive={!destinationSearchMapFrozen}
@@ -23209,6 +23205,7 @@ const mapRendererElement = useMemo(() => (
   />
 ), [
   activeRerouteMapStandby,
+  activeNavigationRunning,
   activeHealth?.overall,
   bailoutMarkers,
   campsiteSearchPolygonPayload,
@@ -26185,7 +26182,7 @@ const stableMapSurface = useMemo(() => {
         >
           <NavigateToolActionCard
             title="Route Command Center"
-            subtitle={formatSavedRouteAssetCountSummary(savedRouteAssetCounts)}
+            subtitle={savedRouteAssetInventory.summary}
             icon="albums-outline"
             badge="OPEN"
             compact
@@ -26235,7 +26232,7 @@ const stableMapSurface = useMemo(() => {
                 title="ROUTE COORDINATION"
                 subtitle={routeCoordinationControl.subtitle}
                 icon="radio-outline"
-                badge={routeCoordinationControl.busy ? 'OPENING' : 'MISSION'}
+                badge={routeCoordinationControl.badgeLabel}
                 compact
                 hideChevron
                 onPress={() => void handleOpenRouteMissionCommand()}
@@ -27979,9 +27976,11 @@ const stableMapSurface = useMemo(() => {
   'cloud-download-outline',
   () => closeTopPopup('offlineCache'),
   <ScrollView
+    testID="navigate-offline-cache-scroll"
     style={styles.mapPopupScroll}
-    contentContainerStyle={styles.mapPopupScrollContent}
+    contentContainerStyle={styles.offlineCachePopupScrollContent}
     showsVerticalScrollIndicator={false}
+    nestedScrollEnabled
     keyboardShouldPersistTaps="handled"
   >
     <OfflineCacheModal
@@ -30916,6 +30915,13 @@ mapPopupScroll: {
 mapPopupScrollContent: {
   padding: 16,
   paddingBottom: 30,
+},
+
+offlineCachePopupScrollContent: {
+  flexGrow: 1,
+  paddingHorizontal: 12,
+  paddingTop: 12,
+  paddingBottom: 24,
 },
 
 mapPopupStaticContent: {

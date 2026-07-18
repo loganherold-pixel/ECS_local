@@ -474,11 +474,10 @@ assert.ok(!commandCenterSource.includes('<ScrollView'), 'Dispatch page should no
 assert.ok(commandCenterSource.includes('feedPanel:') && commandCenterSource.includes('flex: 1'), 'CAD feed panel should flex to available height.');
 assert.ok(
   commandCenterSource.includes('getDispatchChannelSnapshots') &&
-    commandCenterSource.includes('isLiveSource = channel.sourceState') &&
-    commandCenterSource.includes('isCachedSource = channel.sourceState') &&
-    commandCenterSource.includes('isUnavailableSource = channel.sourceState') &&
-    commandCenterSource.includes('getSourceStateLabel(channel.sourceState)'),
-  'Dispatch UI should expose live/cache/unavailable source state.',
+    commandCenterSource.includes('subscribeDispatchChannels') &&
+    commandCenterSource.includes('buildLiveDispatchEvents') &&
+    commandCenterSource.includes('replaceLiveDispatchEvents'),
+  'Dispatch should preserve channel subscriptions and source-state propagation into the event feed.',
 );
 assert.ok(!commandCenterSource.includes('MOCK_DISPATCH_CAD_EVENTS'), 'Dispatch tab must not import seeded CAD events.');
 assert.ok(!commandCenterSource.includes('dispatchMockData'), 'Dispatch tab must not import dispatch seed data.');
@@ -520,20 +519,17 @@ assert.ok(commandCenterSource.includes('RECOVERY_GPS_MAX_AGE_MS'), 'Recovery rep
 assert.ok(commandCenterSource.includes("source === 'user_report'"), 'User-submitted Recovery reports should remain local/internal.');
 assert.ok(commandCenterSource.includes('Location unavailable'), 'Recovery reports should support GPS unavailable submission.');
 assert.ok(commandCenterSource.includes('requiresMapDrilldown: !!recoveryFix'), 'Recovery reports should only expose map drilldown when GPS is captured.');
-assert.ok(commandCenterSource.includes('DispatchChannelButton'), 'Dispatch live strip should render actionable channel buttons.');
-assert.ok(commandCenterSource.includes('getDispatchChannelSnapshots'), 'Dispatch live strip should read channel snapshots.');
-assert.ok(commandCenterSource.includes('createDispatchEventFromChannelAction'), 'Dispatch channel buttons should create validated dispatch events.');
-assert.ok(commandCenterSource.includes('isLiveSource = channel.sourceState === \'live_systems\''), 'Dispatch channel tiles should light up from live source state.');
-assert.ok(commandCenterSource.includes('liveChipSourceLive'), 'Dispatch channel tiles should have a distinct live visual state.');
-assert.ok(commandCenterSource.includes('liveChipSourceCached'), 'Dispatch channel tiles should distinguish last-known cached data from live data.');
-assert.ok(commandCenterSource.includes('liveChipSubdued'), 'Dispatch channel tiles should visually calm inactive secondary states.');
-assert.ok(commandCenterSource.includes('isDispatchChannelElevated'), 'Dispatch channel hierarchy should keep live, warning, and critical states elevated.');
-assert.ok(commandCenterSource.includes("channel.id === 'route' || channel.id === 'sync'"), 'Dispatch hierarchy should reserve primary emphasis for active route/link states.');
-assert.ok(commandCenterSource.includes('getSourceStateLabel(channel.sourceState)'), 'Dispatch channel tiles should expose source truth to users.');
-assert.ok(commandCenterSource.includes('displaySourceLabel'), 'Dispatch channel tiles should suppress redundant cached/source wording in the visible footer.');
-assert.ok(!commandCenterSource.includes('LAST KNOWN'), 'Dispatch live tiles should not repeat LAST KNOWN labels in compact channel cards.');
-assert.ok(commandCenterSource.includes('requestDispatchSync'), 'Sync channel should trigger an actual dispatch sync refresh/retry action.');
-assert.ok(commandCenterSource.includes('testID={`dispatch-channel-${channel.id}-${channel.sourceState}`}'), 'Dispatch channel tiles should expose source state for regression tests.');
+assert.ok(!commandCenterSource.includes('DispatchChannelButton'), 'The removed Weather/Route/Terrain/Resources/Vehicle/Sync card component must not remain mounted or focusable.');
+assert.ok(!commandCenterSource.includes('dispatch-channel-'), 'Dispatch should not expose removed channel-card controls or accessibility targets.');
+assert.ok(!commandCenterSource.includes('renderLiveStrip'), 'Portrait Dispatch should not reserve a 3x2 summary strip above Mission Command.');
+assert.ok(
+  commandCenterSource.includes('testID="dispatch-primary-actions"') &&
+    commandCenterSource.includes('<MissionCommandDispatchNavigation') &&
+    commandCenterSource.includes('testID="dispatch-primary-workspace"') &&
+    commandCenterSource.includes('testID="dispatch-mission-timeline-events"') &&
+    (commandCenterSource.match(/<DispatchMissionCommandBoard\b/g) ?? []).length === 1,
+  'Dispatch should retain one focused action, Mission Command, event, and personal/command-board workspace hierarchy.',
+);
 assert.ok(commandCenterSource.includes('teamStore.getSnapshot'), 'Dispatch should read real team state from the team store.');
 assert.ok(commandCenterSource.includes('getTeamSyncState'), 'Dispatch should show explicit reasoned team sync/no-team state.');
 assert.ok(commandCenterSource.includes('reason: teamSyncState.reason'), 'Dispatch should log the reason for team sync state.');

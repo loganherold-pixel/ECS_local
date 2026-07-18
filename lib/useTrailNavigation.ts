@@ -19,6 +19,11 @@ import {
   type TrailNavigationSessionSnapshot,
 } from './trailNavigationStore';
 import type { RoadNavCoordinate } from './mapboxRoadNavigation';
+import {
+  createTrailNavigationPersistenceScheduler,
+  isTrailNavigationImmediatePersistenceBoundary,
+  type TrailNavigationPersistenceScheduler,
+} from './trailNavigationProgressPersistence';
 
 function headingDeltaDegrees(a: number, b: number): number {
   const left = ((a % 360) + 360) % 360;
@@ -220,21 +225,50 @@ export function useTrailNavigation(params: {
   const rejoinHitCountRef = useRef(0);
   const reverseProgressCountRef = useRef(0);
 
-  const persist = useCallback(async (next: TrailNavigationSessionState) => {
-    if (!next.payload || next.status === 'idle' || next.status === 'cancelled') {
-      await clearTrailNavigationSession();
-      return;
-    }
+  const persistenceSchedulerRef = useRef<
+    TrailNavigationPersistenceScheduler<TrailNavigationSessionState> | null
+  >(null);
+  if (!persistenceSchedulerRef.current) {
+    persistenceSchedulerRef.current = createTrailNavigationPersistenceScheduler({
+      persist: async (next) => {
+        if (!next.payload || next.status === 'idle' || next.status === 'cancelled') {
+          await clearTrailNavigationSession();
+          return;
+        }
 
-    await saveTrailNavigationSession({
-      sessionId: next.sessionId ?? randomSessionId(),
-      payload: next.payload,
-      status: next.status,
-      reachedWaypointIds: next.reachedWaypointIds,
-      lastKnownRouteIndex: next.currentRouteIndex,
-      updatedAt: new Date().toISOString(),
+        await saveTrailNavigationSession({
+          sessionId: next.sessionId ?? randomSessionId(),
+          payload: next.payload,
+          status: next.status,
+          reachedWaypointIds: next.reachedWaypointIds,
+          lastKnownRouteIndex: next.currentRouteIndex,
+          updatedAt: new Date().toISOString(),
+        });
+      },
     });
-  }, []);
+  }
+  const persistenceScheduler = persistenceSchedulerRef.current;
+
+  const persistImmediate = useCallback(
+    async (next: TrailNavigationSessionState) => {
+      await persistenceScheduler.persistImmediate(next);
+    },
+    [persistenceScheduler],
+  );
+
+  const persistProgressCheckpoint = useCallback(
+    (next: TrailNavigationSessionState) => {
+      persistenceScheduler.scheduleCheckpoint(next);
+    },
+    [persistenceScheduler],
+  );
+
+  useEffect(
+    () => () => {
+      void persistenceScheduler.dispose();
+    },
+    [persistenceScheduler],
+  );
 
   useEffect(() => {
     if (!enabled) {
@@ -313,9 +347,9 @@ export function useTrailNavigation(params: {
         updatedAt: new Date().toISOString(),
       };
       setSession(next);
-      await persist(next);
+      await persistImmediate(next);
     },
-    [persist],
+    [persistImmediate],
   );
 
   const startNavigation = useCallback(async () => {
@@ -333,7 +367,7 @@ export function useTrailNavigation(params: {
           error: unavailableReason,
           updatedAt: new Date().toISOString(),
         };
-        void persist(next);
+        void persistImmediate(next);
         return next;
       }
       const next: TrailNavigationSessionState = {
@@ -346,10 +380,10 @@ export function useTrailNavigation(params: {
         promptBadge: 'transition',
         updatedAt: new Date().toISOString(),
       };
-      void persist(next);
+      void persistImmediate(next);
       return next;
     });
-  }, [persist]);
+  }, [persistImmediate]);
 
   const transitionFromRoad = useCallback(async () => {
     setSession((prev) => {
@@ -363,10 +397,10 @@ export function useTrailNavigation(params: {
         promptBadge: 'transition',
         updatedAt: new Date().toISOString(),
       };
-      void persist(next);
+      void persistImmediate(next);
       return next;
     });
-  }, [persist]);
+  }, [persistImmediate]);
 
   useEffect(() => {
     if (session.status !== 'transition_to_trail') return;
@@ -405,7 +439,7 @@ export function useTrailNavigation(params: {
           error: 'Trail route unavailable',
           routeStatusLabel: 'Trail route unavailable',
         };
-        void persist(next);
+        void persistImmediate(next);
         return next;
       });
       return;
@@ -569,18 +603,28 @@ export function useTrailNavigation(params: {
         return prev;
       }
 
-      void persist(next);
+      if (isTrailNavigationImmediatePersistenceBoundary(prev, next)) {
+        void persistImmediate(next);
+      } else {
+        persistProgressCheckpoint(next);
+      }
       return next;
     });
-  }, [location, persist, session.payload, session.status]);
+  }, [
+    location,
+    persistImmediate,
+    persistProgressCheckpoint,
+    session.payload,
+    session.status,
+  ]);
 
   const endNavigation = useCallback(async () => {
     setSession(createEmptySession());
     offTrailHitCountRef.current = 0;
     rejoinHitCountRef.current = 0;
     reverseProgressCountRef.current = 0;
-    await clearTrailNavigationSession();
-  }, []);
+    await persistImmediate(createEmptySession());
+  }, [persistImmediate]);
 
   const uiMode = useMemo(() => {
     if (session.status === 'error') return 'error';

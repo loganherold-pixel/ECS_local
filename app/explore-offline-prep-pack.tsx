@@ -20,7 +20,7 @@ import ECSOperationalAnnouncer from '../components/ECSOperationalAnnouncer';
 import { ECSButton } from '../components/ECSButton';
 import { ECS, TACTICAL } from '../lib/theme';
 import { getShellBottomClearance } from '../lib/shellLayout';
-import { getMapboxToken } from '../lib/mapConfig';
+import { DEFAULT_MAP_STYLE, getMapboxToken } from '../lib/mapConfig';
 import { hapticMicro } from '../lib/haptics';
 import { runAfterShellInteractions, type ShellInteractionTask } from '../lib/shellInteractionScheduler';
 import { withTimeout } from '../lib/ecsStabilityGuards';
@@ -44,8 +44,10 @@ import {
   createOfflinePrepActionLifecycle,
   clearOfflinePrepPackHandoff,
   getOfflinePrepRouteCacheRunId,
+  getOfflinePrepPackMapStyleKey,
   getOfflinePrepPackRouteCoordinates,
   getOfflinePrepPreparedRoadRoute,
+  getOfflinePrepRouteCacheAliases,
   getOfflinePrepRouteCoordinates,
   hydrateOfflinePrepRouteGeometry,
   loadOfflinePrepPackHandoffAsync,
@@ -655,8 +657,13 @@ function buildOfflinePrepRouteIntent(
       primaryName: run.title,
     },
     mapContext: {
-      styleKey: 'tactical',
-      layerContext: ['offline_prep_pack', 'trip_builder_itinerary'],
+      styleKey: getOfflinePrepPackMapStyleKey(input),
+      layerContext: [
+        'route-corridor',
+        'road-preview',
+        'offline_prep_pack',
+        'trip_builder_itinerary',
+      ],
       zoomMin: analysis.zoomMin,
       zoomMax: analysis.zoomMax,
       corridorMiles: analysis.bufferMiles,
@@ -1173,11 +1180,13 @@ export default function ExploreOfflinePrepPackScreen() {
     if (handoffInput && routeId(handoffInput.route) === selectedRouteKey) {
       return {
         ...handoffInput,
+        mapStyleKey: handoffInput.mapStyleKey ?? DEFAULT_MAP_STYLE,
         weatherSnapshot: weatherSnapshot ?? handoffInput.weatherSnapshot ?? null,
       };
     }
     return {
       route: selectedRoute,
+      mapStyleKey: DEFAULT_MAP_STYLE,
       vehicleProfile: buildVehicleProfile(),
       readiness: buildReadinessReference(selectedRoute),
       campsiteCandidates: routeToCampCandidates(selectedRoute),
@@ -1478,6 +1487,7 @@ export default function ExploreOfflinePrepPackScreen() {
   ) => {
     const updated = await cacheOfflineRoute({
       run,
+      routeIdAliases: selectedInput ? getOfflinePrepRouteCacheAliases(selectedInput) : [],
       health: computeRunHealth(run),
       offlineTileRegionId: regionId,
       offlineTileRegionIds: requiredRegionIds,
@@ -1579,7 +1589,8 @@ export default function ExploreOfflinePrepPackScreen() {
       if (!run) {
         throw new Error('Route geometry is required before saving this Offline Prep Pack.');
       }
-      const analysis = analyzeRoute(run);
+      const mapStyleKey = getOfflinePrepPackMapStyleKey(selectedInput);
+      const analysis = analyzeRoute(run, mapStyleKey);
       if (!analysis) {
         throw new Error('Route corridor analysis is required before preparing this Offline Prep Pack.');
       }
@@ -1608,7 +1619,7 @@ export default function ExploreOfflinePrepPackScreen() {
             segment.bounds.corridorMiles,
             segment.zoomMin,
             segment.zoomMax,
-            'tactical',
+            mapStyleKey,
           );
           if (!region) {
             throw new Error('Low-signal segment route corridor is unavailable.');
@@ -1683,13 +1694,17 @@ export default function ExploreOfflinePrepPackScreen() {
         analysis.bufferMiles,
         analysis.zoomMin,
         analysis.zoomMax,
-        'tactical',
+        mapStyleKey,
       );
       if (!region) {
         throw new Error('Route corridor analysis is required before preparing this Offline Prep Pack.');
       }
       tileCacheStore.updateRegion(region.id, {
         routeId: run.id,
+        // Canonicalize a reused legacy DAY-compatible region before replacing
+        // its legacy intent metadata, so later hydration retains the proven
+        // style identity instead of resurrecting a Tactical mismatch warning.
+        styleKey: mapStyleKey,
         sourceType: 'route-corridor',
         syncType: 'route',
         corridorMiles: analysis.bufferMiles,
@@ -1845,7 +1860,7 @@ export default function ExploreOfflinePrepPackScreen() {
         try {
           const run = buildOfflinePrepRun(selectedInput);
           if (!run) throw new Error('Route geometry is required before retrying offline map preparation.');
-          const analysis = analyzeRoute(run);
+          const analysis = analyzeRoute(run, getOfflinePrepPackMapStyleKey(selectedInput));
           if (!analysis) throw new Error('Route corridor analysis is required before retrying offline map preparation.');
           const defaultRouteIntent = buildOfflinePrepRouteIntent(selectedInput, manifest, run, analysis);
           const retryRegions = retryRegionIds.map((regionId) => {

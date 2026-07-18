@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import {
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
 
@@ -20,6 +21,9 @@ import type {
 type ExpeditionNotableMomentsTimelineProps = {
   recap: ExpeditionRecap | null;
   tripStartedAt: string;
+  moments?: NormalizedNotableMoment[];
+  selectedMomentId?: string | null;
+  onSelectMoment?: (momentId: string) => void;
 };
 
 function iconForCategory(category: TimelineCategory): React.ComponentProps<typeof Ionicons>['name'] {
@@ -55,16 +59,35 @@ function severityStyle(severity: NormalizedNotableMoment['severity']) {
 function TimelineMomentRow({
   moment,
   isLast,
+  selected,
+  onPress,
 }: {
   moment: NormalizedNotableMoment;
   isLast: boolean;
+  selected: boolean;
+  onPress?: () => void;
 }) {
-  const timeLabel = formatNotableMomentLocalTime(moment.timestamp);
+  const routePointIndex = 'routePointIndex' in moment && typeof moment.routePointIndex === 'number'
+    ? moment.routePointIndex
+    : null;
+  const timeLabel = moment.timestamp
+    ? formatNotableMomentLocalTime(moment.timestamp)
+    : routePointIndex != null
+      ? `Route point ${routePointIndex + 1}`
+      : 'Time unavailable';
 
   return (
-    <View style={styles.momentRow}>
+    <TouchableOpacity
+      style={[styles.momentRow, selected && styles.momentRowSelected]}
+      onPress={onPress}
+      activeOpacity={onPress ? 0.78 : 1}
+      disabled={!onPress}
+      accessibilityRole={onPress ? 'button' : undefined}
+      accessibilityLabel={`${moment.title}. ${moment.description}`}
+      accessibilityState={{ selected }}
+    >
       <View style={styles.timelineRail}>
-        <View style={[styles.momentMarker, severityStyle(moment.severity)]}>
+        <View style={[styles.momentMarker, severityStyle(moment.severity), selected && styles.momentMarkerSelected]}>
           <Ionicons name={iconForCategory(moment.category)} size={12} color={TACTICAL.text} />
         </View>
         {!isLast ? <View style={styles.timelineLine} /> : null}
@@ -77,15 +100,22 @@ function TimelineMomentRow({
         <Text style={styles.momentDescription} numberOfLines={2}>{moment.description}</Text>
         <Text style={styles.momentCategory}>{moment.category.toUpperCase()}</Text>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 }
 
 export default function ExpeditionNotableMomentsTimeline({
   recap,
   tripStartedAt,
+  moments: suppliedMoments,
+  selectedMomentId = null,
+  onSelectMoment,
 }: ExpeditionNotableMomentsTimelineProps) {
-  const moments = useMemo(() => normalizeExpeditionNotableMoments(recap, tripStartedAt), [recap, tripStartedAt]);
+  const normalizedMoments = useMemo(
+    () => normalizeExpeditionNotableMoments(recap, tripStartedAt),
+    [recap, tripStartedAt],
+  );
+  const moments = suppliedMoments ?? normalizedMoments;
 
   return (
     <View style={styles.section}>
@@ -104,6 +134,8 @@ export default function ExpeditionNotableMomentsTimeline({
               key={moment.id}
               moment={moment}
               isLast={index === moments.length - 1}
+              selected={selectedMomentId === moment.id}
+              onPress={onSelectMoment ? () => onSelectMoment(moment.id) : undefined}
             />
           ))}
         </View>
@@ -117,7 +149,6 @@ export default function ExpeditionNotableMomentsTimeline({
         </View>
       )}
 
-      {/* TODO Expedition Timeline: link timeline rows to recap map callouts. */}
       {/* TODO Expedition Timeline: support exploded route annotations for selected moments. */}
       {/* TODO Expedition Timeline: expose badge triggers after badge evaluation exists. */}
       {/* TODO Expedition Timeline: add PDF timeline export after export behavior is built. */}
@@ -164,6 +195,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 9,
     minHeight: 54,
+    borderRadius: 7,
+  },
+  momentRowSelected: {
+    backgroundColor: 'rgba(242,194,77,0.07)',
   },
   timelineRail: {
     width: 22,
@@ -228,6 +263,10 @@ const styles = StyleSheet.create({
     lineHeight: 11,
     maxWidth: 112,
     textAlign: 'right',
+  },
+  momentMarkerSelected: {
+    borderColor: TACTICAL.amber,
+    borderWidth: 2,
   },
   momentDescription: {
     color: TACTICAL.textMuted,

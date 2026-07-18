@@ -200,6 +200,7 @@ import {
   startECSPerformanceSpan,
 } from '../../lib/performance/ecsPerformanceDiagnostics';
 import {
+  buildDashboardCompletedGuidanceRouteSummary,
   buildDashboardAssessmentRefreshKey,
   selectDashboardExpeditionHubRenderKey,
   selectDashboardExpeditionPresentation,
@@ -2897,31 +2898,12 @@ function DashboardScreenInner() {
     Boolean(dashboardRouteProgress?.isComplete) ||
     dashboardRouteProgress?.status === 'completed';
   const completedGuidanceRouteSummary = useMemo(
-    () => dashboardRouteProgressCompleted
-      ? {
-        id: String(
-          dashboardRouteProgress?.activeRouteId ??
-            expeditionId ??
-            dashboardRouteProgress?.routeLabel ??
-            'completed-guidance-route',
-        ),
-        state: 'complete',
-        expeditionName: dashboardRouteProgress?.routeLabel ?? undefined,
-        destination: dashboardRouteProgress?.destinationLabel ?? undefined,
-        totalDistanceMiles: firstFiniteNumber(
-          dashboardRouteProgress?.totalDistance,
-          dashboardRouteProgress?.completedMiles,
-        ),
-        completedMiles: firstFiniteNumber(
-          dashboardRouteProgress?.completedMiles,
-          dashboardRouteProgress?.totalDistance,
-        ),
-        maxElevationFt: gps.position?.altitudeFt ?? null,
-        durationSeconds: null,
-        source: dashboardRouteProgress?.source ?? 'active-route-progress',
-        updatedAt: dashboardRouteProgress?.lastUpdated ?? dashboardRouteProgress?.updatedAt ?? null,
-        }
-      : null,
+    () => buildDashboardCompletedGuidanceRouteSummary({
+      routeProgress: dashboardRouteProgress,
+      routeProgressCompleted: dashboardRouteProgressCompleted,
+      expeditionId,
+      gpsElevationFt: gps.position?.altitudeFt ?? null,
+    }),
     [dashboardRouteProgress, dashboardRouteProgressCompleted, expeditionId, gps.position?.altitudeFt],
   );
   const expeditionPresentation = useMemo(

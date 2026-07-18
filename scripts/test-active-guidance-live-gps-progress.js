@@ -209,5 +209,14 @@ assert(
   navigateSource.includes('resolveNavigateMapUserLocation({'),
   'The mounted Navigate map must use the tested raw-location presentation selector.',
 );
+const progressSelectorStart = navigateSource.indexOf('const displayedRouteProgressPoints = useMemo');
+const progressSelectorEnd = navigateSource.indexOf('const mapDisplayUserLocation = useMemo', progressSelectorStart);
+const mountedProgressSelector = navigateSource.slice(progressSelectorStart, progressSelectorEnd);
+assert(
+  progressSelectorStart >= 0 &&
+    progressSelectorEnd > progressSelectorStart &&
+    !mountedProgressSelector.includes('safeUserLocation'),
+  'Raw GPS jitter must not recompute displayed progress geometry when the progress-path contract cannot change its output.',
+);
 
 console.log('[active-guidance-live-gps-progress] passed');

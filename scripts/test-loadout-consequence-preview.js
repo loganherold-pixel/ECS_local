@@ -808,10 +808,10 @@ function riskAtLeast(level, expected) {
   ['unsafe', 'do not drive', 'route blocked', 'vehicle unfit'].forEach((claim) => {
     assert.ok(!panelSource.toLowerCase().includes(claim), `Panel copy must avoid unsupported hard claim: ${claim}`);
   });
-  assert.ok(commandBriefSource.includes('LoadoutConsequenceCommandBriefPanel'), 'Command Brief must mirror aggregate loadout consequence impact.');
-  assert.ok(commandBriefSource.includes('useLoadoutConsequencePreviewSnapshot'), 'Command Brief must subscribe to latest preview snapshot.');
-  assert.ok(commandBriefSource.includes('invalidationReason'), 'Command Brief mirror should expose validity/staleness metadata.');
-  assert.ok(commandBriefSource.includes('summary.stale'), 'Command Brief should avoid active proposed preview when stale.');
+  assert.ok(!commandBriefSource.includes('LoadoutConsequenceCommandBriefPanel'), 'Compact Command Brief should not duplicate the Fleet loadout preview panel.');
+  assert.ok(!commandBriefSource.includes('useLoadoutConsequencePreviewSnapshot'), 'Compact Command Brief should not subscribe to presentation-only Fleet preview state.');
+  assert.ok(commandBriefSource.includes('activeVehicleReadiness'), 'Command Brief should still consume the authoritative active vehicle readiness state.');
+  assert.ok(commandBriefSource.includes('buildExpeditionReadinessSnapshotForWeakPoints'), 'Vehicle consequences should continue through deterministic readiness and weak-point inputs.');
 }
 
 {

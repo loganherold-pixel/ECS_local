@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   LayoutChangeEvent,
   Modal,
   Pressable,
@@ -16,6 +17,7 @@ import { getMapStyleUrl, getMapboxToken, getMapboxTokenSync } from '../../lib/ma
 import type {
   ExpeditionRecap,
   ExpeditionRecapNotableMoment,
+  ExpeditionRecapRouteStoryMoment,
   ExpeditionTripBounds,
   ExpeditionTripCoordinate,
 } from '../../lib/expedition';
@@ -31,6 +33,7 @@ type RecapMapModel = {
   bounds: ExpeditionTripBounds;
   start: ProjectedPoint | null;
   finish: ProjectedPoint | null;
+  focusCallouts: RecapMapCallout[];
   callouts: RecapMapCallout[];
 };
 
@@ -64,6 +67,11 @@ type ExpeditionRecapMapProps = {
   endCoordinate: ExpeditionTripCoordinate | null;
   recap: ExpeditionRecap | null;
   tripStartedAt?: string | null;
+  routeSourceLabel?: string | null;
+  routeSourceDetail?: string | null;
+  storyMoments?: ExpeditionRecapRouteStoryMoment[];
+  selectedCalloutId?: string | null;
+  onCalloutSelected?: (calloutId: string | null) => void;
 };
 
 type CalloutCategory =
@@ -84,6 +92,18 @@ type RecapMapCallout = {
   routePoint: ProjectedPoint;
   x: number;
   y: number;
+  score: number;
+};
+
+type RecapCalloutMoment = {
+  id: string;
+  capturedAt: string | null;
+  type: string;
+  title: string;
+  detail?: string | null;
+  coordinate?: ExpeditionTripCoordinate | null;
+  routePointIndex?: number | null;
+  routeSource?: 'recorded' | 'planned';
 };
 
 const MAP_HEIGHT = 220;
@@ -182,7 +202,12 @@ function formatElapsed(startedAt: string | null | undefined, capturedAt: string 
 }
 
 function calloutCategoryForMoment(type: ExpeditionRecapNotableMoment['type'] | string): CalloutCategory {
-  if (type === 'highest_elevation') return 'elevation';
+  if (
+    type === 'highest_elevation' ||
+    type === 'lowest_elevation' ||
+    type === 'elevation_sample' ||
+    type === 'flat_elevation_profile'
+  ) return 'elevation';
   if (type === 'weather_change') return 'weather';
   if (type === 'route_deviation' || type === 'reroute_accepted') return 'route';
   if (type === 'terrain_risk_warning') return 'terrain';
@@ -191,7 +216,7 @@ function calloutCategoryForMoment(type: ExpeditionRecapNotableMoment['type'] | s
   return 'milestone';
 }
 
-function calloutScore(moment: ExpeditionRecapNotableMoment): number {
+function calloutScore(moment: RecapCalloutMoment): number {
   const typeScore: Record<string, number> = {
     terrain_risk_warning: 96,
     recovery_tools_opened: 94,
@@ -199,6 +224,9 @@ function calloutScore(moment: ExpeditionRecapNotableMoment): number {
     reroute_accepted: 88,
     weather_change: 84,
     highest_elevation: 82,
+    lowest_elevation: 81,
+    flat_elevation_profile: 80,
+    elevation_sample: 79,
     badge_unlocked: 78,
     guidance_completed: 54,
     manual_note: 42,
@@ -207,7 +235,7 @@ function calloutScore(moment: ExpeditionRecapNotableMoment): number {
   return (typeScore[moment.type] ?? 40) + detailBoost;
 }
 
-function descriptionForCallout(moment: ExpeditionRecapNotableMoment): string {
+function descriptionForCallout(moment: RecapCalloutMoment): string {
   const detail = moment.detail?.trim();
   if (!detail) {
     if (moment.type === 'highest_elevation') return 'Highest recorded point.';
@@ -242,14 +270,6 @@ function iconForCalloutCategory(category: CalloutCategory): React.ComponentProps
   }
 }
 
-function nearestRoutePoint(projectedRoute: ProjectedPoint[], point: ProjectedPoint): ProjectedPoint {
-  return projectedRoute.reduce((nearest, candidate) => {
-    const nearestDistance = (nearest.x - point.x) ** 2 + (nearest.y - point.y) ** 2;
-    const candidateDistance = (candidate.x - point.x) ** 2 + (candidate.y - point.y) ** 2;
-    return candidateDistance < nearestDistance ? candidate : nearest;
-  }, projectedRoute[0]);
-}
-
 function rectsOverlap(
   left: { x: number; y: number; width: number; height: number },
   right: { x: number; y: number; width: number; height: number },
@@ -266,28 +286,62 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-function buildCallouts(
+function recapCalloutMoments(
   recap: ExpeditionRecap | null,
+  storyMoments: ExpeditionRecapRouteStoryMoment[] | undefined,
+): RecapCalloutMoment[] {
+  return storyMoments?.length
+    ? storyMoments.map((moment) => ({
+        id: moment.id,
+        capturedAt: moment.timestamp,
+        type: moment.type,
+        title: moment.title,
+        detail: moment.description,
+        coordinate: moment.coordinate,
+        routePointIndex: moment.routePointIndex,
+        routeSource: moment.routeSource,
+      }))
+    : recap?.expeditionEvents.notableMoments ?? [];
+}
+
+function buildFocusCallouts(
+  recap: ExpeditionRecap | null,
+  storyMoments: ExpeditionRecapRouteStoryMoment[] | undefined,
   project: (coordinate: ExpeditionTripCoordinate) => ProjectedPoint,
   projectedRoute: ProjectedPoint[],
-  width: number,
   tripStartedAt?: string | null,
 ): RecapMapCallout[] {
-  if (!recap || width < 300 || projectedRoute.length < 2) return [];
-  const candidates = (recap.expeditionEvents.notableMoments ?? [])
+  if ((!recap && !storyMoments?.length) || projectedRoute.length < 2) return [];
+  return recapCalloutMoments(recap, storyMoments)
     .filter((moment) => isValidCoordinate(moment.coordinate))
-    .map((moment) => ({
-      moment,
-      score: calloutScore(moment),
-      projectedMoment: project(moment.coordinate as ExpeditionTripCoordinate),
-    }))
+    .filter((moment) => moment.routeSource !== 'planned' || moment.routePointIndex != null)
+    .map((moment) => {
+      const projectedMoment = project(moment.coordinate as ExpeditionTripCoordinate);
+      return {
+        id: moment.id,
+        title: moment.title.trim().slice(0, 34) || 'Trip moment',
+        description: descriptionForCallout(moment),
+        elapsedLabel: formatElapsed(tripStartedAt, moment.capturedAt),
+        category: calloutCategoryForMoment(moment.type),
+        routePoint: projectedMoment,
+        x: projectedMoment.x,
+        y: projectedMoment.y,
+        score: calloutScore(moment),
+      };
+    });
+}
+
+function buildCallouts(
+  focusCallouts: RecapMapCallout[],
+  width: number,
+): RecapMapCallout[] {
+  if (width < 300 || focusCallouts.length === 0) return [];
+  const candidates = [...focusCallouts]
     .sort((left, right) => {
       if (right.score !== left.score) return right.score - left.score;
-      return left.moment.id.localeCompare(right.moment.id);
+      return left.id.localeCompare(right.id);
     })
     .slice(0, MAX_CALLOUTS + 3);
-
-  if (candidates.length === 0) return [];
 
   const placedRects: { x: number; y: number; width: number; height: number }[] = [];
   const placed: RecapMapCallout[] = [];
@@ -296,7 +350,7 @@ function buildCallouts(
   const yOffsets = [-64, 28, -34, 52, -88, 8];
 
   for (const candidate of candidates) {
-    const routePoint = nearestRoutePoint(projectedRoute, candidate.projectedMoment);
+    const routePoint = candidate.routePoint;
     const prefersRight = routePoint.x < width / 2;
     const xOptions = prefersRight
       ? [
@@ -328,12 +382,7 @@ function buildCallouts(
     if (!placement) continue;
     placedRects.push(placement);
     placed.push({
-      id: candidate.moment.id,
-      title: candidate.moment.title.trim().slice(0, 34) || 'Trip moment',
-      description: descriptionForCallout(candidate.moment),
-      elapsedLabel: formatElapsed(tripStartedAt, candidate.moment.capturedAt),
-      category: calloutCategoryForMoment(candidate.moment.type),
-      routePoint,
+      ...candidate,
       x: placement.x,
       y: placement.y,
     });
@@ -350,6 +399,7 @@ function buildRecapMapModel(
   startCoordinate: ExpeditionTripCoordinate | null,
   endCoordinate: ExpeditionTripCoordinate | null,
   recap: ExpeditionRecap | null,
+  storyMoments: ExpeditionRecapRouteStoryMoment[] | undefined,
   tripStartedAt: string | null | undefined,
   width: number,
 ): RecapMapModel | null {
@@ -377,13 +427,15 @@ function buildRecapMapModel(
   const finish = isValidCoordinate(endCoordinate)
     ? project(endCoordinate)
     : projectedRoute[projectedRoute.length - 1] ?? null;
-  const callouts = buildCallouts(recap, project, projectedRoute, width, tripStartedAt);
+  const focusCallouts = buildFocusCallouts(recap, storyMoments, project, projectedRoute, tripStartedAt);
+  const callouts = buildCallouts(focusCallouts, width);
 
   return {
     projectedRoute,
     bounds,
     start,
     finish,
+    focusCallouts,
     callouts,
   };
 }
@@ -407,7 +459,7 @@ function buildRecapMapPayload(
       [model.bounds.west, model.bounds.south],
       [model.bounds.east, model.bounds.north],
     ],
-    features: model.callouts.map((callout) => ({
+    features: model.focusCallouts.map((callout) => ({
       type: 'Feature' as const,
       properties: { id: callout.id,
         title: callout.title,
@@ -462,6 +514,7 @@ function buildRecapMapHtml(mapboxToken: string, styleUrl: string, mapMode: Recap
       var RNW = window.ReactNativeWebView;
       var map = null;
       var pendingPayload = null;
+      var pendingSelectedCalloutId = null;
       var selectedPopup = null;
       var RECAP_TERRAIN_SOURCE_ID = '${RECAP_TERRAIN_SOURCE_ID}';
       var RECAP_MAP_3D_PITCH = ${RECAP_MAP_3D_PITCH};
@@ -536,8 +589,9 @@ function buildRecapMapHtml(mapboxToken: string, styleUrl: string, mapMode: Recap
         } catch (e) {}
       }
 
-      function selectCallout(id, lngLat) {
+      function selectCallout(id, lngLat, notifyNative) {
         if (!map) return;
+        pendingSelectedCalloutId = typeof id === 'string' ? id : null;
         var source = map.getSource('ecs-recap-callouts-selected');
         var selected = null;
         var payload = pendingPayload || {};
@@ -551,19 +605,32 @@ function buildRecapMapHtml(mapboxToken: string, styleUrl: string, mapMode: Recap
         if (source && source.setData) {
           source.setData(fc(selected ? [selected] : []));
         }
+        if (!selected && selectedPopup) {
+          selectedPopup.remove();
+          selectedPopup = null;
+        }
         if (selected && interactive) {
           if (selectedPopup) selectedPopup.remove();
           var props = selected.properties || {};
-          var html =
-            '<div class="popup-title">' + String(props.title || 'Trip moment') + '</div>' +
-            '<div class="popup-copy">' + String(props.description || 'Trip event recorded.') + '</div>' +
-            '<div class="popup-meta">' + String(props.category || 'moment') + (props.elapsedLabel ? ' · ' + props.elapsedLabel : '') + '</div>';
+          var popupContent = document.createElement('div');
+          var popupTitle = document.createElement('div');
+          var popupCopy = document.createElement('div');
+          var popupMeta = document.createElement('div');
+          popupTitle.className = 'popup-title';
+          popupCopy.className = 'popup-copy';
+          popupMeta.className = 'popup-meta';
+          popupTitle.textContent = String(props.title || 'Trip moment');
+          popupCopy.textContent = String(props.description || 'Trip event recorded.');
+          popupMeta.textContent = String(props.category || 'moment') + (props.elapsedLabel ? ' · ' + String(props.elapsedLabel) : '');
+          popupContent.appendChild(popupTitle);
+          popupContent.appendChild(popupCopy);
+          popupContent.appendChild(popupMeta);
           selectedPopup = new mapboxgl.Popup({ closeButton: true, closeOnClick: false, offset: 14 })
             .setLngLat(selected.geometry.coordinates)
-            .setHTML(html)
+            .setDOMContent(popupContent)
             .addTo(map);
         }
-        send('calloutSelected', { id: id });
+        if (notifyNative !== false) send('calloutSelected', { id: id });
       }
 
       function applyPayload(payload) {
@@ -633,11 +700,15 @@ function buildRecapMapHtml(mapboxToken: string, styleUrl: string, mapMode: Recap
             'circle-stroke-width': 2
           }
         });
+        if (pendingSelectedCalloutId) selectCallout(pendingSelectedCalloutId, null, false);
         fitPayload(payload, false);
       }
 
       window.__ECS_RECAP_MAP_SET__ = function(payload) {
         applyPayload(payload);
+      };
+      window.__ECS_RECAP_MAP_SELECT__ = function(id) {
+        selectCallout(id, null, false);
       };
       window.__ECS_RECAP_MAP_RECENTER__ = function() {
         fitPayload(pendingPayload, true);
@@ -670,7 +741,7 @@ function buildRecapMapHtml(mapboxToken: string, styleUrl: string, mapMode: Recap
         map.on('click', 'ecs-recap-callouts', function(event) {
           var f = event.features && event.features[0];
           if (!f || !f.properties) return;
-          selectCallout(f.properties.id, event.lngLat);
+          selectCallout(f.properties.id, event.lngLat, true);
         });
       } catch (e) {
         send('mapError', { message: String(e && e.message ? e.message : e) });
@@ -748,7 +819,15 @@ function LeaderLine({ from, toX, toY }: { from: ProjectedPoint; toX: number; toY
   );
 }
 
-function RecapMapCalloutView({ callout, onPress }: { callout: RecapMapCallout; onPress?: () => void }) {
+function RecapMapCalloutView({
+  callout,
+  selected,
+  onPress,
+}: {
+  callout: RecapMapCallout;
+  selected: boolean;
+  onPress?: () => void;
+}) {
   const leaderEndX = callout.x + (callout.x > callout.routePoint.x ? 0 : CALLOUT_WIDTH);
   const leaderEndY = callout.y + CALLOUT_HEIGHT / 2;
 
@@ -766,8 +845,12 @@ function RecapMapCalloutView({ callout, onPress }: { callout: RecapMapCallout; o
       />
       <Pressable
         onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={`${callout.title}. ${callout.description}`}
+        accessibilityState={{ selected }}
         style={[
           styles.calloutCard,
+          selected && styles.calloutCardSelected,
           {
             left: callout.x,
             top: callout.y,
@@ -805,6 +888,7 @@ function RecapSatelliteMapSurface({
   mapToken,
   mapMode,
   webViewRef,
+  selectedCalloutId,
   onCalloutSelected,
   testID,
 }: {
@@ -812,14 +896,19 @@ function RecapSatelliteMapSurface({
   mapToken: string;
   mapMode: RecapMapMode;
   webViewRef: React.RefObject<WebView | null>;
+  selectedCalloutId: string | null;
   onCalloutSelected: (id: string) => void;
   testID: string;
 }) {
   const styleUrl = getMapStyleUrl('3d');
   const html = useMemo(() => buildRecapMapHtml(mapToken, styleUrl, mapMode), [mapMode, mapToken, styleUrl]);
   const payloadScript = useMemo(
-    () => `window.__ECS_RECAP_MAP_SET__(${escapeInlineJson(payload)}); true;`,
-    [payload],
+    () => [
+      `window.__ECS_RECAP_MAP_SET__ && window.__ECS_RECAP_MAP_SET__(${escapeInlineJson(payload)});`,
+      `window.__ECS_RECAP_MAP_SELECT__ && window.__ECS_RECAP_MAP_SELECT__(${escapeInlineJson(selectedCalloutId)});`,
+      'true;',
+    ].join(' '),
+    [payload, selectedCalloutId],
   );
 
   useEffect(() => {
@@ -870,25 +959,43 @@ export default function ExpeditionRecapMap({
   endCoordinate,
   recap,
   tripStartedAt,
+  routeSourceLabel,
+  routeSourceDetail,
+  storyMoments,
+  selectedCalloutId: controlledSelectedCalloutId,
+  onCalloutSelected,
 }: ExpeditionRecapMapProps) {
   const [width, setWidth] = useState(0);
   const [expanded, setExpanded] = useState(false);
-  const [selectedCalloutId, setSelectedCalloutId] = useState<string | null>(null);
+  const [internalSelectedCalloutId, setInternalSelectedCalloutId] = useState<string | null>(null);
   const [mapToken, setMapToken] = useState(() => getMapboxTokenSync());
   const compactWebViewRef = useRef<WebView>(null);
   const expandedWebViewRef = useRef<WebView>(null);
   const recapReference = recap?.routeSummary.routeGeometryReference ?? null;
   const model = useMemo(
-    () => buildRecapMapModel(routeGeometry, routeBounds, startCoordinate, endCoordinate, recap, tripStartedAt, width),
-    [endCoordinate, recap, routeBounds, routeGeometry, startCoordinate, tripStartedAt, width],
+    () => buildRecapMapModel(routeGeometry, routeBounds, startCoordinate, endCoordinate, recap, storyMoments, tripStartedAt, width),
+    [endCoordinate, recap, routeBounds, routeGeometry, startCoordinate, storyMoments, tripStartedAt, width],
   );
+  const hasDrawableGeometry = useMemo(
+    () => routeGeometry.filter(isValidCoordinate).length >= 2,
+    [routeGeometry],
+  );
+  const selectedCalloutId = controlledSelectedCalloutId === undefined
+    ? internalSelectedCalloutId
+    : controlledSelectedCalloutId;
+  const selectCallout = (calloutId: string | null) => {
+    if (controlledSelectedCalloutId === undefined) {
+      setInternalSelectedCalloutId(calloutId);
+    }
+    onCalloutSelected?.(calloutId);
+  };
   const mapPayload = useMemo(
     () => model ? buildRecapMapPayload(model, startCoordinate, endCoordinate) : null,
     [endCoordinate, model, startCoordinate],
   );
   const selectedCallout = useMemo(
-    () => model?.callouts.find((callout) => callout.id === selectedCalloutId) ?? null,
-    [model?.callouts, selectedCalloutId],
+    () => model?.focusCallouts.find((callout) => callout.id === selectedCalloutId) ?? null,
+    [model?.focusCallouts, selectedCalloutId],
   );
 
   useEffect(() => {
@@ -932,8 +1039,6 @@ export default function ExpeditionRecapMap({
         <View
           style={styles.mapSurface}
           pointerEvents="box-none"
-          accessibilityRole="image"
-          accessibilityLabel="Completed expedition recap map"
         >
           {mapPayload && mapToken ? (
             <RecapSatelliteMapSurface
@@ -941,7 +1046,8 @@ export default function ExpeditionRecapMap({
               mapToken={mapToken}
               mapMode="compact"
               webViewRef={compactWebViewRef}
-              onCalloutSelected={setSelectedCalloutId}
+              selectedCalloutId={selectedCalloutId}
+              onCalloutSelected={selectCallout}
               testID="expedition-recap-map-satellite"
             />
           ) : null}
@@ -954,6 +1060,7 @@ export default function ExpeditionRecapMap({
             testID="expedition-recap-map-expand"
             style={styles.expandButton}
             onPress={() => setExpanded(true)}
+            hitSlop={8}
             accessibilityRole="button"
             accessibilityLabel="Expand recap map"
           >
@@ -961,7 +1068,7 @@ export default function ExpeditionRecapMap({
           </TouchableOpacity>
           <View style={styles.routeReferenceBadge}>
             <Text style={styles.routeReferenceText}>
-              {mapPayload && mapToken ? 'SATELLITE RECAP' : recapReference ? 'COMPLETED ROUTE' : 'SAVED ROUTE'}
+              {routeSourceLabel ?? (mapPayload && mapToken ? 'SATELLITE RECAP' : recapReference ? 'COMPLETED ROUTE' : 'SAVED ROUTE')}
             </Text>
           </View>
 
@@ -1019,7 +1126,8 @@ export default function ExpeditionRecapMap({
             <RecapMapCalloutView
               key={callout.id}
               callout={callout}
-              onPress={() => setSelectedCalloutId(callout.id)}
+              selected={selectedCalloutId === callout.id}
+              onPress={() => selectCallout(callout.id)}
             />
           ))}
 
@@ -1032,13 +1140,28 @@ export default function ExpeditionRecapMap({
           {/* TODO Expedition Recap Map: add terrain risk callout styling from recap terrain events. */}
           {/* TODO Expedition Recap Map: replace WebView recenter with native Mapbox bridge when Expedition Hub adopts native maps. */}
         </View>
+      ) : hasDrawableGeometry ? (
+        <View style={styles.fallbackSurface} accessibilityLiveRegion="polite">
+          <ActivityIndicator size="small" color={TACTICAL.amber} />
+          <Text style={styles.fallbackTitle}>Preparing saved route map.</Text>
+          <Text style={styles.fallbackSubtext}>Restoring the recap layout from saved coordinates.</Text>
+        </View>
       ) : (
         <View style={styles.fallbackSurface}>
           <Ionicons name="map-outline" size={24} color={TACTICAL.textMuted} />
           <Text style={styles.fallbackTitle}>Route map unavailable.</Text>
-          <Text style={styles.fallbackSubtext}>This expedition was saved without route geometry.</Text>
+          <Text style={styles.fallbackSubtext}>
+            {routeSourceDetail ?? 'This expedition was saved without route geometry.'}
+          </Text>
         </View>
       )}
+
+      {model && routeSourceDetail ? (
+        <View style={styles.routeSourceRow}>
+          <Ionicons name="information-circle-outline" size={13} color={TACTICAL.textMuted} />
+          <Text style={styles.routeSourceDetail}>{routeSourceDetail}</Text>
+        </View>
+      ) : null}
 
       <Modal
         visible={expanded && Boolean(model && mapPayload)}
@@ -1051,8 +1174,11 @@ export default function ExpeditionRecapMap({
             <View style={styles.fullscreenTitleWrap}>
               <Text style={styles.fullscreenEyebrow}>EXPEDITION RECAP MAP</Text>
               <Text style={styles.fullscreenTitle} numberOfLines={1}>
-                {recapReference ? 'Completed Route' : 'Saved Route'}
+                {routeSourceLabel ?? (recapReference ? 'Completed Route' : 'Saved Route')}
               </Text>
+              {routeSourceDetail ? (
+                <Text style={styles.fullscreenSourceDetail} numberOfLines={2}>{routeSourceDetail}</Text>
+              ) : null}
             </View>
             <TouchableOpacity
               style={styles.fullscreenAction}
@@ -1079,7 +1205,8 @@ export default function ExpeditionRecapMap({
               mapToken={mapToken}
               mapMode="expanded"
               webViewRef={expandedWebViewRef}
-              onCalloutSelected={setSelectedCalloutId}
+              selectedCalloutId={selectedCalloutId}
+              onCalloutSelected={selectCallout}
               testID="expedition-recap-map-expanded-webview"
             />
           ) : (
@@ -1292,6 +1419,10 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     gap: 2,
   },
+  calloutCardSelected: {
+    borderColor: TACTICAL.amber,
+    backgroundColor: 'rgba(55,43,18,0.96)',
+  },
   calloutTitleRow: {
     minHeight: 14,
     flexDirection: 'row',
@@ -1378,6 +1509,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '900',
   },
+  fullscreenSourceDetail: {
+    marginTop: 2,
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '700',
+    lineHeight: 11,
+  },
   fullscreenAction: {
     minHeight: 32,
     borderRadius: 7,
@@ -1433,5 +1571,20 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     textAlign: 'center',
+  },
+  routeSourceRow: {
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    paddingHorizontal: 2,
+  },
+  routeSourceDetail: {
+    flex: 1,
+    minWidth: 0,
+    color: TACTICAL.textMuted,
+    fontSize: 10,
+    fontWeight: '600',
+    lineHeight: 14,
   },
 });

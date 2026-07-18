@@ -55,6 +55,7 @@ export function buildEcsBriefProductionReadinessResult(options = {}) {
     missionBriefEngine: path.join(root, 'lib', 'missionBriefEngine.ts'),
     missionBriefCard: path.join(root, 'components', 'dashboard', 'MissionBriefCard.tsx'),
     commandBrief: path.join(root, 'components', 'brief', 'CommandBriefScreen.tsx'),
+    commandBriefPresentation: path.join(root, 'lib', 'brief', 'commandBriefPresentation.ts'),
     dashboard: path.join(root, 'app', '(tabs)', 'dashboard.tsx'),
     vehicleTelemetryWidget: path.join(root, 'components', 'dashboard', 'VehicleTelemetryWidget.tsx'),
     widgetRenderers: path.join(root, 'components', 'dashboard', 'WidgetRenderers.tsx'),
@@ -71,6 +72,7 @@ export function buildEcsBriefProductionReadinessResult(options = {}) {
   const missionBriefEngine = readIfExists(paths.missionBriefEngine);
   const missionBriefCard = readIfExists(paths.missionBriefCard);
   const commandBrief = readIfExists(paths.commandBrief);
+  const commandBriefPresentation = readIfExists(paths.commandBriefPresentation);
   const dashboard = readIfExists(paths.dashboard);
   const vehicleTelemetryWidget = readIfExists(paths.vehicleTelemetryWidget);
   const widgetRenderers = readIfExists(paths.widgetRenderers);
@@ -140,15 +142,23 @@ export function buildEcsBriefProductionReadinessResult(options = {}) {
     ),
     check(
       'command_brief_surface_is_readiness_grounded',
-      'Command Brief surfaces readiness, source state, collapsed intelligence detail, and avoids obsolete activity log or overconfident safety copy.',
+      'Command Brief presents the compact grounded readiness decision, narrative audit, weak points, and share packet without duplicate detail cards.',
       commandBrief.includes('Command Brief') &&
         commandBrief.includes('ECS Expedition Readiness') &&
         commandBrief.includes('Go / Caution / Hold Decision') &&
-        commandBrief.includes('Route Intelligence') &&
-        commandBrief.includes('Offline Preparedness') &&
-        commandBrief.includes('Communications / Signal Confidence') &&
-        commandBrief.includes('CollapsibleBriefSection') &&
-        commandBrief.includes('accessibilityState={{ expanded }}') &&
+        commandBrief.includes('<WeakPointAnalyzerPanel assessment={weakPointAssessment} />') &&
+        commandBrief.includes('<DepartureAuditNarrative') &&
+        commandBrief.includes('Share Packet') &&
+        commandBrief.includes('buildCommandBriefPresentation') &&
+        commandBriefPresentation.includes("label: 'GO'") &&
+        commandBriefPresentation.includes("label: 'CAUTION'") &&
+        commandBriefPresentation.includes("label: 'HOLD'") &&
+        commandBriefPresentation.includes('Unknown data remains unknown') &&
+        !commandBrief.includes('Route Intelligence') &&
+        !commandBrief.includes('Offline Preparedness') &&
+        !commandBrief.includes('Communications / Signal Confidence') &&
+        !commandBrief.includes('Coordinate In Dispatch') &&
+        !commandBrief.includes('DepartureAuditChecklist') &&
         !commandBrief.includes('Expedition Readiness Summary') &&
         !commandBrief.includes('Recommended Actions') &&
         !commandBrief.includes('Watch Items') &&
@@ -162,7 +172,11 @@ export function buildEcsBriefProductionReadinessResult(options = {}) {
         !commandBrief.toLowerCase().includes('legal campsite') &&
         !commandBrief.toLowerCase().includes('safe as') &&
         dashboard.includes('<CommandBriefScreen embedded />'),
-      [relPath(root, paths.commandBrief), relPath(root, paths.dashboard)],
+      [
+        relPath(root, paths.commandBrief),
+        relPath(root, paths.commandBriefPresentation),
+        relPath(root, paths.dashboard),
+      ],
       ['Keep Command Brief grounded in deterministic readiness selectors and avoid guaranteed legal/safe language.'],
     ),
     check(

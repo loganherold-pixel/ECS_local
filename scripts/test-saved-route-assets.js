@@ -46,7 +46,9 @@ const { routeStore } = require(path.join(root, 'lib', 'routeStore.ts'));
 const {
   calculateSavedRouteAssetCounts,
   formatSavedRouteAssetCountSummary,
+  getSavedRouteAssetInventorySnapshot,
   getSavedRouteAssets,
+  subscribeSavedRouteAssetInventory,
 } = require(path.join(root, 'lib', 'savedRouteAssets.ts'));
 
 storage.clear();
@@ -156,5 +158,54 @@ assert.strictEqual(
   '5 total · 1 imported · 1 custom · 1 stitched · 1 recorded · 1 other',
   'Compact Route Command Center summary should include every nonzero asset category and omit zero-value noise.',
 );
+
+const initialInventory = getSavedRouteAssetInventorySnapshot();
+assert.strictEqual(
+  initialInventory.counts.all,
+  assets.length,
+  'The reactive Route Command Center snapshot should start from the authoritative visible inventory.',
+);
+assert.strictEqual(
+  getSavedRouteAssetInventorySnapshot(),
+  initialInventory,
+  'Equivalent consumers should share one stable inventory snapshot until a source store changes.',
+);
+
+let inventoryNotifications = 0;
+const unsubscribeInventory = subscribeSavedRouteAssetInventory(() => {
+  inventoryNotifications += 1;
+});
+runStore.createFromParsedImport(
+  {
+    name: 'Late Recorded Trail',
+    routePoints: [
+      { lat: 38.4, lng: -120.8, ele_m: null, time: null },
+      { lat: 38.5, lng: -120.7, ele_m: null, time: null },
+    ],
+    trackPoints: [],
+    primaryCoords: [],
+    waypoints: [],
+  },
+  undefined,
+  'trail',
+  'Late Recorded Trail',
+);
+
+const updatedInventory = getSavedRouteAssetInventorySnapshot();
+assert.strictEqual(inventoryNotifications, 1, 'One route-source mutation should issue one inventory update.');
+assert.notStrictEqual(updatedInventory, initialInventory, 'A changed source store should replace the shared snapshot.');
+assert.strictEqual(updatedInventory.counts.all, initialInventory.counts.all + 1);
+assert.strictEqual(updatedInventory.counts.recorded, initialInventory.counts.recorded + 1);
+assert.strictEqual(
+  updatedInventory.summary,
+  '5 total · 1 imported · 1 custom · 1 stitched · 2 recorded',
+  'The compact summary should update immediately when a recorded route arrives after initial render.',
+);
+assert.strictEqual(
+  updatedInventory.counts.all,
+  updatedInventory.assets.length,
+  'The preview count and Command Center list must be derived from the same reactive snapshot.',
+);
+unsubscribeInventory();
 
 console.log('Saved route asset count checks passed.');
