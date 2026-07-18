@@ -21,6 +21,7 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 const {
   buildActiveGuidanceProgressPath,
   resolveActiveGuidanceDisplayLocation,
+  resolveNavigateMapUserLocation,
 } = require(path.join(root, 'lib', 'activeGuidanceProgressPath.ts'));
 
 function coord(lat, lng) {
@@ -152,6 +153,29 @@ assertCoord(
   routeMid,
   'Mounted display should use the controller-accepted canonical progress point.',
 );
+const rawMapMarker = resolveNavigateMapUserLocation({
+  rawLocation: { lat: 38.7862, lng: -121.2137 },
+  locationAccessGranted: true,
+  mapFrozen: false,
+});
+assertCoord(
+  rawMapMarker,
+  { lat: 38.7862, lng: -121.2137 },
+  'The user-location marker and follow camera must retain raw GPS while canonical progress remains projected.',
+);
+assert.notDeepStrictEqual(
+  rawMapMarker,
+  authoritativeProjection,
+  'Projecting guidance progress must not overwrite the raw GPS marker.',
+);
+assert.strictEqual(
+  resolveNavigateMapUserLocation({
+    rawLocation: { lat: 38.7862, lng: -121.2137 },
+    locationAccessGranted: false,
+  }),
+  null,
+  'Location permission still controls whether the raw user marker is shown.',
+);
 
 const authoritativeOffRoute = resolveActiveGuidanceDisplayLocation({
   active: true,
@@ -182,8 +206,8 @@ assertCoord(
 
 const navigateSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'navigate.tsx'), 'utf8');
 assert(
-  navigateSource.includes('progressPoints: displayedRouteProgressPoints'),
-  'Navigate map display GPS resolver should use displayedRouteProgressPoints so the blue pin is anchored to the yellow guidance line.',
+  navigateSource.includes('resolveNavigateMapUserLocation({'),
+  'The mounted Navigate map must use the tested raw-location presentation selector.',
 );
 
 console.log('[active-guidance-live-gps-progress] passed');

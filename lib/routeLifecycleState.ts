@@ -49,6 +49,17 @@ export interface ECSRouteLifecycleState {
   shouldRenderGuidance: boolean;
 }
 
+export function shouldDeferNavigateRouteSessionClear(input: {
+  lifecycle: 'inactive' | 'preview' | 'active' | 'arrived';
+  roadRestoreStatus: 'loading' | 'ready' | 'error';
+  trailRestoreStatus: 'loading' | 'ready' | 'error';
+  currentSnapshot: { lifecycle?: string | null } | null | undefined;
+}): boolean {
+  const restorePending =
+    input.roadRestoreStatus !== 'ready' || input.trailRestoreStatus !== 'ready';
+  return restorePending && input.currentSnapshot?.lifecycle !== 'inactive';
+}
+
 function routeSourceFromInput(input: ECSRouteLifecycleInput): ECSRouteLifecycleSource {
   if (input.pendingHybridTrailTransition || input.explorePreviewMode === 'hybrid') return 'hybrid';
   if (input.trailHasPayload || input.trailUiMode === 'preview' || input.trailUiMode === 'active') {

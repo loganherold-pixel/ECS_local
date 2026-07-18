@@ -857,11 +857,15 @@ export function tripBuilderRouteFromImport(input: {
   const points = parsed.parsedForRun.trackPoints.length >= 2
     ? parsed.parsedForRun.trackPoints
     : parsed.parsedForRun.routePoints;
-  const coordinates = points.map((point) => (
+  const sourceSegments = parsed.parsedForRun.geometrySegments;
+  const segmentCoordinates = sourceSegments.map((segment) => segment.map((point) => (
     point.ele_m == null
       ? [point.lng, point.lat]
       : [point.lng, point.lat, point.ele_m]
-  ));
+  )));
+  const sourceGeometry = segmentCoordinates.length === 1
+    ? { type: 'LineString', coordinates: segmentCoordinates[0] }
+    : { type: 'MultiLineString', coordinates: segmentCoordinates };
   const first = points[0];
   const last = points[points.length - 1];
   const distanceMiles = Math.round((buildGuidanceRouteDistanceIndex(
@@ -906,14 +910,18 @@ export function tripBuilderRouteFromImport(input: {
     coordinate: { lat: first.lat, lng: first.lng },
     destinationCoordinate: { lat: last.lat, lng: last.lng },
     endpointCoordinate: { lat: last.lat, lng: last.lng },
-    routeGeometry: { type: 'LineString', coordinates },
-    trailGeometry: { type: 'LineString', coordinates },
+    routeGeometry: sourceGeometry,
+    trailGeometry: sourceGeometry,
     routeMetadata: {
       source: 'trip_builder_import',
       sourceFileName: input.fileName,
       sourceFileType: parsed.format,
       routePointCount: parsed.persistedPointCount,
       sourcePointCount: parsed.sourcePointCount,
+      sourceGeometryType: sourceGeometry.type,
+      sourceGeometrySegmentCount: parsed.sourceSegmentCount,
+      joinedSourceSegmentGapCount: parsed.joinedSegmentGapCount,
+      maxSourceSegmentGapMeters: parsed.maxSegmentGapMeters,
       elevationState: parsed.elevationState,
       importWarnings: parsed.warnings,
       tripBuilderImportFingerprint: parsed.fingerprint,

@@ -215,6 +215,82 @@ function testRouteImport() {
   assert.strictEqual(parsedGpx.parsedForRun.routePoints.length, 0);
   assert.strictEqual(parsedGpx.parsedForRun.waypoints.length, 1);
 
+  const connectedSegmentsGpx = `<?xml version="1.0"?><gpx version="1.1" creator="test"><trk><name>Connected</name><trkseg><trkpt lat="35" lon="-120"/><trkpt lat="35.001" lon="-119.999"/></trkseg><trkseg><trkpt lat="35.0012" lon="-119.9988"/><trkpt lat="35.002" lon="-119.998"/></trkseg></trk></gpx>`;
+  const parsedConnectedSegments = routeImport.parseNavigateRouteImport({
+    fileName: 'connected-segments.gpx',
+    content: connectedSegmentsGpx,
+  });
+  assert.strictEqual(
+    parsedConnectedSegments.parsedForRun.geometrySegments.length,
+    2,
+    'GPX track-segment boundaries must survive parsing.',
+  );
+  assert.strictEqual(
+    parsedConnectedSegments.sourceSegmentCount,
+    2,
+    'The import diagnostic must report both source segments.',
+  );
+  assert.strictEqual(
+    parsedConnectedSegments.parsedForRun.trackPoints.length,
+    4,
+    'Connected source segments may form one canonical sequence after bounded topology validation.',
+  );
+
+  const disconnectedSegmentsGpx = `<?xml version="1.0"?><gpx version="1.1" creator="test"><trk><name>Disconnected</name><trkseg><trkpt lat="35" lon="-120"/><trkpt lat="35.001" lon="-119.999"/></trkseg><trkseg><trkpt lat="35.6" lon="-119.4"/><trkpt lat="35.601" lon="-119.399"/></trkseg></trk></gpx>`;
+  assert.throws(
+    () => routeImport.parseNavigateRouteImport({
+      fileName: 'disconnected-segments.gpx',
+      content: disconnectedSegmentsGpx,
+    }),
+    /disconnected|invent a connector/i,
+    'Disconnected GPX segments must terminate as an invalid import instead of becoming a 40-mile connector line.',
+  );
+
+  const brokenSingleTrackGpx = `<?xml version="1.0"?><gpx version="1.1" creator="test"><trk><name>Broken Single Track</name><trkseg><trkpt lat="35" lon="-120"/><trkpt lat="35.7" lon="-119.3"/></trkseg></trk></gpx>`;
+  assert.throws(
+    () => routeImport.parseNavigateRouteImport({
+      fileName: 'broken-single-track.gpx',
+      content: brokenSingleTrackGpx,
+    }),
+    /implausible gap|cross-map connector/i,
+    'One GPX track segment with a 40-mile recording gap must not become a drawable guidance edge.',
+  );
+
+  const activeSnapshot = {
+    lifecycle: 'active',
+    routeId: 'active-route',
+  };
+  assert.strictEqual(
+    lifecycle.shouldDeferNavigateRouteSessionClear({
+      lifecycle: 'inactive',
+      roadRestoreStatus: 'loading',
+      trailRestoreStatus: 'ready',
+      currentSnapshot: activeSnapshot,
+    }),
+    true,
+    'A transient idle road hook during Navigate remount must not clear an active canonical route session.',
+  );
+  assert.strictEqual(
+    lifecycle.shouldDeferNavigateRouteSessionClear({
+      lifecycle: 'inactive',
+      roadRestoreStatus: 'ready',
+      trailRestoreStatus: 'ready',
+      currentSnapshot: activeSnapshot,
+    }),
+    false,
+    'An explicit idle state after both restore flights settle may clear the canonical route session.',
+  );
+  assert.strictEqual(
+    lifecycle.shouldDeferNavigateRouteSessionClear({
+      lifecycle: 'inactive',
+      roadRestoreStatus: 'error',
+      trailRestoreStatus: 'ready',
+      currentSnapshot: activeSnapshot,
+    }),
+    true,
+    'A restore error must preserve last-good active guidance instead of converting it into an explicit end event.',
+  );
+
   assert.throws(
     () => routeImport.parseNavigateRouteImport({
       fileName: 'invalid.geojson',
@@ -281,6 +357,8 @@ function testRouteBuilderHistoryAndCamera() {
 function testStaticIntegration() {
   const navigate = fs.readFileSync(path.join(root, 'app/(tabs)/navigate.tsx'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'components/navigate/MapRenderer.tsx'), 'utf8');
+  const roadNavigationHook = fs.readFileSync(path.join(root, 'lib/useRoadNavigation.ts'), 'utf8');
+  const trailNavigationHook = fs.readFileSync(path.join(root, 'lib/useTrailNavigation.ts'), 'utf8');
   const coordinatorInstances = (navigate.match(/new NavigateMapLayerCoordinator\(/g) || []).length;
   assert.strictEqual(coordinatorInstances, 1, 'Navigate must use one layer coordinator instance.');
   assert.ok(!navigate.includes('new CampLayerFetchCoordinator('));
@@ -292,6 +370,18 @@ function testStaticIntegration() {
   assert.ok(navigate.includes("AppState.addEventListener('change'"));
   assert.ok(navigate.includes('redoNavigateRouteDraftHistory'));
   assert.ok(navigate.includes('markNavigationHandoffActiveGuidanceReplacementConfirmed'));
+  assert.ok(
+    roadNavigationHook.includes('() => activeRoadNavigationSession'),
+    'A remounted road hook must initialize from the active in-memory session instead of publishing idle.',
+  );
+  assert.ok(
+    trailNavigationHook.includes('() => activeTrailNavigationSession'),
+    'A remounted trail hook must initialize from the active in-memory session instead of publishing idle.',
+  );
+  assert.ok(
+    navigate.includes('shouldDeferNavigateRouteSessionClear({'),
+    'The mounted Navigate bridge must preserve an active normalized session until engine restore terminates.',
+  );
   assert.ok(!navigate.includes('showInlineIntelPanel'));
   const builderSaveStart = navigate.indexOf('const saveVerifiedRouteBuilderDraft = useCallback');
   const builderSaveEnd = navigate.indexOf('const finishRouteBuilder = useCallback', builderSaveStart);

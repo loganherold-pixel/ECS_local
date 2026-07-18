@@ -105,6 +105,11 @@ export async function resolveImportedRouteGuidance(params: {
   });
   const destination = importedTraceDestination(params.payload);
   if (!prepared || prepared.geometry.length < 2 || !destination) return null;
+  // Map Matching receives only the imported trace. It does not receive the
+  // user's origin, so it cannot build a truthful origin-to-trailhead approach.
+  // Keep distant imports in the normal hybrid flow where Directions owns that
+  // approach and the stored trace remains the canonical trail geometry.
+  if (prepared.distanceFromTraceM > IMPORTED_TRACE_ON_ROUTE_FALLBACK_MAX_M) return null;
 
   if (params.liveServicesEnabled && params.accessToken) {
     try {
@@ -126,7 +131,6 @@ export async function resolveImportedRouteGuidance(params: {
     }
   }
 
-  if (prepared.distanceFromTraceM > IMPORTED_TRACE_ON_ROUTE_FALLBACK_MAX_M) return null;
   const route = buildRoadRouteFromCachedGeometry({
     id: `imported-trace-guidance:${params.payload.id}:${Date.now().toString(36)}`,
     origin: params.origin,

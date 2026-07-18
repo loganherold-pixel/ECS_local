@@ -5,9 +5,13 @@ import {
   type GpxParseResult,
   type GpxWaypoint,
 } from './gpxParser';
+import { normalizeNavigationGuidanceGeometry } from './navigationCatalogGuidanceGeometry';
+import { guidanceRouteDistanceMeters } from './navigation/guidanceRouteProjection';
 
 export const NAVIGATE_ROUTE_IMPORT_MAX_BYTES = 12 * 1024 * 1024;
 export const NAVIGATE_ROUTE_IMPORT_MAX_SOURCE_POINTS = 200_000;
+export const NAVIGATE_ROUTE_IMPORT_MAX_SOURCE_SEGMENTS = 2_048;
+export const NAVIGATE_ROUTE_IMPORT_MAX_TRACK_EDGE_METERS = 16_000;
 export const NAVIGATE_ROUTE_IMPORT_MAX_PERSISTED_POINTS = 25_000;
 export const NAVIGATE_ROUTE_IMPORT_MAX_PREVIEW_POINTS = 1_000;
 
@@ -41,12 +45,16 @@ export type NavigateRouteImportResult = {
   previewCoordinates: [number, number][];
   fingerprint: string;
   elevationState: NavigateRouteImportElevationState;
+  sourceSegmentCount: number;
+  joinedSegmentGapCount: number;
+  maxSegmentGapMeters: number | null;
   warnings: string[];
   parsedForRun: {
     name: string;
     routePoints: NavigateRouteImportPoint[];
     trackPoints: NavigateRouteImportPoint[];
     primaryCoords: NavigateRouteImportPoint[];
+    geometrySegments: NavigateRouteImportPoint[][];
     waypoints: NavigateRouteImportWaypoint[];
     routes?: GpxParseResult['routes'];
     tracks?: GpxParseResult['tracks'];
@@ -121,44 +129,122 @@ function extractGeoJsonLines(geometry: Record<string, unknown> | null | undefine
   return [];
 }
 
-function geoJsonCoordinates(parsed: GeoJsonParseResult): Array<[number, number, number | null]> {
-  return dedupeSequentialCoordinates(
-    parsed.routes
-      .flatMap((route) => extractGeoJsonLines(route.geometry))
-      .flatMap((line) => line)
-      .map(normalizeCoordinate)
-      .filter((coordinate): coordinate is [number, number, number | null] => !!coordinate),
-  );
+function geoJsonCoordinateSegments(
+  parsed: GeoJsonParseResult,
+): Array<Array<[number, number, number | null]>> {
+  return parsed.routes
+    .flatMap((route) => extractGeoJsonLines(route.geometry))
+    .map((line) => dedupeSequentialCoordinates(
+      line
+        .map(normalizeCoordinate)
+        .filter((coordinate): coordinate is [number, number, number | null] => !!coordinate),
+    ))
+    .filter((segment) => segment.length >= 2);
 }
 
-function gpxCoordinates(parsed: GpxParseResult): {
-  coordinates: Array<[number, number, number | null]>;
+function gpxCoordinateSegments(parsed: GpxParseResult): {
+  segments: Array<Array<[number, number, number | null]>>;
   pointType: 'route' | 'track';
 } {
-  const trackPoints = parsed.tracks.flatMap((track) =>
-    track.segments.flatMap((segment) => segment.points),
-  );
-  const routePoints = parsed.routes.flatMap((route) => route.points);
-  const primaryPoints = trackPoints.length >= 2 ? trackPoints : routePoints;
-  if (primaryPoints.length >= 2) {
+  const trackSegments = parsed.tracks
+    .flatMap((track) => track.segments)
+    .map((segment) => dedupeSequentialCoordinates(
+      segment.points
+        .map((point) => normalizeCoordinate([point.lon, point.lat, point.ele]))
+        .filter((coordinate): coordinate is [number, number, number | null] => !!coordinate),
+    ))
+    .filter((segment) => segment.length >= 2);
+  const routeSegments = parsed.routes
+    .map((route) => dedupeSequentialCoordinates(
+      route.points
+        .map((point) => normalizeCoordinate([point.lon, point.lat, point.ele]))
+        .filter((coordinate): coordinate is [number, number, number | null] => !!coordinate),
+    ))
+    .filter((segment) => segment.length >= 2);
+  if (trackSegments.length > 0 || routeSegments.length > 0) {
     return {
-      coordinates: dedupeSequentialCoordinates(
-        primaryPoints
-          .map((point) => normalizeCoordinate([point.lon, point.lat, point.ele]))
-          .filter((coordinate): coordinate is [number, number, number | null] => !!coordinate),
-      ),
-      pointType: trackPoints.length >= 2 ? 'track' : 'route',
+      segments: trackSegments.length > 0 ? trackSegments : routeSegments,
+      pointType: trackSegments.length > 0 ? 'track' : 'route',
     };
   }
   const primary = getPrimaryRouteCoordinates(parsed);
   return {
-    coordinates: dedupeSequentialCoordinates(
-      primary
-        .map((coordinate) => normalizeCoordinate([coordinate[0], coordinate[1], null]))
-        .filter((coordinate): coordinate is [number, number, number | null] => !!coordinate),
-    ),
+    segments: [
+      dedupeSequentialCoordinates(
+        primary
+          .map((coordinate) => normalizeCoordinate([coordinate[0], coordinate[1], null]))
+          .filter((coordinate): coordinate is [number, number, number | null] => !!coordinate),
+      ),
+    ].filter((segment) => segment.length >= 2),
     pointType: 'route',
   };
+}
+
+function coordinateElevation(
+  point: { ele?: number | null; ele_m?: number | null },
+): number | null {
+  const value = Number(point.ele_m ?? point.ele);
+  return Number.isFinite(value) ? value : null;
+}
+
+function normalizeImportTopology(
+  segments: Array<Array<[number, number, number | null]>>,
+): {
+  coordinates: Array<[number, number, number | null]>;
+  segments: Array<Array<[number, number, number | null]>>;
+  joinedSegmentGapCount: number;
+  maxSegmentGapMeters: number | null;
+} {
+  if (segments.length === 1) {
+    return {
+      coordinates: segments[0],
+      segments,
+      joinedSegmentGapCount: 0,
+      maxSegmentGapMeters: 0,
+    };
+  }
+  const geometryValue = { type: 'MultiLineString', coordinates: segments };
+  const normalized = normalizeNavigationGuidanceGeometry(geometryValue, { allowLoop: true });
+  if (normalized.status !== 'ready' || normalized.points.length < 2) {
+    const detail = normalized.disjointSegmentGapCount > 0
+      ? 'Imported route contains disconnected source segments.'
+      : normalized.unavailableReason ?? 'Imported route topology is unavailable.';
+    const connectorPolicy = /invent a connector/i.test(detail)
+      ? ''
+      : ' ECS will not invent a connector.';
+    throw new Error(`IMPORT FAILED - ${detail}${connectorPolicy}`);
+  }
+  return {
+    coordinates: normalized.points.map((point) => [
+      point.lng,
+      point.lat,
+      coordinateElevation(point),
+    ]),
+    segments: normalized.segments.map((segment) => segment.map((point) => [
+      point.lng,
+      point.lat,
+      coordinateElevation(point),
+    ])),
+    joinedSegmentGapCount: normalized.joinedSegmentGapCount,
+    maxSegmentGapMeters: normalized.maxSegmentGapMeters,
+  };
+}
+
+function maxConsecutiveSourceEdgeMeters(
+  segments: Array<Array<[number, number, number | null]>>,
+): number {
+  let maximum = 0;
+  segments.forEach((segment) => {
+    for (let index = 1; index < segment.length; index += 1) {
+      const previous = segment[index - 1];
+      const current = segment[index];
+      maximum = Math.max(maximum, guidanceRouteDistanceMeters(
+        { lat: previous[1], lng: previous[0] },
+        { lat: current[1], lng: current[0] },
+      ));
+    }
+  });
+  return maximum;
 }
 
 function normalizeGpxWaypoints(waypoints: GpxWaypoint[]): NavigateRouteImportWaypoint[] {
@@ -220,6 +306,7 @@ export function parseNavigateRouteImport(input: {
   const fallbackName = input.fileName.replace(/\.[^.]+$/, '') || 'Imported Route';
   let name = fallbackName;
   let coordinates: Array<[number, number, number | null]> = [];
+  let coordinateSegments: Array<Array<[number, number, number | null]>> = [];
   let pointType: 'route' | 'track' = 'route';
   let waypoints: NavigateRouteImportWaypoint[] = [];
   let routes: GpxParseResult['routes'] | undefined;
@@ -229,14 +316,14 @@ export function parseNavigateRouteImport(input: {
   if (format === 'geojson' || format === 'json') {
     const parsed = parseGeoJSON(input.content);
     name = parsed.name || fallbackName;
-    coordinates = geoJsonCoordinates(parsed);
+    coordinateSegments = geoJsonCoordinateSegments(parsed);
     waypoints = normalizeGeoJsonWaypoints(parsed);
     raw = parsed.raw;
   } else {
     const parsed = parseGeoFile(input.fileName, input.content);
     name = parsed.name || fallbackName;
-    const gpxGeometry = gpxCoordinates(parsed);
-    coordinates = gpxGeometry.coordinates;
+    const gpxGeometry = gpxCoordinateSegments(parsed);
+    coordinateSegments = gpxGeometry.segments;
     pointType = gpxGeometry.pointType;
     waypoints = normalizeGpxWaypoints(parsed.waypoints);
     routes = parsed.routes;
@@ -244,14 +331,34 @@ export function parseNavigateRouteImport(input: {
   }
   throwIfAborted(input.signal);
 
+  const sourcePointCount = coordinateSegments.reduce(
+    (total, segment) => total + segment.length,
+    0,
+  );
+  if (sourcePointCount < 2) {
+    throw new Error('IMPORT FAILED - Route needs at least 2 valid points.');
+  }
+  if (coordinateSegments.length > NAVIGATE_ROUTE_IMPORT_MAX_SOURCE_SEGMENTS) {
+    throw new Error('IMPORT FAILED - Route contains too many source segments to validate safely.');
+  }
+  if (sourcePointCount > NAVIGATE_ROUTE_IMPORT_MAX_SOURCE_POINTS) {
+    throw new Error('IMPORT FAILED - Route exceeds the 200,000 point safety limit.');
+  }
+  if (
+    pointType === 'track' &&
+    maxConsecutiveSourceEdgeMeters(coordinateSegments) >
+      NAVIGATE_ROUTE_IMPORT_MAX_TRACK_EDGE_METERS
+  ) {
+    throw new Error(
+      'IMPORT FAILED - Imported track contains an implausible gap between recorded points. ECS will not draw a cross-map connector.',
+    );
+  }
+  const topology = normalizeImportTopology(coordinateSegments);
+  coordinates = topology.coordinates;
+
   if (coordinates.length < 2) {
     throw new Error('IMPORT FAILED - Route needs at least 2 valid points.');
   }
-  if (coordinates.length > NAVIGATE_ROUTE_IMPORT_MAX_SOURCE_POINTS) {
-    throw new Error('IMPORT FAILED - Route exceeds the 200,000 point safety limit.');
-  }
-
-  const sourcePointCount = coordinates.length;
   const persisted = sampleNavigateRouteCoordinates(
     coordinates,
     NAVIGATE_ROUTE_IMPORT_MAX_PERSISTED_POINTS,
@@ -263,6 +370,11 @@ export function parseNavigateRouteImport(input: {
   if (persisted.length < coordinates.length) {
     warnings.push('Route geometry was sampled to the supported navigation limit.');
   }
+  if (topology.joinedSegmentGapCount > 0) {
+    warnings.push(
+      `${topology.joinedSegmentGapCount} adjacent source segment${topology.joinedSegmentGapCount === 1 ? '' : 's'} joined within the ECS continuity limit.`,
+    );
+  }
 
   const persistedPoints = persisted.map(([lng, lat, elevation]) => ({
     lat,
@@ -271,6 +383,13 @@ export function parseNavigateRouteImport(input: {
     time: null,
     type: pointType,
   }));
+  const geometrySegments = topology.segments.map((segment) => segment.map(([lng, lat, elevation]) => ({
+    lat,
+    lng,
+    ele_m: elevation,
+    time: null,
+    type: pointType,
+  })));
   return {
     name,
     format,
@@ -282,12 +401,16 @@ export function parseNavigateRouteImport(input: {
     ),
     fingerprint: hashImport(name, coordinates),
     elevationState: state,
+    sourceSegmentCount: topology.segments.length,
+    joinedSegmentGapCount: topology.joinedSegmentGapCount,
+    maxSegmentGapMeters: topology.maxSegmentGapMeters,
     warnings,
     parsedForRun: {
       name,
       routePoints: pointType === 'route' ? persistedPoints : [],
       trackPoints: pointType === 'track' ? persistedPoints : [],
       primaryCoords: [],
+      geometrySegments,
       waypoints,
       routes,
       tracks,

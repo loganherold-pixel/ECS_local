@@ -1028,7 +1028,7 @@ function selectEvenlyDistributedIndexes(indexes: number[], limit: number) {
   return selected;
 }
 
-function preserveRouteGeometryForRendering(
+export function preserveRouteGeometryForRendering(
   points: [number, number][],
   maxPoints: number,
 ): [number, number][] {

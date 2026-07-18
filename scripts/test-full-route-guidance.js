@@ -103,6 +103,31 @@ assert.deepStrictEqual(
   'Blocked guidance must not draw a fabricated connector to the trail end.',
 );
 
+const boundedJoinRoadEnd = coord(trailhead.lat - 0.00045, trailhead.lng);
+const boundedJoin = buildFullRouteGuidanceModel({
+  phase: 'approach',
+  currentLocation: gps,
+  roadRoutePoints: [gps, boundedJoinRoadEnd],
+  roadProgressPoints: [gps],
+  roadDistanceM: 1000,
+  roadRemainingDistanceM: 900,
+  trailGeometry: [trailhead, trailMid, trailEnd],
+  trailDistanceM: 2000,
+  trailRemainingDistanceM: 2000,
+});
+assert.strictEqual(
+  boundedJoin.status,
+  'ready',
+  'A bounded road-to-trail gap below the 120 m continuity limit must not be blocked by the smaller dedupe threshold.',
+);
+assert.strictEqual(
+  boundedJoin.routePoints.length,
+  5,
+  'A bounded join above the 30 m dedupe threshold must retain both source-backed endpoints.',
+);
+assertCoord(boundedJoin.routePoints[1], boundedJoinRoadEnd, 'Bounded join should retain the road endpoint');
+assertCoord(boundedJoin.routePoints[2], trailhead, 'Bounded join should retain the distinct trailhead');
+
 const onTrailGps = coord(39.00305, -120.00305);
 const onTrail = buildFullRouteGuidanceModel({
   phase: 'approach',

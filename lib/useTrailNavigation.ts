@@ -189,6 +189,7 @@ export function subscribeActiveTrailNavigationSession(listener: () => void): () 
 
 export interface UseTrailNavigationOutput {
   session: TrailNavigationSessionState;
+  restoreStatus: 'loading' | 'ready' | 'error';
   uiMode: 'idle' | 'preview' | 'active' | 'arrived' | 'error';
   loadPayload: (
     payload: NavigationHandoffPayload,
@@ -204,7 +205,12 @@ export function useTrailNavigation(params: {
   enabled?: boolean;
 }): UseTrailNavigationOutput {
   const { location, enabled = true } = params;
-  const [session, setSession] = useState<TrailNavigationSessionState>(createEmptySession);
+  const [session, setSession] = useState<TrailNavigationSessionState>(
+    () => activeTrailNavigationSession,
+  );
+  const [restoreStatus, setRestoreStatus] = useState<'loading' | 'ready' | 'error'>(() =>
+    !enabled || activeTrailNavigationSession.status !== 'idle' ? 'ready' : 'loading',
+  );
   const restoreAttemptedRef = useRef(false);
 
   useEffect(() => {
@@ -231,34 +237,51 @@ export function useTrailNavigation(params: {
   }, []);
 
   useEffect(() => {
-    if (!enabled || restoreAttemptedRef.current) return;
+    if (!enabled) {
+      setRestoreStatus('ready');
+      return;
+    }
+    if (restoreAttemptedRef.current) return;
     let cancelled = false;
     // Mark the restore as claimed before awaiting storage so a remount/toggle or
     // late result cannot overwrite a route staged during the read.
     restoreAttemptedRef.current = true;
+    let restoreFailed = false;
 
     void (async () => {
-      const restored = await loadTrailNavigationSession();
-      if (cancelled || !restored) return;
-      if (!isRestorableTrailSession(restored)) {
-        await clearTrailNavigationSession();
-        return;
+      try {
+        const restored = await loadTrailNavigationSession();
+        if (cancelled || !restored) return;
+        if (!isRestorableTrailSession(restored)) {
+          await clearTrailNavigationSession();
+          return;
+        }
+        setSession((prev) => {
+          const liveSessionStarted =
+            prev.sessionId != null ||
+            prev.payload != null ||
+            prev.status !== 'idle';
+          if (liveSessionStarted) return prev;
+          return {
+            ...prev,
+            sessionId: restored.sessionId,
+            payload: restored.payload,
+            status: restored.status,
+            reachedWaypointIds: restored.reachedWaypointIds ?? [],
+            currentRouteIndex: restored.lastKnownRouteIndex ?? 0,
+          };
+        });
+      } catch {
+        restoreFailed = true;
+        if (!cancelled) setRestoreStatus('error');
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          console.warn('[ECS Navigation] trail session restore failed', {
+            safeCode: 'TRAIL_SESSION_RESTORE_FAILED',
+          });
+        }
+      } finally {
+        if (!cancelled && !restoreFailed) setRestoreStatus('ready');
       }
-      setSession((prev) => {
-        const liveSessionStarted =
-          prev.sessionId != null ||
-          prev.payload != null ||
-          prev.status !== 'idle';
-        if (liveSessionStarted) return prev;
-        return {
-          ...prev,
-          sessionId: restored.sessionId,
-          payload: restored.payload,
-          status: restored.status,
-          reachedWaypointIds: restored.reachedWaypointIds ?? [],
-          currentRouteIndex: restored.lastKnownRouteIndex ?? 0,
-        };
-      });
     })();
 
     return () => {
@@ -586,6 +609,7 @@ export function useTrailNavigation(params: {
 
   return {
     session,
+    restoreStatus,
     uiMode,
     loadPayload,
     startNavigation,

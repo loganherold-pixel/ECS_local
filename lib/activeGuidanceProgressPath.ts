@@ -65,6 +65,15 @@ function sameCoordinate(a: NavigateRouteMapPoint, b: NavigateRouteMapPoint): boo
   );
 }
 
+export function resolveNavigateMapUserLocation(input: {
+  rawLocation: CoordinateLike;
+  locationAccessGranted: boolean;
+  mapFrozen?: boolean;
+}): NavigateRouteMapPoint | null {
+  if (!input.locationAccessGranted || input.mapFrozen === true) return null;
+  return normalizeCoordinate(input.rawLocation);
+}
+
 export function resolveActiveGuidanceDisplayLocation(input: ActiveGuidanceProgressPathInput & {
   maxSnapDistanceM?: number | null;
 }): NavigateRouteMapPoint | null {

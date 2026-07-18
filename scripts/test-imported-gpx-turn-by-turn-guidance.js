@@ -98,7 +98,9 @@ const payload = {
 async function withMockedFetch(responseBody, callback) {
   const originalFetch = global.fetch;
   let requestedUrl = null;
+  let requestCount = 0;
   global.fetch = async (input) => {
+    requestCount += 1;
     requestedUrl = String(input);
     return {
       ok: true,
@@ -106,7 +108,7 @@ async function withMockedFetch(responseBody, callback) {
     };
   };
   try {
-    return await callback(() => requestedUrl);
+    return await callback(() => requestedUrl, () => requestCount);
   } finally {
     global.fetch = originalFetch;
   }
@@ -227,6 +229,29 @@ async function withMockedFetch(responseBody, callback) {
     farOfflineResolution,
     null,
     'Offline guidance must not invent a straight road connector from a distant GPS position.',
+  );
+
+  const farLiveResolution = await withMockedFetch(
+    { code: 'Ok', matchings: [{ ...matchingFixture, confidence: 0.99 }] },
+    async (_getRequestedUrl, getRequestCount) => {
+      const resolution = await importedRouteGuidance.resolveImportedRouteGuidance({
+        payload,
+        origin: { lat: 39.78, lng: -122.21 },
+        accessToken: 'test-token',
+        liveServicesEnabled: true,
+      });
+      return { resolution, requestCount: getRequestCount() };
+    },
+  );
+  assert.strictEqual(
+    farLiveResolution.resolution,
+    null,
+    'A distant user must retain the hybrid origin-to-trailhead approach instead of promoting the trace to a road route.',
+  );
+  assert.strictEqual(
+    farLiveResolution.requestCount,
+    0,
+    'A distant user must not issue whole-trace Map Matching because that request omits the user-to-trailhead approach.',
   );
 
   const navigateSource = fs.readFileSync(

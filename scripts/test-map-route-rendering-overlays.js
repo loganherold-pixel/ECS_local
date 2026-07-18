@@ -77,7 +77,21 @@ const {
   makeMapHtml,
   mergeMapOverlayPayloadPatches,
   normalizeRenderedCampScoutMarkers,
+  preserveRouteGeometryForRendering,
 } = require(mapRendererPath);
+
+const shapePreservingFixture = Array.from({ length: 201 }, (_, index) => {
+  if (index <= 100) return [-122 + index * 0.0001, 38];
+  return [-121.99, 38 + (index - 100) * 0.0001];
+});
+const shapePreserved = preserveRouteGeometryForRendering(shapePreservingFixture, 24);
+assert(shapePreserved.length <= 24, 'Fallback route rendering must honor its point budget.');
+assert.deepStrictEqual(shapePreserved[0], shapePreservingFixture[0]);
+assert.deepStrictEqual(shapePreserved.at(-1), shapePreservingFixture.at(-1));
+assert(
+  shapePreserved.includes(shapePreservingFixture[100]),
+  'Fallback route rendering must retain the canonical 90-degree turn instead of cutting across it.',
+);
 
 const mapHtml = makeMapHtml(
   'pk.syntax-test',

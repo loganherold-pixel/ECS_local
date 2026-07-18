@@ -517,6 +517,44 @@ function lineCoordinates(route) {
   }
   const importedRoute = tripBuilderRouteFromImport({ fileName: 'operator-route.gpx', content: gpx });
   assert.strictEqual(importedRoute.elevationGainFt, 164);
+  const connectedMultipartGpx = `<?xml version="1.0"?><gpx version="1.1" creator="ecs-test"><trk><name>Connected Multipart</name><trkseg><trkpt lat="38.69" lon="-109.71"/><trkpt lat="38.7" lon="-109.7"/></trkseg><trkseg><trkpt lat="38.7002" lon="-109.6998"/><trkpt lat="38.71" lon="-109.69"/></trkseg></trk></gpx>`;
+  const connectedMultipartRoute = tripBuilderRouteFromImport({
+    fileName: 'connected-multipart.gpx',
+    content: connectedMultipartGpx,
+  });
+  assert.strictEqual(
+    connectedMultipartRoute.routeGeometry.type,
+    'MultiLineString',
+    'Trip Builder must retain connected GPX source-segment topology before canonical preparation.',
+  );
+  assert.strictEqual(
+    connectedMultipartRoute.routeMetadata.sourceGeometrySegmentCount,
+    2,
+  );
+  const connectedMultipartAwaiting = await continueTripBuilderRoutePreparation(
+    beginTripBuilderRoutePreparation(idle, connectedMultipartRoute, 6170),
+    connectedMultipartRoute,
+    { now: 6180 },
+  );
+  const connectedMultipartReady = completeTripBuilderRoutePreparation(
+    selectTripBuilderPreparationTrailhead(
+      connectedMultipartAwaiting,
+      connectedMultipartAwaiting.trailheadOptions[0].id,
+    ),
+    6190,
+  );
+  assert.strictEqual(connectedMultipartReady.status, 'ready');
+  assert.strictEqual(connectedMultipartReady.canonicalRoute.routeGeometry.type, 'LineString');
+
+  const disconnectedMultipartGpx = `<?xml version="1.0"?><gpx version="1.1" creator="ecs-test"><trk><name>Disconnected Multipart</name><trkseg><trkpt lat="38.7" lon="-109.7"/><trkpt lat="38.701" lon="-109.699"/></trkseg><trkseg><trkpt lat="39.3" lon="-109.1"/><trkpt lat="39.301" lon="-109.099"/></trkseg></trk></gpx>`;
+  assert.throws(
+    () => tripBuilderRouteFromImport({
+      fileName: 'disconnected-multipart.gpx',
+      content: disconnectedMultipartGpx,
+    }),
+    /disconnected|invent a connector/i,
+    'Trip Builder must terminate a disconnected GPX import instead of canonicalizing a fabricated cross-map segment.',
+  );
   const importedAwaiting = await continueTripBuilderRoutePreparation(
     beginTripBuilderRoutePreparation(idle, importedRoute, 6200),
     importedRoute,

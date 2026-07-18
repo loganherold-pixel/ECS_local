@@ -242,10 +242,7 @@ export function buildFullRouteGuidanceModel(input: FullRouteGuidanceInput): Full
   const roadEnd = roadRoutePoints[roadRoutePoints.length - 1];
   const trailStart = trailGeometry[0];
   const roadTrailJoinDistanceM = trailDistanceMeters(roadEnd, trailStart);
-  if (
-    roadTrailJoinDistanceM > trailStartJoinMaxMeters ||
-    roadTrailJoinDistanceM > trailStartDedupeMeters
-  ) {
+  if (roadTrailJoinDistanceM > trailStartJoinMaxMeters) {
     return {
       status: 'blocked_gap',
       phase: input.phase,

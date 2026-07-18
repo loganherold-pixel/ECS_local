@@ -403,6 +403,7 @@ import { navigateRouteSessionStore } from '../../lib/navigateRouteSessionStore';
 import {
   buildActiveGuidanceProgressPath,
   resolveActiveGuidanceDisplayLocation,
+  resolveNavigateMapUserLocation,
 } from '../../lib/activeGuidanceProgressPath';
 import { buildActiveGuidanceRouteLineSync } from '../../lib/navigation/activeGuidanceRouteLineSync';
 import { buildActiveGuidanceRouteFromState } from '../../lib/navigation/activeGuidanceState';
@@ -427,7 +428,9 @@ import { logRouteGeometryLifecycle, validateRouteGeometry } from '../../lib/rout
 import {
   deriveRouteOperationState,
   normalizeRouteLifecycle,
+  shouldDeferNavigateRouteSessionClear,
 } from '../../lib/routeLifecycleState';
+import { buildGeometryFingerprint } from '../../lib/lifecycle/routeTripExpeditionLifecycle';
 import { parseNavigateRouteImport } from '../../lib/navigateRouteImport';
 import { buildFullRouteGuidanceModel } from '../../lib/fullRouteGuidance';
 import { createMigratingNonSecureStorage } from '../../lib/nonSecureStorage';
@@ -518,7 +521,9 @@ import Header from '../../components/Header';
 import AuthModal from '../../components/AuthModal';
 import { ECSSearchField, ECSResultsEmptyState } from '../../components/ECSResults';
 import { ECSBadge } from '../../components/ECSStatus';
-import MapRenderer from '../../components/navigate/MapRenderer';
+import MapRenderer, {
+  preserveRouteGeometryForRendering,
+} from '../../components/navigate/MapRenderer';
 import DispatchContextHandoffCard from '../../components/navigate/DispatchContextHandoffCard';
 import { RouteChangeImpactPreview } from '../../components/navigate/RouteChangeImpactPreview';
 import CommunityCampsiteDetailCard from '../../components/navigate/CommunityCampsiteDetailCard';
@@ -2285,30 +2290,15 @@ function simplifyNavigateRoadPreviewPoints<T extends { lat: number; lng: number 
   );
   const cappedMaxPoints = Math.max(2, Math.round(maxPoints));
   if (validPoints.length <= cappedMaxPoints) return validPoints.slice();
-
-  const simplified: T[] = [];
-  const lastIndex = validPoints.length - 1;
-  const step = lastIndex / (cappedMaxPoints - 1);
-
-  for (let index = 0; index < cappedMaxPoints; index += 1) {
-    const sourceIndex = index === cappedMaxPoints - 1 ? lastIndex : Math.round(index * step);
-    const point = validPoints[sourceIndex];
-    if (!point) continue;
-    if (simplified.length === 0 || !sameNavigateRoadPreviewPoint(simplified[simplified.length - 1], point)) {
-      simplified.push(point);
-    }
-  }
-
-  const first = validPoints[0];
-  const last = validPoints[lastIndex];
-  if (simplified.length === 0 || !sameNavigateRoadPreviewPoint(simplified[0], first)) {
-    simplified.unshift(first);
-  }
-  if (!sameNavigateRoadPreviewPoint(simplified[simplified.length - 1], last)) {
-    simplified.push(last);
-  }
-
-  return simplified.slice(0, cappedMaxPoints - 1).concat(last);
+  const renderCoordinates = validPoints.map(
+    (point) => [point.lng, point.lat] as [number, number],
+  );
+  return preserveRouteGeometryForRendering(renderCoordinates, cappedMaxPoints)
+    .map((coordinate) => {
+      const sourceIndex = renderCoordinates.indexOf(coordinate);
+      return sourceIndex >= 0 ? validPoints[sourceIndex] : null;
+    })
+    .filter((point): point is T => !!point);
 }
 
 function simplifyNavigateFallbackRoutePoints<T extends { lat: number; lng: number }>(points: T[]): T[] {
@@ -5551,6 +5541,8 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     speedMph: gps.rawGPS.position?.speedMph ?? null,
     permissionState: gps.rawGPS.permissionState,
   });
+  const navigationEnginesRestoreSettled =
+    roadNavigation.restoreStatus !== 'loading' && trailNavigation.restoreStatus !== 'loading';
 
   const campsiteDrawingId = useMemo(
     () => (campsiteDrawingPoints.length >= 3 ? createCampsiteDrawingId(campsiteDrawingPoints) : null),
@@ -9634,6 +9626,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
 
   useFocusEffect(
     useCallback(() => {
+      if (!navigationEnginesRestoreSettled) return undefined;
       let cancelled = false;
       const restoreTask = runAfterShellInteractions(() => {
         void (async () => {
@@ -9682,6 +9675,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     }, [
       applyExploreNavigationPayload,
       isRecoveryAssistNavigationPayload,
+      navigationEnginesRestoreSettled,
       presentDispatchContextHandoff,
       shouldAutoStartNavigationPayload,
       showToast,
@@ -12419,19 +12413,22 @@ const handleCreateRun = useCallback(() => {
         roadNavigation.session.route?.guidance?.rerouteGeneration ??
         roadNavigation.session.rerouteCount ??
         'no-generation',
-      roadNavigation.session.activeGuidance?.geometry?.length ??
-        roadNavigation.session.route?.guidance?.geometry?.length ??
-        roadNavigation.session.route?.geometry?.length ??
-        0,
+      buildGeometryFingerprint(
+        roadNavigation.session.activeGuidance?.geometry ??
+          roadNavigation.session.route?.guidance?.geometry ??
+          roadNavigation.session.route?.geometry ??
+          [],
+        'navigate-active-guidance',
+      ) ?? 'no-geometry',
     ].join(':'),
     [
-      roadNavigation.session.activeGuidance?.geometry?.length,
+      roadNavigation.session.activeGuidance?.geometry,
       roadNavigation.session.activeGuidance?.rerouteGeneration,
       roadNavigation.session.activeGuidance?.routeId,
       roadNavigation.session.activeGuidance?.routeVersion,
       roadNavigation.session.rerouteCount,
-      roadNavigation.session.route?.geometry?.length,
-      roadNavigation.session.route?.guidance?.geometry?.length,
+      roadNavigation.session.route?.geometry,
+      roadNavigation.session.route?.guidance?.geometry,
       roadNavigation.session.route?.guidance?.id,
       roadNavigation.session.route?.guidance?.rerouteGeneration,
       roadNavigation.session.route?.guidance?.routeVersion,
@@ -17103,8 +17100,14 @@ const handleTopToolboxLayout = useCallback(
     if (lifecycle === 'inactive') {
       // The initially empty road/trail hooks are not authoritative until the
       // normalized session store has finished its one restore flight.
-      if (!navigateRouteHydrationSettled) return;
       const currentRouteSnapshot = navigateRouteSessionStore.getSnapshot();
+      if (!navigateRouteHydrationSettled) return;
+      if (shouldDeferNavigateRouteSessionClear({
+        lifecycle,
+        roadRestoreStatus: roadNavigation.restoreStatus,
+        trailRestoreStatus: trailNavigation.restoreStatus,
+        currentSnapshot: currentRouteSnapshot,
+      })) return;
       if (
         currentRouteSnapshot.lifecycle === 'active' &&
         currentRouteSnapshot.source === 'run' &&
@@ -17119,6 +17122,12 @@ const handleTopToolboxLayout = useCallback(
     const context = lifecycle === 'preview' ? navigationPreviewContext : navigationActiveContext;
     if (!context) {
       if (!navigateRouteHydrationSettled) return;
+      if (shouldDeferNavigateRouteSessionClear({
+        lifecycle,
+        roadRestoreStatus: roadNavigation.restoreStatus,
+        trailRestoreStatus: trailNavigation.restoreStatus,
+        currentSnapshot: navigateRouteSessionStore.getSnapshot(),
+      })) return;
       navigateRouteSessionStore.clear();
       return;
     }
@@ -17246,6 +17255,7 @@ const handleTopToolboxLayout = useCallback(
     roadNavigation.session.remainingDistanceM,
     roadNavigation.session.remainingDurationS,
     roadNavigation.session.route?.distanceM,
+    roadNavigation.restoreStatus,
     roadNavigation.session.sessionId,
     roadNavigation.session.status,
     roadNavigation.session.updatedAt,
@@ -17257,6 +17267,7 @@ const handleTopToolboxLayout = useCallback(
     trailNavigation.session.remainingDistanceM,
     trailNavigation.session.sessionId,
     trailNavigation.session.status,
+    trailNavigation.restoreStatus,
     trailNavigation.session.updatedAt,
     trailNavigation.uiMode,
     userLocation,
@@ -22632,9 +22643,11 @@ const navigateMapMotion = useMemo(() => {
 
 const rawLocationAccessGranted =
   gps.rawGPS.permissionState === 'granted' && gps.rawGPS.isAvailable;
-const mapRendererUserLocation = destinationSearchMapFrozen || !rawLocationAccessGranted
-  ? null
-  : (mapDisplayUserLocation ?? stableGpsMapLocation);
+const mapRendererUserLocation = resolveNavigateMapUserLocation({
+  rawLocation: stableGpsMapLocation,
+  locationAccessGranted: rawLocationAccessGranted,
+  mapFrozen: destinationSearchMapFrozen,
+});
 const mapRendererShowUserLocation = !destinationSearchMapFrozen &&
   rawLocationAccessGranted &&
   navigateMapMotion.allowLiveLocation &&

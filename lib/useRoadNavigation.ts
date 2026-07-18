@@ -130,6 +130,7 @@ export interface UseRoadNavigationOutput {
   searchLoading: boolean;
   searchError: string | null;
   session: RoadNavigationSessionState;
+  restoreStatus: 'loading' | 'ready' | 'error';
   previewLoading: boolean;
   stepListExpanded: boolean;
   setStepListExpanded: (value: boolean) => void;
@@ -647,7 +648,12 @@ export function useRoadNavigation(params: {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [stepListExpanded, setStepListExpanded] = useState(false);
-  const [session, setSession] = useState<RoadNavigationSessionState>(createEmptySession);
+  const [session, setSession] = useState<RoadNavigationSessionState>(
+    () => activeRoadNavigationSession,
+  );
+  const [restoreStatus, setRestoreStatus] = useState<'loading' | 'ready' | 'error'>(() =>
+    !enabled || activeRoadNavigationSession.status !== 'idle' ? 'ready' : 'loading',
+  );
   const sessionRef = useRef(session);
   const searchProximityRef = useRef<RoadNavigationLocation | null>(null);
 
@@ -1021,86 +1027,103 @@ export function useRoadNavigation(params: {
   );
 
   useEffect(() => {
-    if (!enabled || restoreAttemptedRef.current) return;
+    if (!enabled) {
+      setRestoreStatus('ready');
+      return;
+    }
+    if (restoreAttemptedRef.current) return;
 
     let cancelled = false;
     // Claim the one restore flight before awaiting storage. Location updates must
     // not restart the read, and a later restore must never replace user work.
     restoreAttemptedRef.current = true;
-    (async () => {
-      const restored = await loadRoadNavigationSession();
-      if (cancelled || !restored) return;
+    let restoreFailed = false;
+    void (async () => {
+      try {
+        const restored = await loadRoadNavigationSession();
+        if (cancelled || !restored) return;
 
-      if (!isRestorableRoadSession(restored)) {
-        await clearRoadNavigationSession();
-        return;
-      }
+        if (!isRestorableRoadSession(restored)) {
+          await clearRoadNavigationSession();
+          return;
+        }
 
-      const restoredRoute = buildCachedRoadRouteFromRestoredSession(restored, currentLocation);
-      setSession((prev) => {
-        const liveSessionStarted =
-          prev.sessionId != null ||
-          prev.destination != null ||
-          prev.route != null ||
-          prev.status !== 'idle';
-        if (liveSessionStarted) return prev;
-        const restoredStatus = restoredRoute ? restored.status : 'destination_selected';
-        const computed = restoredRoute
-          ? computeSessionFromRoute(restoredRoute, currentLocation, prev)
-          : {
-              currentStepIndex: 0,
-              nextInstruction: null,
-              nextInstructionDistanceM: null,
-              remainingDistanceM: null,
-              remainingDurationS: null,
-              etaIso: null,
-              offRouteDistanceM: null,
-              distanceToDestinationM: null,
-              activeGuidanceProgress: null,
-              offRouteUpdateCount: 0,
-              gpsAccuracyMeters: null,
-              progressGeometry: [],
-              updatedAt: restored.updatedAt,
-            };
+        const restoredRoute = buildCachedRoadRouteFromRestoredSession(restored, currentLocation);
+        setSession((prev) => {
+          const liveSessionStarted =
+            prev.sessionId != null ||
+            prev.destination != null ||
+            prev.route != null ||
+            prev.status !== 'idle';
+          if (liveSessionStarted) return prev;
+          const restoredStatus = restoredRoute ? restored.status : 'destination_selected';
+          const computed = restoredRoute
+            ? computeSessionFromRoute(restoredRoute, currentLocation, prev)
+            : {
+                currentStepIndex: 0,
+                nextInstruction: null,
+                nextInstructionDistanceM: null,
+                remainingDistanceM: null,
+                remainingDurationS: null,
+                etaIso: null,
+                offRouteDistanceM: null,
+                distanceToDestinationM: null,
+                activeGuidanceProgress: null,
+                offRouteUpdateCount: 0,
+                gpsAccuracyMeters: null,
+                progressGeometry: [],
+                updatedAt: restored.updatedAt,
+              };
 
-        return {
-          ...prev,
-          sessionId: restored.sessionId,
-          destination: restored.destination,
-          route: restoredRoute,
-          activeGuidance: restored.activeGuidance
-            ? withActiveGuidanceProgressSnapshot(
-                {
-                  ...restored.activeGuidance,
-                  refreshReason: 'restored_session',
-                },
-                computed.activeGuidanceProgress,
-              )
-            : restoredRoute && restoredStatus === 'navigation_active'
-              ? buildActiveGuidanceStateFromRoadRoute({
-                  route: restoredRoute,
-                  refreshReason: 'restored_session',
-                  refreshedAt: restored.updatedAt,
-                  currentStepIndex: computed.currentStepIndex,
-                })
-              : null,
-          routeAlternatives: restoredRoute ? [restoredRoute] : [],
-          status: restoredStatus,
-          error: restoredRoute || currentLocation ? null : 'GPS required',
-          createdFrom: 'restored_session',
-          routeStatusLabel: restoredRoute
-            ? restored.status === 'navigation_active'
-              ? 'Restoring guidance'
-              : restored.status === 'route_preview'
+          return {
+            ...prev,
+            sessionId: restored.sessionId,
+            destination: restored.destination,
+            route: restoredRoute,
+            activeGuidance: restored.activeGuidance
+              ? withActiveGuidanceProgressSnapshot(
+                  {
+                    ...restored.activeGuidance,
+                    refreshReason: 'restored_session',
+                  },
+                  computed.activeGuidanceProgress,
+                )
+              : restoredRoute && restoredStatus === 'navigation_active'
+                ? buildActiveGuidanceStateFromRoadRoute({
+                    route: restoredRoute,
+                    refreshReason: 'restored_session',
+                    refreshedAt: restored.updatedAt,
+                    currentStepIndex: computed.currentStepIndex,
+                  })
+                : null,
+            routeAlternatives: restoredRoute ? [restoredRoute] : [],
+            status: restoredStatus,
+            error: restoredRoute || currentLocation ? null : 'GPS required',
+            createdFrom: 'restored_session',
+            routeStatusLabel: restoredRoute
+              ? restored.status === 'navigation_active'
+                ? 'Restoring guidance'
+                : restored.status === 'route_preview'
+                  ? 'Restoring route'
+                  : null
+              : currentLocation
                 ? 'Restoring route'
-                : null
-            : currentLocation
-              ? 'Restoring route'
-              : 'GPS required',
-          ...computed,
-        };
-      });
-      clearSearchUi();
+                : 'GPS required',
+            ...computed,
+          };
+        });
+        clearSearchUi();
+      } catch {
+        restoreFailed = true;
+        if (!cancelled) setRestoreStatus('error');
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          console.warn('[ECS Navigation] road session restore failed', {
+            safeCode: 'ROAD_SESSION_RESTORE_FAILED',
+          });
+        }
+      } finally {
+        if (!cancelled && !restoreFailed) setRestoreStatus('ready');
+      }
     })();
 
     return () => {
@@ -1876,6 +1899,7 @@ export function useRoadNavigation(params: {
     searchLoading,
     searchError,
     session,
+    restoreStatus,
     previewLoading,
     stepListExpanded,
     setStepListExpanded,
