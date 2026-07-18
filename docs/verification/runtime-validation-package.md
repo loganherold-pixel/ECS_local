@@ -116,7 +116,7 @@ The generator fails closed when:
 | Terrain Risk | imported route with elevation; active guidance; progress movement; orientation change; route without elevation |
 | GPS route alignment | on-route simulation; off-route deviation; switchback or parallel segment; poor accuracy; offline guidance |
 | Draw Route | draw points; immediate pre-preview line; undo/redo; preview; cancel; map-style change |
-| MVUM and Route Geometry | independent enable/disable; zoom eligibility; rapid pan/supersession; online load; valid empty; provider failure/retry; offline cache hit/miss |
+| MVUM and Route Geometry | mutually exclusive selection with independent lifecycle/cancellation; zoom eligibility; rapid pan/supersession; online load; valid empty; provider failure/retry; offline cache hit/miss |
 | Dispatch | CommandDock route; canonical implementation identity; local command mutation/dedupe; offline state and conditional replay; active-expedition switch |
 | Explore | qualified guidance-ready route and exclusions; filter reset/migration; detail geometry promotion; route preview; Navigate handoff gate |
 

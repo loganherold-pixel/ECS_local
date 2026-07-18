@@ -1,3 +1,4 @@
+const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
@@ -5,93 +6,85 @@ const root = path.join(__dirname, '..');
 const navigatePath = path.join(root, 'app', '(tabs)', 'navigate.tsx');
 const source = fs.readFileSync(navigatePath, 'utf8').replace(/\r\n/g, '\n');
 
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-assert(
-  source.includes("from '../../lib/navigateRouteGeometryOverlay'") &&
-    !source.includes('buildRouteGeometryOverlaySegments') &&
-    source.includes('routeGeometrySegmentToRouteBuilderSegment'),
-  'Navigate should use route geometry for route-builder adapters without building a local Explorer/Favorite overlay inventory.',
-);
-
 assert(
   source.includes('const [routeGeometryOverlayEnabled, setRouteGeometryOverlayEnabled] = useState(false);') &&
-    source.includes('const [selectedRouteGeometrySegmentIds, setSelectedRouteGeometrySegmentIds] = useState<string[]>([])'),
-  'Navigate should keep route geometry overlay toggle and selected segment ids in local state.',
+    source.includes('const [selectedRouteCatalogViewportFeatureId, setSelectedRouteCatalogViewportFeatureId]') &&
+    source.includes('const [mvumOverlayEnabled, setMvumOverlayEnabled]'),
+  'Navigate must keep ECS whole-route selection separate from MVUM overlay state.',
 );
 
 assert(
-  source.includes('const routeGeometryOverlayBuild = useMemo') &&
-    source.includes('const routeGeometryOverlaySegments = useMemo') &&
-    !source.includes('routeGeometryOverlaySourceSummary') &&
-    !source.includes('loaded from ${routeGeometryOverlaySourceSummary}'),
-  'Navigate should memoize viewport ECS route geometry without showing Explorer/Favorite source-count copy.',
+  source.includes('const routeCatalogViewportSelection = useMemo') &&
+    source.includes('resolveRouteCatalogViewportSelection(') &&
+    source.includes('routeCatalogViewportSelection?.overlaySegmentIds ?? []') &&
+    source.includes('routeCatalogViewportFeaturesToRouteGeometrySegments('),
+  'The ECS overlay presentation must derive every selected line part from one stable route selection.',
 );
 
 assert(
-  source.includes('[...(displayedSegmentFeatures ?? []), ...exploreRouteOverlaySegments, ...routeGeometryOverlaySegments]'),
-  'Route geometry overlay segments should merge into MapRenderer segments alongside existing Explore route overlays.',
+  source.includes('[...(displayedSegmentFeatures ?? []), ...exploreRouteOverlaySegments, ...routeGeometryOverlaySegments]') &&
+    source.includes('mvumOverlay={navigateMvumMapOverlay}'),
+  'ECS routes and MVUM segments must reach MapRenderer through distinct mounted payloads.',
 );
 
-const railStart = source.indexOf('styles.rightFloatingRail');
-const routeGeometryButton = source.indexOf('accessibilityLabel="Route geometry overlay"', railStart);
-const remotenessButton = source.indexOf('accessibilityLabel="Remoteness map overlay"', railStart);
-assert(railStart >= 0, 'Navigate right floating rail should exist.');
-assert(routeGeometryButton > railStart, 'Route geometry overlay switch should live in the right floating rail.');
-assert(remotenessButton > routeGeometryButton, 'Route geometry overlay switch should sit above Remoteness.');
+const routeGeometryButton = source.indexOf('testID="navigate-map-layer-route-geometry-toggle"');
+const mvumButton = source.indexOf('testID="navigate-map-layer-mvum-toggle"');
+assert(routeGeometryButton >= 0, 'ECS Route Geometry switch should live in the mounted Map Layers menu.');
+assert(mvumButton >= 0, 'MVUM switch should remain independently selectable in the Map Layers menu.');
 assert(
-  source.slice(routeGeometryButton - 900, routeGeometryButton + 900).includes("name=\"git-branch-outline\"") &&
-    source.slice(routeGeometryButton - 900, routeGeometryButton + 900).includes('accessibilityRole="switch"') &&
-    source.slice(routeGeometryButton - 900, routeGeometryButton + 900).includes('checked: routeGeometryOverlayEnabled') &&
-    source.slice(routeGeometryButton - 900, routeGeometryButton + 900).includes('testID="navigate-route-geometry-overlay-toggle"') &&
-    source.slice(routeGeometryButton - 900, routeGeometryButton + 900).includes("accessibilityValue={{ text: routeGeometryOverlayEnabled ? 'on' : 'off' }}"),
-  'Route geometry switch should use the git-branch icon and switch accessibility state.',
+  source.slice(routeGeometryButton - 900, routeGeometryButton + 900).includes('checked: routeGeometryOverlayEnabled') &&
+    source.slice(mvumButton - 900, mvumButton + 900).includes('checked: mvumOverlayEnabled') &&
+    source.includes('resolveNavigateRouteOverlayToggle(') &&
+    source.includes("'exclusive_overlay_switch'"),
+  'Each overlay switch must expose its own accessible checked state.',
 );
 
+const routeTapStart = source.indexOf('const handleRouteGeometrySegmentTap = useCallback');
+const mvumBuildStart = source.indexOf('const handleBuildMvumStitchedRoute = useCallback', routeTapStart);
+const routeTapHandler = source.slice(routeTapStart, mvumBuildStart);
 assert(
-  source.includes('const handleMapSegmentTap = useCallback') &&
-    source.includes("segment?.kind === 'route_geometry_segment'") &&
-    source.includes("segment?.kind === 'explore_route'") &&
-    source.includes('handleRouteGeometrySegmentTap(segment)') &&
-    source.includes('handleExploreRouteSegmentTap(segment)'),
-  'Navigate should dispatch route geometry and Explore route segment taps through a shared map segment handler.',
-);
-
-assert(
-  source.includes('END ACTIVE NAVIGATION TO BUILD FROM ROUTE GEOMETRY') &&
-    source.includes('routeGeometrySegmentToRouteBuilderSegment(match)') &&
-    source.includes('setSelectedRouteGeometrySegmentIds') &&
-    source.includes('ECS TRAIL SEGMENT ADDED') &&
-    source.includes('ECS TRAIL SEGMENT REMOVED'),
-  'Route geometry taps should toggle Build Route trail segments with simple source-free user copy.',
+  routeTapStart >= 0 &&
+    routeTapHandler.includes('resolveRouteCatalogViewportSelection(') &&
+    routeTapHandler.includes('setSelectedRouteCatalogViewportFeatureId(selection.routeId)') &&
+    routeTapHandler.includes('ECS SUGGESTED ROUTE SELECTED') &&
+    !routeTapHandler.includes('setSelectedMvumSegmentIds') &&
+    !routeTapHandler.includes('routeGeometrySegmentToRouteBuilderSegment'),
+  'A route tap must replace the whole ECS route selection without toggling MVUM/custom builder segments.',
 );
 
 assert(
-  source.includes('routeGeometryOverlayLegend') &&
-    source.includes('ECS ROUTE GEOMETRY') &&
-    source.includes('ECS trail segment') &&
-    source.includes('planning/reference geometry') &&
-    source.includes('Verify access, closures, and posted rules before travel.'),
-  'Navigate should render a compact viewport trail-segment legend/status strip with safety copy.',
+  source.includes('selectedRouteCatalogViewportFeature ? (') &&
+    source.includes('testID="navigate-ecs-route-save"') &&
+    source.includes('testID="navigate-ecs-route-start-guidance"') &&
+    source.includes('SAVE ROUTE') &&
+    source.includes('NAVIGATE TO ROUTE'),
+  'Selecting an ECS route must expose the requested Save and GPS Navigate actions.',
+);
+assert(
+  source.includes('disabled={\n                  !selectedRouteCatalogViewportFeature.properties.guidanceReady') &&
+    source.includes('!safeUserLocation') &&
+    source.includes('accessibilityLabel="Navigate from GPS to selected ECS route"'),
+  'Guidance readiness and GPS availability must truthfully gate actions without hiding the route.',
 );
 
 assert(
-  source.includes('const handlePlanRouteBuilderDraft = useCallback') &&
-    source.includes("sourceApp: 'ecs_route_geometry_overlay'") &&
-    source.includes('saveTripBuilderRouteHandoff') &&
-    source.includes("router.push({\n      pathname: '/explore-trip-builder'") &&
-    source.includes('>PLAN</Text>'),
-  'Build Route status actions should expose a PLAN action that saves ECS geometry routes into Trip Builder.',
+  source.includes('<Text style={styles.routeGeometryOverlayLegendTitle}>ECS ROUTE GEOMETRY</Text>') &&
+    source.includes('<Text style={styles.routeGeometryOverlayLegendTitle}>MVUM SEGMENTS</Text>') &&
+    source.includes('ECS geometry is planning/reference geometry.') &&
+    source.includes('MVUM geometry is planning/reference data.'),
+  'The two overlays must retain distinct status and safety language.',
+);
+
+assert(
+  source.includes(`showToast(\`ZOOM TO \${ROUTE_CATALOG_VIEWPORT_MIN_ZOOM}+ TO SHOW ECS CATALOG ROUTES\`)`) &&
+    source.includes(`showToast(\`ZOOM TO \${MVUM_OVERLAY_MIN_ZOOM}+ TO SHOW MVUM SEGMENTS\`)`),
+  'Each overlay should explain its independent zoom eligibility.',
 );
 
 assert(
   !source.includes("sourceKind: 'mapbox_base'") &&
     !source.includes("sourceKind: 'rendered_feature'"),
-  'Navigate should not create route geometry overlay sources from raw Mapbox/rendered base features.',
+  'Navigate must not synthesize authoritative ECS routes from rendered basemap features.',
 );
 
-console.log('Navigate route geometry overlay UI contract checks passed.');
+console.log('Navigate ECS route geometry overlay UI contract checks passed.');

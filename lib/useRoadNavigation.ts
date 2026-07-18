@@ -10,11 +10,13 @@ import {
   buildRoadRouteFromCachedGeometry,
   createRoadSearchSessionToken,
   fetchRoadRouteAlternatives,
+  getRemainingRoadRouteWaypoints,
   resolveRoadDestination,
   searchRoadDestinations,
   type RoadNavCoordinate,
   type RoadNavDestination,
   type RoadNavRoute,
+  type RoadNavWaypointDescriptor,
   type RoadNavSearchSuggestion,
   type RoadNavSourceType,
   type RoadNavStatus,
@@ -413,6 +415,7 @@ function buildCachedRoadRouteFromRestoredSession(
     distanceM: restored.routeDistanceM,
     durationS: restored.routeDurationS,
     createdAt: restored.routeCreatedAt ?? restored.updatedAt,
+    orderedWaypoints: restored.routeOrderedWaypoints,
   });
   const routeWithRestoredGuidance = restored.activeGuidance
     ? applyActiveGuidanceStateToRoadRoute(route, restored.activeGuidance)
@@ -780,6 +783,10 @@ export function useRoadNavigation(params: {
         routeCreatedAt: nextSession.route?.createdAt ?? null,
         routeGeometryCacheKey: routeCacheKey,
         routeGeometryFingerprint: routeValidation?.fingerprint ?? null,
+        routeOrderedWaypoints: nextSession.route?.orderedWaypoints?.map((waypoint) => ({
+          ...waypoint,
+          coordinate: { ...waypoint.coordinate },
+        })),
         activeGuidance: nextSession.activeGuidance,
       });
       return;
@@ -910,6 +917,7 @@ export function useRoadNavigation(params: {
       createdFrom: RoadNavSourceType,
       rerouteCount?: number,
       refreshReason?: ActiveGuidanceRefreshReason,
+      orderedWaypoints?: RoadNavWaypointDescriptor[],
     ) => {
       if (!liveServicesEnabled) {
         throw new Error('Offline — route data unavailable');
@@ -944,6 +952,11 @@ export function useRoadNavigation(params: {
         destination.coordinate.lng.toFixed(5),
         requestedStatus,
         rerouteCount ?? 0,
+        ...(orderedWaypoints ?? []).flatMap((waypoint) => [
+          waypoint.id,
+          waypoint.coordinate.lat.toFixed(5),
+          waypoint.coordinate.lng.toFixed(5),
+        ]),
       ].join(':');
 
       if (inFlightRouteKeyRef.current === routeKey) {
@@ -960,6 +973,7 @@ export function useRoadNavigation(params: {
             accessToken,
             origin: currentLocation,
             destination,
+            waypoints: orderedWaypoints,
             rerouteGeneration: rerouteCount ?? 0,
           }),
         );
@@ -1410,6 +1424,14 @@ export function useRoadNavigation(params: {
       }
 
       const nextRerouteCount = activeSession.rerouteCount + 1;
+      const remainingOrderedWaypoints = activeSession.route
+        ? getRemainingRoadRouteWaypoints(activeSession.route, {
+            currentLegIndex: activeSession.activeGuidanceProgress?.currentLegIndex,
+            currentStepIndex: activeSession.currentStepIndex,
+            routeDistanceFromStartM:
+              activeSession.activeGuidanceProgress?.routeDistanceFromStartMeters,
+          })
+        : [];
       rerouteCooldownRef.current = Date.now();
       setSession((prev) => ({
         ...prev,
@@ -1430,6 +1452,7 @@ export function useRoadNavigation(params: {
           activeSession.createdFrom,
           nextRerouteCount,
           normalizeActiveGuidanceRefreshReason(_reason),
+          remainingOrderedWaypoints,
         );
       } catch (error) {
         const failureMessage = getRouteErrorMessage(error, 'Unable to recalculate route');

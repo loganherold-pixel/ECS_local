@@ -7,6 +7,8 @@ const root = path.join(__dirname, '..');
 const contractsPath = path.join(root, 'lib', 'routeDataContracts.ts');
 const liveCatalogPath = path.join(root, 'lib', 'explore', 'liveTrailPackCatalog.ts');
 const navigatePath = path.join(root, 'app', '(tabs)', 'navigate.tsx');
+const mvumClientPath = path.join(root, 'lib', 'routeGeometryViewportClient.ts');
+const catalogClientPath = path.join(root, 'lib', 'routeCatalogViewportClient.ts');
 const discoverPath = path.join(root, 'app', '(tabs)', 'discover.tsx');
 const packagePath = path.join(root, 'package.json');
 
@@ -132,11 +134,17 @@ const draft = normalizeStitchedRouteDraft({
   estimatedDurationSeconds: 1800,
   warnings: ['Planning geometry only.'],
   unresolvedGaps: [],
+  geometry_source_state: 'canonical',
   createdAt: '2026-06-29T12:00:00.000Z',
   updatedAt: '2026-06-29T12:05:00.000Z',
 });
 assert(draft, 'StitchedRouteDraft should normalize route-builder draft geometry.');
 assert(isStitchedRouteDraft(draft), 'StitchedRouteDraft validator should accept normalized drafts.');
+assert.strictEqual(
+  draft.geometrySourceState,
+  'canonical',
+  'Stitched route hydration should retain its canonical-versus-limited geometry source state.',
+);
 
 const liveCatalogSource = fs.readFileSync(liveCatalogPath, 'utf8');
 assert(
@@ -147,6 +155,8 @@ assert(
 );
 
 const navigateSource = fs.readFileSync(navigatePath, 'utf8');
+const mvumClientSource = fs.readFileSync(mvumClientPath, 'utf8');
+const catalogClientSource = fs.readFileSync(catalogClientPath, 'utf8');
 const discoverSource = fs.readFileSync(discoverPath, 'utf8');
 assert(
   !navigateSource.includes('liveTrailPackCatalogStore'),
@@ -157,11 +167,17 @@ assert(
   'Navigate MVUM overlay should use the MVUM route geometry segment runtime path.',
 );
 assert(
-  !navigateSource.includes('fetchRouteCatalogViewportFeatures') &&
-    !navigateSource.includes('buildRouteCatalogViewportQuery') &&
-    !navigateSource.includes('RouteCatalogViewportCache') &&
-    !navigateSource.includes('routeCatalogViewportFeaturesToRouteGeometrySegments'),
-  'Navigate MVUM overlay should not reuse the Explore/catalog viewport fetch, cache, or conversion path.',
+  mvumClientSource.includes("functions.invoke('route-geometry-segments'") &&
+    !mvumClientSource.includes("functions.invoke('route-catalog-search'"),
+  'Navigate MVUM must retain its dedicated segment provider client.',
+);
+assert(
+  navigateSource.includes('fetchRouteCatalogViewportFeatures') &&
+    navigateSource.includes('buildRouteCatalogViewportQuery') &&
+    navigateSource.includes('routeCatalogViewportFeaturesToRouteGeometrySegments') &&
+    catalogClientSource.includes("functions.invoke('route-catalog-search'") &&
+    !navigateSource.includes('RouteCatalogViewportCache'),
+  'Navigate ECS Route Geometry should use whole catalog records through the existing map-layer coordinator, not a second cache owner.',
 );
 assert(
   discoverSource.includes('RouteCatalogSummary') && discoverSource.includes('RouteDetail'),

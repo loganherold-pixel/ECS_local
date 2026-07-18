@@ -6,7 +6,9 @@ import {
 import type {
   RoadNavCoordinate,
   RoadNavDestination,
+  RoadNavRoute,
 } from '../mapboxRoadNavigation';
+import { getValidatedRoadNavRoute } from '../navigation/roadNavRoutePersistence';
 import type { ImportedRoute, RouteSegment, RouteWaypoint } from '../routeStore';
 import type {
   CampCandidate,
@@ -321,6 +323,7 @@ export async function hydrateOfflinePrepRouteGeometry(
   const { fetchRoadRoute } = require('../mapboxRoadNavigation') as typeof import('../mapboxRoadNavigation');
   const roadRoute = await fetchRoadRoute({ accessToken, origin, destination });
   if (roadRoute.geometry.length <= existingPoints.length) return input;
+  const preparedRoadRoute = getValidatedRoadNavRoute(roadRoute, { requireTurnByTurn: true });
 
   const hydratedRoute: TripBuilderRouteInput = {
     ...input.route,
@@ -335,12 +338,23 @@ export async function hydrateOfflinePrepRouteGeometry(
       offlinePrepGeometryFetchedAt: roadRoute.createdAt,
       offlinePrepGeometryDistanceM: roadRoute.distanceM,
       offlinePrepGeometryDurationS: roadRoute.durationS,
+      tripBuilderPreparedRoadRoute: preparedRoadRoute,
+      tripBuilderPreparedRoadRouteState: preparedRoadRoute
+        ? 'cached_turn_by_turn'
+        : 'unavailable',
+      tripBuilderPreparedRoadRouteUnavailableReason: preparedRoadRoute
+        ? null
+        : 'The route provider returned geometry without detailed road turns.',
     },
   };
 
   return {
     ...input,
     route: hydratedRoute,
+    preparedRoadRoute,
+    preparedRoadRouteUnavailableReason: preparedRoadRoute
+      ? null
+      : 'The route provider returned geometry without detailed road turns.',
   };
 }
 
@@ -1203,6 +1217,11 @@ function buildOfflinePrepPackManifestFromItinerary(
       count: approachPoints.length,
       metadata: serializeItineraryRoute(itinerary.approachRoute, approachPoints),
     }),
+    buildOfflineRoadGuidanceItem({
+      route,
+      preparedRoadRoute: input.preparedRoadRoute,
+      preparedRoadRouteUnavailableReason: input.preparedRoadRouteUnavailableReason,
+    }),
     itineraryItem({
       type: 'trailhead',
       label: 'Trailhead Start',
@@ -1392,6 +1411,21 @@ function buildOfflinePrepPackManifestFromItinerary(
         sourceRouteId: itinerary.sourceRouteId ?? null,
         trailhead: trailheadCoordinate,
         trailEnd: trailEndCoordinate,
+        preparedRoadRoute: (() => {
+          const prepared = getOfflinePrepPreparedRoadRoute({
+            route,
+            preparedRoadRoute: input.preparedRoadRoute,
+          });
+          return prepared
+            ? {
+                routeId: prepared.id,
+                routeVersion: prepared.routeVersion ?? null,
+                geometryPointCount: prepared.geometry.length,
+                stepCount: prepared.steps.length,
+                legCount: prepared.legs.length,
+              }
+            : { status: 'unavailable' };
+        })(),
       },
       camp_candidates: itinerary.stops.filter((stop) => stop.type === 'camp_potential'),
       weather_snapshot: input.weatherSnapshot ?? null,
@@ -1420,6 +1454,67 @@ function buildOfflinePrepPackManifestFromItinerary(
   };
 }
 
+export function getOfflinePrepPreparedRoadRoute(
+  input: Pick<OfflinePrepPackInput, 'route' | 'preparedRoadRoute'>,
+): RoadNavRoute | null {
+  const metadata = routeRecord(input.route.routeMetadata) ?? {};
+  const candidate = input.preparedRoadRoute !== undefined
+    ? input.preparedRoadRoute
+    : metadata.tripBuilderPreparedRoadRoute;
+  return getValidatedRoadNavRoute(candidate, { requireTurnByTurn: true });
+}
+
+function offlineRoadGuidanceUnavailableReason(
+  input: Pick<
+    OfflinePrepPackInput,
+    'route' | 'preparedRoadRoute' | 'preparedRoadRouteUnavailableReason'
+  >,
+): string {
+  const metadata = routeRecord(input.route.routeMetadata) ?? {};
+  const explicitReason = String(
+    input.preparedRoadRouteUnavailableReason ??
+      metadata.tripBuilderPreparedRoadRouteUnavailableReason ??
+      '',
+  ).trim();
+  return explicitReason ||
+    'Detailed road turns were not cached. The route line and downloaded maps remain available, but ECS will not claim full offline turn-by-turn guidance.';
+}
+
+function buildOfflineRoadGuidanceItem(
+  input: Pick<
+    OfflinePrepPackInput,
+    'route' | 'preparedRoadRoute' | 'preparedRoadRouteUnavailableReason'
+  >,
+): OfflinePrepPackItem {
+  const routeMetadata = routeRecord(input.route.routeMetadata) ?? {};
+  const roadGuidanceExpected = input.preparedRoadRoute !== undefined ||
+    routeMetadata.tripBuilderPreparedRoadRouteState != null;
+  const preparedRoadRoute = getOfflinePrepPreparedRoadRoute(input);
+  return item({
+    type: 'road_turn_guidance',
+    label: 'Road Turn Guidance',
+    status: preparedRoadRoute ? 'ready' : 'unavailable',
+    availability: preparedRoadRoute ? 'available' : 'unavailable',
+    required: roadGuidanceExpected,
+    source: preparedRoadRoute
+      ? String(preparedRoadRoute.providerMetadata?.provider ?? 'prepared_road_route')
+      : 'trip_builder_prepared_road_route',
+    summary: preparedRoadRoute
+      ? `${preparedRoadRoute.steps.length} road maneuver${preparedRoadRoute.steps.length === 1 ? '' : 's'} across ${preparedRoadRoute.legs.length} ordered leg${preparedRoadRoute.legs.length === 1 ? '' : 's'} are cached for offline guidance.`
+      : offlineRoadGuidanceUnavailableReason(input),
+    count: preparedRoadRoute?.steps.length ?? 0,
+    metadata: {
+      guidanceMode: preparedRoadRoute ? 'turn_by_turn' : 'unavailable',
+      routeId: preparedRoadRoute?.id ?? null,
+      routeVersion: preparedRoadRoute?.routeVersion ?? null,
+      stepCount: preparedRoadRoute?.steps.length ?? 0,
+      legCount: preparedRoadRoute?.legs.length ?? 0,
+      preparedAt: preparedRoadRoute?.createdAt ?? null,
+      requiredForPlan: roadGuidanceExpected,
+    },
+  });
+}
+
 export function generateOfflinePrepPackFromItinerary(
   input: OfflinePrepPackFromItineraryInput,
   options: { offlineMapAdapter?: OfflineMapPreparationAdapter | null } = {},
@@ -1441,6 +1536,8 @@ export function buildOfflinePrepPackManifest(
   if (input.itinerary) {
     return buildOfflinePrepPackManifestFromItinerary({
       itinerary: input.itinerary,
+      preparedRoadRoute: input.preparedRoadRoute ?? getOfflinePrepPreparedRoadRoute(input),
+      preparedRoadRouteUnavailableReason: input.preparedRoadRouteUnavailableReason ?? null,
       weatherSnapshot: input.weatherSnapshot ?? null,
       remotenessSnapshot: input.remotenessSnapshot ?? null,
       sunlightWindow: input.sunlightWindow ?? null,
@@ -1483,6 +1580,7 @@ export function buildOfflinePrepPackManifest(
       count: points.length,
       error: points.length >= 2 ? null : makeError('route-line-missing', 'route_line', 'Route geometry is missing.'),
     }),
+    buildOfflineRoadGuidanceItem(input),
     item({
       type: 'waypoints',
       label: 'Waypoints',
@@ -1604,6 +1702,18 @@ export function buildOfflinePrepPackManifest(
         routeId: routeKey,
         tripPlanId: lifecycle.identity.tripPlanId,
         routeMetadata: route.routeMetadata ?? null,
+        preparedRoadRoute: (() => {
+          const prepared = getOfflinePrepPreparedRoadRoute(input);
+          return prepared
+            ? {
+                routeId: prepared.id,
+                routeVersion: prepared.routeVersion ?? null,
+                geometryPointCount: prepared.geometry.length,
+                stepCount: prepared.steps.length,
+                legCount: prepared.legs.length,
+              }
+            : { status: 'unavailable' };
+        })(),
       },
       camp_candidates: {
         campsites: input.campsiteCandidates ?? derived.campsites,

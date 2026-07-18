@@ -139,6 +139,7 @@ import { hapticMicro } from '../../lib/haptics';
 import FleetLoadoutModal from '../../components/fleet/FleetLoadoutModal';
 import FleetVehicleProfileModal from '../../components/fleet/FleetVehicleProfileModal';
 import FleetBuildLoadoutModal from '../../components/fleet/FleetBuildLoadoutModal';
+import { FleetVehicleStatusModal } from '../../components/fleet/FleetVehicleStatusModal';
 import WeightDashboardPanel from '../../components/weight-dashboard/WeightDashboardPanel';
 import { tiresLiftStore } from '../../lib/tiresLiftStore';
 import { getShellBottomClearance } from '../../lib/shellLayout';
@@ -148,17 +149,10 @@ import { useECSNavigation } from '../../lib/navigation/useECSNavigation';
 import { normalizeECSReturnRoute } from '../../lib/routeManifest';
 import { ECS_STATE_COPY, ECS_TOAST_COPY } from '../../lib/ecsStateCopy';
 import { ECS_TEXT, ECS_TEXT_SPACING } from '../../lib/ecsTypographyTokens';
-import MissionCommandProposalAction from '../../components/mission-command/MissionCommandProposalAction';
-import { createFleetMissionCommandProposal } from '../../lib/dispatchMissionCommandSourceAdapters';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import { ECS_STATUS } from '../../lib/ecsStatusTokens';
 import { useAdaptiveLayout } from '../../lib/useAdaptiveLayout';
 import { useECSPowerTelemetryReadings } from '../../src/telemetry/useECSTelemetry';
-import { SourceTruthInspectorTrigger } from '../../components/source-truth';
-import {
-  buildFleetWeightSourceTruthBinding,
-  type SourceTruthBinding,
-} from '../../lib/sourceTruthAdapters';
 
 
 
@@ -396,6 +390,16 @@ function buildFleetReadinessNotice(model: FleetVehicleCardModel | null): FleetCo
     ...weightResult.validationFlags.map((flag) => `${vehicle.name}: ${flag.message}`),
   ]).slice(0, 8);
 
+  const priorityReasons = uniqueNoticeItems([
+    ...scoringResult.blockingIssues.map((issue) => `${vehicle.name}: ${issue}`),
+    ...deductionReasons,
+    ...riskFlags,
+    ...weightResult.validationFlags.map((flag) => `${vehicle.name}: ${flag.message}`),
+    missingRequiredChecklistItems.length > 0 ? missingRequiredChecklistCopy : null,
+    payloadMargin,
+    `${vehicle.name}: current risk level is ${formatFleetRiskCopy(scoringResult.riskLevel)}.`,
+  ]).slice(0, 4);
+
   const improvements = uniqueNoticeItems([
     ...missingRequiredChecklistItems.map((label) => `Complete required checklist item: ${label}.`),
     ...scoringResult.blockingIssues,
@@ -432,6 +436,7 @@ function buildFleetReadinessNotice(model: FleetVehicleCardModel | null): FleetCo
     intelligenceConfidenceLabel: model.verificationStatus,
     reasons,
     improvements,
+    priorityReasons,
   };
 }
 
@@ -805,128 +810,6 @@ function FleetOverviewHeader({
   );
 }
 
-function FleetConfidenceNoticeModal({
-  visible,
-  notice,
-  onClose,
-  title = 'Fleet Confidence',
-  subtitle = 'Why ECS assigned this score',
-  scoreEyebrow = 'AVERAGE CONFIDENCE',
-  improvementTitle = 'To Improve Confidence',
-  sourceTruthBinding = null,
-}: {
-  visible: boolean;
-  notice: FleetConfidenceNotice;
-  onClose: () => void;
-  title?: string;
-  subtitle?: string;
-  scoreEyebrow?: string;
-  improvementTitle?: string;
-  sourceTruthBinding?: SourceTruthBinding | null;
-}) {
-  return (
-    <ECSModalShell
-      visible={visible}
-      onClose={onClose}
-      title={title}
-      subtitle={subtitle}
-      eyebrow="VEHICLE COMMAND CENTER"
-      icon="shield-checkmark-outline"
-      overlayClass="info"
-      maxWidth={680}
-      maxHeightFraction={0.86}
-      minHeightFraction={0.64}
-      scrollable
-      showHandle={false}
-      bodyStyle={s.confidenceNoticeModalBody}
-      contentContainerStyle={s.confidenceNoticeModalContent}
-      footer={(
-        <ECSOverlayFooter>
-          <ECSButton
-            label="Close"
-            icon="checkmark-outline"
-            variant="secondary"
-            size="compact"
-            onPress={onClose}
-            grow
-          />
-        </ECSOverlayFooter>
-      )}
-    >
-      <View style={s.confidenceNoticeStack}>
-        <View
-          style={s.confidenceScoreBand}
-          accessible
-          accessibilityLabel={`${scoreEyebrow.toLowerCase()} is ${notice.scoreLabel}`}
-        >
-          <View>
-            <Text style={s.confidenceNoticeEyebrow}>{scoreEyebrow}</Text>
-            <Text style={s.confidenceNoticeScore}>{notice.scoreLabel}</Text>
-          </View>
-          <ECSBadge
-            label={notice.score == null ? 'WAITING' : notice.score >= 88 ? 'STRONG' : 'ESTIMATED'}
-            tone={notice.score != null && notice.score >= 88 ? 'ready' : 'warning'}
-            compact
-          />
-          {sourceTruthBinding ? (
-            <SourceTruthInspectorTrigger
-              source={sourceTruthBinding.ref}
-              sources={sourceTruthBinding.sources}
-              policyKey={sourceTruthBinding.policyKey}
-              dependencies={sourceTruthBinding.dependencies}
-              label="Weight sources"
-            />
-          ) : null}
-        </View>
-
-        <View style={s.confidenceNoticeSection}>
-          <Text style={s.confidenceNoticeTitle}>{notice.title}</Text>
-          <Text style={s.confidenceNoticeCopy}>{notice.summary}</Text>
-        </View>
-
-        {notice.intelligenceSummary || notice.intelligenceDetail ? (
-          <View style={s.confidenceIntelligenceBand}>
-            <View style={s.confidenceIntelligenceHeader}>
-              <Text style={s.confidenceNoticeSectionTitle}>ECS Intelligence</Text>
-              {notice.intelligenceConfidenceLabel ? (
-                <ECSBadge label={notice.intelligenceConfidenceLabel} tone="ready" compact />
-              ) : null}
-            </View>
-            {notice.intelligenceSummary ? (
-              <Text style={s.confidenceNoticeCopy}>{notice.intelligenceSummary}</Text>
-            ) : null}
-            {notice.intelligenceDetail ? (
-              <Text style={s.confidenceNoticeCopy}>{notice.intelligenceDetail}</Text>
-            ) : null}
-          </View>
-        ) : null}
-
-        <View style={s.confidenceNoticeColumns}>
-          <View style={[s.confidenceNoticeSection, s.confidenceNoticeColumn]}>
-            <Text style={s.confidenceNoticeSectionTitle}>Why This Score</Text>
-            {notice.reasons.slice(0, 8).map((reason) => (
-              <View key={reason} style={s.confidenceNoticeRow}>
-                <Ionicons name="ellipse" size={6} color={TACTICAL.amber} />
-                <Text style={s.confidenceNoticeCopy}>{reason}</Text>
-              </View>
-            ))}
-          </View>
-
-          <View style={[s.confidenceNoticeSection, s.confidenceNoticeColumn]}>
-            <Text style={s.confidenceNoticeSectionTitle}>{improvementTitle}</Text>
-            {notice.improvements.slice(0, 8).map((action) => (
-              <View key={action} style={s.confidenceNoticeRow}>
-                <Ionicons name="arrow-up-circle-outline" size={14} color={ECS_STATUS.tone.ready.text} />
-                <Text style={s.confidenceNoticeCopy}>{action}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
-      </View>
-    </ECSModalShell>
-  );
-}
-
 function FleetDetailPanel({
   model,
   panel,
@@ -1272,44 +1155,6 @@ function FleetPremiumVehicleCardComponent({
   const { vehicle, weightResult } = model;
   const scoringResult = resolveVisibleFleetScoring(model);
   const connectivity = resolveFleetConnectivityBadge(isOnline, offlineMode);
-  const buildMissionCommandProposal = useCallback(() => {
-    const sourceTruth = buildFleetWeightSourceTruthBinding({
-      vehicleId: vehicle.id,
-      vehicleName: vehicle.name,
-      updatedAt: model.fleetVehicle.buildProfile.updatedAt,
-      weightResult,
-    }).ref;
-    const recoveryItems = model.checklistRecommendations.filter((item) => item.category === 'offroad_recovery');
-    const confirmedRecoveryItems = recoveryItems.filter((item) => item.status === 'have_it').length;
-    const unresolvedRecoveryItems = recoveryItems.filter((item) => item.status === 'need_it' || item.status === 'not_sure').length;
-    return createFleetMissionCommandProposal({
-      sourceEntityId: vehicle.id,
-      title: `Coordinate ${vehicle.name}`,
-      summary: scoringResult.blockingIssues[0] ?? scoringResult.recommendations[0] ?? 'Review the current Fleet readiness snapshot in Mission Command.',
-      sourceTruth: [sourceTruth],
-      action: 'create_command',
-      command: {
-        type: 'resource',
-        priority: scoringResult.riskLevel === 'critical' ? 'high' : 'normal',
-        title: `Review ${vehicle.name} readiness`,
-        instructions: scoringResult.blockingIssues[0] ?? 'Review vehicle readiness, payload state, and recovery equipment before continuing.',
-        target: { kind: 'vehicle', vehicleId: vehicle.id },
-      },
-      snapshot: {
-        vehicleId: vehicle.id,
-        label: vehicle.name,
-        readiness: `${formatFleetScore(scoringResult.readinessScore)} / ${scoringResult.riskLevel}`,
-        payload: weightResult.payloadRemaining
-          ? `${formatFleetWeightValue(weightResult.payloadRemaining.lbs)} remaining`
-          : 'Payload remaining unavailable',
-        recoveryEquipment: `${confirmedRecoveryItems} confirmed / ${unresolvedRecoveryItems} unresolved`,
-        confidence: sourceTruth.confidence,
-      },
-      operatorRequested: true,
-      offline: offlineMode || !isOnline,
-      returnRoute: '/fleet',
-    });
-  }, [isOnline, model, offlineMode, scoringResult, vehicle, weightResult]);
   return (
     <ECSCard variant="primary" selected={isActive} style={s.premiumVehicleCard}>
       <View style={s.premiumCardHeader}>
@@ -1395,14 +1240,6 @@ function FleetPremiumVehicleCardComponent({
           <ECSButton label="Weight Summary" icon="speedometer-outline" variant="secondary" size="compact" onPress={() => onWeightSummary(vehicle)} numberOfLines={2} grow />
           <ECSButton label="Delete Vehicle" icon="trash-outline" variant="destructive" size="compact" onPress={() => onDelete(vehicle)} numberOfLines={2} grow />
         </ECSActionRow>
-        {isActive ? (
-          <MissionCommandProposalAction
-            label="Coordinate Vehicle"
-            accessibilityLabel={`Coordinate ${vehicle.name} in Mission Command`}
-            buildProposal={buildMissionCommandProposal}
-            grow
-          />
-        ) : null}
       </ECSCardFooter>
 
       {openPanel ? (
@@ -2606,17 +2443,6 @@ function FleetScreenInner() {
     ),
     [selectedVehicleConfidenceModel],
   );
-  const selectedVehicleWeightSourceTruth = useMemo(
-    () => selectedVehicleConfidenceModel
-      ? buildFleetWeightSourceTruthBinding({
-          vehicleId: selectedVehicleConfidenceModel.vehicle.id,
-          vehicleName: selectedVehicleConfidenceModel.vehicle.name,
-          updatedAt: selectedVehicleConfidenceModel.fleetVehicle.buildProfile.updatedAt,
-          weightResult: selectedVehicleConfidenceModel.weightResult,
-        })
-      : null,
-    [selectedVehicleConfidenceModel],
-  );
   const selectedVehicleReadinessModel = useMemo(
     () => fleetCardModels.find((model) => model.vehicle.id === vehicleReadinessNoticeVehicleId) ?? null,
     [fleetCardModels, vehicleReadinessNoticeVehicleId],
@@ -2625,18 +2451,6 @@ function FleetScreenInner() {
     () => buildFleetReadinessNotice(selectedVehicleReadinessModel),
     [selectedVehicleReadinessModel],
   );
-  const selectedVehicleReadinessSourceTruth = useMemo(
-    () => selectedVehicleReadinessModel
-      ? buildFleetWeightSourceTruthBinding({
-          vehicleId: selectedVehicleReadinessModel.vehicle.id,
-          vehicleName: selectedVehicleReadinessModel.vehicle.name,
-          updatedAt: selectedVehicleReadinessModel.fleetVehicle.buildProfile.updatedAt,
-          weightResult: selectedVehicleReadinessModel.weightResult,
-        })
-      : null,
-    [selectedVehicleReadinessModel],
-  );
-
   useEffect(() => {
     if (loading || authLoading || fleetLoadFailure) return;
     if (activeVehicleId && !activeVehicle) {
@@ -3599,24 +3413,25 @@ function FleetScreenInner() {
         showToast={showToast}
       />
 
-      <FleetConfidenceNoticeModal
+      <FleetVehicleStatusModal
+        kind="confidence"
         visible={isFleetFocused && Boolean(vehicleConfidenceNoticeVehicleId)}
         notice={selectedVehicleConfidenceNotice}
-        title="Vehicle Confidence"
-        subtitle={selectedVehicleConfidenceModel?.vehicle.name ?? 'Vehicle-specific confidence'}
-        scoreEyebrow="VEHICLE CONFIDENCE"
-        sourceTruthBinding={selectedVehicleWeightSourceTruth}
+        vehicleName={selectedVehicleConfidenceModel?.vehicle.name ?? 'Vehicle-specific confidence'}
+        maxWidth={Math.max(980, adaptive.contentMaxWidth ?? 980)}
+        topClearance={Math.max(insets.top + 8, 8)}
+        bottomClearance={dockClearance}
         onClose={() => setVehicleConfidenceNoticeVehicleId(null)}
       />
 
-      <FleetConfidenceNoticeModal
+      <FleetVehicleStatusModal
+        kind="readiness"
         visible={isFleetFocused && Boolean(vehicleReadinessNoticeVehicleId)}
         notice={selectedVehicleReadinessNotice}
-        title="Vehicle Readiness"
-        subtitle={selectedVehicleReadinessModel?.vehicle.name ?? 'Vehicle-specific readiness'}
-        scoreEyebrow="VEHICLE READINESS"
-        improvementTitle="To Improve Readiness"
-        sourceTruthBinding={selectedVehicleReadinessSourceTruth}
+        vehicleName={selectedVehicleReadinessModel?.vehicle.name ?? 'Vehicle-specific readiness'}
+        maxWidth={Math.max(980, adaptive.contentMaxWidth ?? 980)}
+        topClearance={Math.max(insets.top + 8, 8)}
+        bottomClearance={dockClearance}
         onClose={() => setVehicleReadinessNoticeVehicleId(null)}
       />
 
@@ -3823,14 +3638,6 @@ const s = StyleSheet.create({
     minHeight: 0,
     padding: 0,
   },
-  confidenceNoticeModalBody: {
-    flex: 1,
-    minHeight: 0,
-  },
-  confidenceNoticeModalContent: {
-    flexGrow: 1,
-    paddingBottom: 18,
-  },
   overviewCard: {
     gap: 12,
   },
@@ -3886,82 +3693,6 @@ const s = StyleSheet.create({
     ...ECS_TEXT.helper,
     color: TACTICAL.textMuted,
     marginTop: 2,
-  },
-  confidenceNoticeStack: {
-    flex: 1,
-    gap: 12,
-    minHeight: 0,
-  },
-  confidenceScoreBand: {
-    minHeight: 72,
-    borderWidth: 1,
-    borderColor: 'rgba(212, 175, 55, 0.34)',
-    borderRadius: 8,
-    backgroundColor: 'rgba(212, 175, 55, 0.08)',
-    padding: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  confidenceNoticeEyebrow: {
-    ...ECS_TEXT.sectionTitle,
-    color: TACTICAL.goldMedium,
-    marginBottom: 4,
-  },
-  confidenceNoticeScore: {
-    ...ECS_TEXT.screenTitle,
-    color: TACTICAL.text,
-  },
-  confidenceNoticeSection: {
-    minWidth: 0,
-    gap: 8,
-  },
-  confidenceNoticeColumn: {
-    flex: 1,
-    flexBasis: 260,
-  },
-  confidenceIntelligenceBand: {
-    borderWidth: 1,
-    borderColor: 'rgba(212, 175, 55, 0.24)',
-    borderRadius: 8,
-    backgroundColor: 'rgba(5, 10, 12, 0.58)',
-    padding: 12,
-    gap: 8,
-  },
-  confidenceIntelligenceHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  confidenceNoticeColumns: {
-    flex: 1,
-    minHeight: 0,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'flex-start',
-    gap: 14,
-  },
-  confidenceNoticeTitle: {
-    ...ECS_TEXT.cardTitle,
-    color: TACTICAL.text,
-  },
-  confidenceNoticeSectionTitle: {
-    ...ECS_TEXT.sectionTitle,
-    color: TACTICAL.goldMedium,
-  },
-  confidenceNoticeCopy: {
-    ...ECS_TEXT.body,
-    color: TACTICAL.textMuted,
-    fontSize: 12,
-    lineHeight: 16,
-    flexShrink: 1,
-  },
-  confidenceNoticeRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
   },
   premiumVehicleStack: {
     gap: 12,

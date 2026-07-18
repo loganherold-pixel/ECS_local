@@ -4,6 +4,10 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 const fleet = fs.readFileSync(path.join(root, 'app', '(tabs)', 'fleet.tsx'), 'utf8').replace(/\r\n/g, '\n');
+const vehicleStatusModal = fs.readFileSync(
+  path.join(root, 'components', 'fleet', 'FleetVehicleStatusModal.tsx'),
+  'utf8',
+).replace(/\r\n/g, '\n');
 
 function assertNotIncludes(fragment, message) {
   assert.ok(!fleet.includes(fragment), message);
@@ -37,8 +41,9 @@ assert.ok(
 );
 
 assert.ok(
-  fleet.includes('FleetConfidenceNoticeModal') &&
-    fleet.includes('scoreEyebrow="VEHICLE CONFIDENCE"'),
+  fleet.includes('FleetVehicleStatusModal') &&
+    fleet.includes('kind="confidence"') &&
+    vehicleStatusModal.includes("scoreEyebrow: 'VEHICLE CONFIDENCE'"),
   'Vehicle-specific confidence details should remain available from vehicle cards.',
 );
 

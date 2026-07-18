@@ -242,14 +242,14 @@ export const RUNTIME_VALIDATION_PROCEDURE_DEFINITIONS = Object.freeze([
       registryBinding('provider_route_catalog', 'conditional', 'Supports geometry detail; catalog search and pagination must also be captured for the full registry scenario.'),
       registryBinding('provider_mapbox', 'conditional', 'Supports map rendering; geocoding and directions remain separate parts of the registry scenario.'),
       registryBinding('provider_fallback', 'conditional', 'Only supports this requirement when a genuine provider failure and truthful last-good fallback are captured.'),
-      registryBinding('mobile_map_responsiveness', 'conditional', 'This procedure captures pan, zoom, bounded requests, and both overlays; reviewed readiness and interaction timing thresholds remain required.'),
+      registryBinding('mobile_map_responsiveness', 'conditional', 'This procedure captures pan, zoom, bounded requests, and switching between both overlays; reviewed readiness and interaction timing thresholds remain required.'),
       registryBinding('field_build_provenance', 'provenance_only', 'The binary provenance must be reviewed and submitted separately.'),
     ]),
     scenarios: Object.freeze([
       scenario('enable_layers', 'Enable', [
-        ['Enable MVUM Segments, then ECS Route Geometry, and observe each diagnostic independently.', 'Each layer has independent enabled, eligibility, request, source, and terminal state.'],
-        ['Disable one layer during a request.', 'That layer cancels or supersedes its work without contaminating the other layer state.'],
-      ], 'Both overlays can run simultaneously without shared loading-state contamination.'),
+        ['Enable MVUM Segments, then select ECS Route Geometry.', 'MVUM turns off and cancels its active request before ECS Route Geometry starts through its independent lifecycle.'],
+        ['Reverse the selection back to MVUM during an ECS request.', 'ECS Route Geometry cancels or supersedes its work without contaminating MVUM state.'],
+      ], 'Only one high-density route overlay is selected at a time while both retain independent terminal state.'),
       scenario('zoom_eligibility', 'Zoom', [
         ['Move below and above each documented zoom threshold.', 'Below-threshold state is zoom-deferred, not loading; eligible zoom can issue a bounded request.'],
       ], 'Zoom eligibility is explicit and terminal.'),
@@ -258,7 +258,7 @@ export const RUNTIME_VALIDATION_PROCEDURE_DEFINITIONS = Object.freeze([
         ['Inspect the final source state.', 'Only the newest viewport result can update drawable GeoJSON.'],
       ], 'Rapid pan and zoom cannot allow stale responses to overwrite the final viewport.'),
       scenario('online_load', 'Online load', [
-        ['With Mapbox and ECS provider configuration available, enable both overlays in an approved coverage area.', 'Each layer reaches ready, empty, degraded, or error within its timeout and exposes feature and invalid-feature counts.'],
+        ['With Mapbox and ECS provider configuration available, enable and verify each overlay in turn in an approved coverage area.', 'Each layer reaches ready, empty, degraded, or error within its timeout and exposes feature and invalid-feature counts.'],
       ], 'Online requests reach explicit terminal states and valid geometry renders with stable unique IDs.'),
       scenario('no_result_area', 'No-result area', [
         ['Move to an approved area with a valid empty provider result.', 'Each relevant layer reaches empty with zero drawable features and no spinner.'],
@@ -272,9 +272,9 @@ export const RUNTIME_VALIDATION_PROCEDURE_DEFINITIONS = Object.freeze([
         ['Visit an uncached viewport while offline.', 'The layer reports offline unavailable rather than loading indefinitely or showing false empty.'],
       ], 'Offline cache hit and miss remain distinct and terminal.'),
     ]),
-    expectedResult: 'MVUM and Route Geometry remain independent, supersede stale viewports, render stable sources, and terminate as ready, empty, deferred, degraded, offline unavailable, cancelled, or error.',
+    expectedResult: 'MVUM and Route Geometry are mutually exclusive at the control surface, retain independent lifecycles, supersede stale viewports, render stable sources, and terminate as ready, empty, deferred, degraded, offline unavailable, cancelled, or error.',
     screenshotRequirements: Object.freeze([
-      'Capture both overlays enabled with their independent terminal source states.',
+      'Capture MVUM selected, then ECS Route Geometry selected, showing that the superseded overlay is off and each lifecycle reaches a terminal source state.',
       'Capture zoom-deferred, valid-empty, provider-error, offline-cache-hit, and offline-cache-miss states.',
     ]),
     logRequirements: Object.freeze([

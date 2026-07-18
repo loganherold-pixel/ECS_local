@@ -75,6 +75,7 @@ notIncludes(fleetTab, 'name={model.iconName as any}', 'Fleet vehicle card should
 for (const cardAction of ['Vehicle Profile', 'Build & Loadout', 'Weight Summary']) {
   includes(fleetTab, `label="${cardAction}"`, `Vehicle card should expose ${cardAction}.`);
 }
+notIncludes(fleetTab, 'Coordinate Vehicle', 'The active vehicle card should not expose a redundant coordination action.');
 notIncludes(fleetTab, 'ECS Fabric Debug', 'Fleet tab should not render user-facing fabric debug UI.');
 notIncludes(fleetTab, 'fabricDebugPanel', 'Fleet tab should not retain fabric debug panel styles.');
 notIncludes(fleetTab, 'showFabricDebugPanel', 'Fleet tab should not pass a fabric debug render flag into vehicle cards.');

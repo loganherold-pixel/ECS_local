@@ -19,6 +19,7 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 };
 
 const {
+  APPROACH_RESUPPLY_POLICY,
   buildApproachResupplyStopPlan,
   buildApproachResupplyRerankEvidence,
   buildApproachResupplyRouteFingerprint,
@@ -129,8 +130,8 @@ assert.strictEqual(
   'A station on the GPS-to-trailhead approach should outrank a straight-line-nearest station away from the approach path.',
 );
 assert.ok(
-  fuelInventory.excluded.find((option) => option.id === 'chico-straight-line-nearest')?.exclusionReasons.includes('excessive_detour'),
-  'A candidate far outside the approach corridor should be excluded as an excessive detour.',
+  fuelInventory.excluded.find((option) => option.id === 'chico-straight-line-nearest')?.exclusionReasons.includes('excessive_corridor_offset'),
+  'A candidate far outside the approach corridor should be excluded as an excessive geometric offset, not mislabeled as a routed detour.',
 );
 assert.ok(
   fuelInventory.excluded.find((option) => option.id === 'after-entry-fuel')?.exclusionReasons.includes('after_trailhead'),
@@ -205,8 +206,116 @@ assert.deepStrictEqual(
   'A single proximity anchor must not consume the entire provider-detail budget before other approach segments are represented.',
 );
 assert.ok(
-  bufferedOffRouteFuel[0].warnings.some((warning) => /outside the preferred 10-mile approach corridor/i.test(warning)),
-  'Fuel outside the preferred corridor but inside the extended buffer should stay selectable with a clear detour warning.',
+  bufferedOffRouteFuel[0].warnings.some((warning) => /provider-routed detour exceeds the preferred 10-mile approach detour/i.test(warning)),
+  'Fuel outside the preferred routed-detour band but inside the maximum should stay selectable with a clear fallback warning.',
+);
+
+assert.strictEqual(
+  APPROACH_RESUPPLY_POLICY.preferredCorridorOffsetMiles,
+  0.2,
+  'The ideal geometric approach corridor should remain a centralized 0.2-mile preference.',
+);
+assert.notStrictEqual(
+  APPROACH_RESUPPLY_POLICY.preferredCorridorOffsetMiles,
+  APPROACH_RESUPPLY_POLICY.preferredRoutedDetourMiles,
+  'Geometric corridor offset and provider-routed detour must remain separate operational measurements.',
+);
+
+const corridorPreferenceOrigin = { latitude: 0, longitude: 0 };
+const corridorPreferenceTrailhead = { latitude: 1, longitude: 0 };
+const corridorPreferenceRoute = [corridorPreferenceOrigin, corridorPreferenceTrailhead];
+const idealCorridorPreference = rankApproachResupplyOptions({
+  category: 'fuel',
+  origin: corridorPreferenceOrigin,
+  trailhead: corridorPreferenceTrailhead,
+  approachRoute: corridorPreferenceRoute,
+  remoteEntryProgressRatio: 0.99,
+  candidates: [
+    {
+      id: 'ideal-corridor-earlier',
+      title: 'Ideal Corridor Fuel',
+      category: 'fuel',
+      coordinate: { latitude: 0.7, longitude: 0.00145 },
+      confidence: 'high',
+    },
+    {
+      id: 'broader-corridor-later',
+      title: 'Broader Corridor Fuel',
+      category: 'fuel',
+      coordinate: { latitude: 0.9, longitude: 0.0145 },
+      confidence: 'high',
+    },
+  ],
+});
+assert.strictEqual(idealCorridorPreference[0].id, 'ideal-corridor-earlier');
+assert.ok(idealCorridorPreference[0].distanceFromApproachRouteMiles <= 0.2);
+assert.ok(idealCorridorPreference[1].distanceFromApproachRouteMiles > 0.2);
+assert.ok(
+  idealCorridorPreference[1].warnings.some((warning) => /broader fallback/i.test(warning)),
+  'A viable candidate outside the ideal 0.2-mile corridor should remain available with truthful fallback language.',
+);
+
+const latestInsideIdealCorridor = rankApproachResupplyOptions({
+  category: 'fuel',
+  origin: corridorPreferenceOrigin,
+  trailhead: corridorPreferenceTrailhead,
+  approachRoute: corridorPreferenceRoute,
+  remoteEntryProgressRatio: 0.99,
+  candidates: [
+    {
+      id: 'ideal-earlier-stop',
+      title: 'Earlier Ideal Fuel',
+      category: 'fuel',
+      coordinate: { latitude: 0.7, longitude: 0.00145 },
+      confidence: 'high',
+    },
+    {
+      id: 'ideal-last-useful-stop',
+      title: 'Last Useful Ideal Fuel',
+      category: 'fuel',
+      coordinate: { latitude: 0.9, longitude: 0.0026 },
+      confidence: 'high',
+    },
+  ],
+});
+assert.strictEqual(
+  latestInsideIdealCorridor[0].id,
+  'ideal-last-useful-stop',
+  'When candidates are both within 0.2 miles, the last useful stop before remote entry should rank first.',
+);
+
+const broaderFallbackOnly = rankApproachResupplyOptions({
+  category: 'food_supplies',
+  origin: corridorPreferenceOrigin,
+  trailhead: corridorPreferenceTrailhead,
+  approachRoute: corridorPreferenceRoute,
+  remoteEntryProgressRatio: 0.99,
+  candidates: [
+    {
+      id: 'broader-supply-earlier',
+      title: 'Earlier Broader Supply',
+      category: 'food_supplies',
+      coordinate: { latitude: 0.7, longitude: 0.0087 },
+      confidence: 'medium',
+    },
+    {
+      id: 'broader-supply-later',
+      title: 'Later Broader Supply',
+      category: 'food_supplies',
+      coordinate: { latitude: 0.9, longitude: 0.0145 },
+      confidence: 'medium',
+    },
+  ],
+});
+assert.strictEqual(broaderFallbackOnly.length, 2);
+assert.strictEqual(
+  broaderFallbackOnly[0].id,
+  'broader-supply-later',
+  'When no ideal-corridor option exists, broader viable fallbacks should retain last-useful-before-entry ordering.',
+);
+assert.ok(
+  broaderFallbackOnly.every((option) => option.warnings.some((warning) => /broader fallback/i.test(warning))),
+  'Every broader geometric fallback should disclose that it is outside the ideal corridor.',
 );
 
 const directionInvariantCandidates = [

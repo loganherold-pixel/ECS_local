@@ -148,9 +148,10 @@ assert.ok(
 );
 assert.ok(
   tripBuilderSource.includes('continueTripBuilderRoutePreparation(started, selectedRoute') &&
+    tripBuilderSource.includes('completeTripBuilderRoutePreparationFromPracticalEntry(next') &&
     tripBuilderSource.includes('saveTripBuilderRouteHandoff(ready.canonicalRoute') &&
     tripBuilderSource.includes("routePreparationState.status === 'awaiting_trailhead_selection'"),
-  'Trip Builder should own detail loading, canonical persistence, and trailhead confirmation.',
+  'Trip Builder should own detail loading, automatic practical entry, canonical persistence, and only retain manual entry for true ambiguity.',
 );
 assert.ok(
   tripBuilderSource.includes('handoffDraftItinerary') &&

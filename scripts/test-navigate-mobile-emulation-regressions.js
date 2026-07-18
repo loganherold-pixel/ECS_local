@@ -665,13 +665,13 @@ assert.ok(
   'Right-side map controls should reserve an explicit gap above the compass/lock hint stack.',
 );
 assert.ok(
-  navigateSource.includes('quickActionsTriggerUnavailable') &&
-    navigateSource.includes('quickActionsUnavailableSlash') &&
-    navigateSource.includes('testID="navigate-remoteness-overlay-toggle"'),
-  'Disabled remoteness control should remain visibly identifiable and testable on mobile.',
+  navigateSource.includes('mapLayerMenuToggleDisabled') &&
+    navigateSource.includes('testID="navigate-map-layer-remoteness-toggle"') &&
+    navigateSource.includes('Requires an active or selected route before the corridor can be shaded.'),
+  'Disabled remoteness control should remain visibly identifiable and testable inside Map Layers on mobile.',
 );
 assert.ok(
-  navigateSource.includes("accessibilityValue={{ text: !remotenessOverlayAvailable && !showRemotenessOverlay ? 'unavailable' : showRemotenessOverlay ? 'on' : 'off' }}"),
+  navigateSource.includes('disabled: !showRemotenessOverlay && !remotenessOverlayAvailable'),
   'Disabled remoteness control should expose explicit unavailable state to assistive tech.',
 );
 

@@ -24,6 +24,7 @@ export type FleetConfidenceNotice = {
   intelligenceConfidenceLabel: string | null;
   reasons: string[];
   improvements: string[];
+  priorityReasons?: string[];
 };
 
 export type FleetConfidenceIntelligenceInput = {

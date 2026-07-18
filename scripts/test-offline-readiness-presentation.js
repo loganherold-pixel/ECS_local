@@ -254,6 +254,51 @@ const routeReady = deriveOfflineReadiness({
 assert(routeReady.level === 'ready', 'Completed matching route sync should make road preview offline readiness Ready.');
 assert(routeReady.reason.includes('Route corridor'), 'Ready route sync should explain that the route corridor is cached.');
 
+const missingSingleRegion = deriveOfflineReadiness({
+  currentRouteContext,
+  downloadedRoutes: [routePreparedSync],
+  tileRegions: [],
+  tileSyncJobs: [],
+  routeSyncHydrated: true,
+});
+assert(
+  missingSingleRegion.level !== 'ready',
+  'Persisted complete status must not claim Ready after its single physical tile region is missing.',
+);
+assert(missingSingleRegion.missingAssets.includes('route corridor tiles'));
+
+const multiRegionIncomplete = deriveOfflineReadiness({
+  currentRouteContext,
+  downloadedRoutes: [{
+    ...routePreparedSync,
+    offlineTileRegionIds: ['region-route-1', 'region-route-2'],
+    offlineTileRegionStatuses: {
+      'region-route-1': 'complete',
+      'region-route-2': 'failed',
+    },
+    tileCacheStatus: 'failed',
+  }],
+  tileRegions: [
+    routeRegionComplete,
+    {
+      ...routeRegionComplete,
+      id: 'region-route-2',
+      status: 'error',
+      downloadedTiles: 75,
+    },
+  ],
+  tileSyncJobs: [],
+  routeSyncHydrated: true,
+});
+assert(
+  multiRegionIncomplete.level !== 'ready',
+  'One complete region must not promote a multi-region package when another required region failed.',
+);
+assert(
+  multiRegionIncomplete.missingAssets.includes('route corridor tiles'),
+  'Incomplete multi-region packages should keep route corridor tiles in the missing list.',
+);
+
 const sourceWarningRouteIntent = {
   ...routePreparedSync.routeIntent,
   readinessSnapshot: {
@@ -371,6 +416,27 @@ const manifestReady = deriveOfflineReadiness({
 });
 
 assert(manifestReady.level === 'ready', 'Active run offline manifest should satisfy route-specific readiness.');
+
+const missingManifestRegion = deriveOfflineReadiness({
+  currentRouteContext,
+  downloadedRoutes: [],
+  runCacheManifest: {
+    tile_region_id: 'region-route-1',
+    route_geometry: [
+      { lat: 38.1, lng: -109.2 },
+      { lat: 38.2, lng: -109.3 },
+    ],
+    tile_cache_status: 'complete',
+    gpx_metadata: {
+      route_intent: routePreparedSync.routeIntent,
+      final_destination: routePreparedSync.finalDestination,
+    },
+  },
+  tileRegions: [],
+  tileSyncJobs: [],
+  routeSyncHydrated: true,
+});
+assert(missingManifestRegion.level !== 'ready', 'A restored run manifest cannot replace missing physical map tiles.');
 
 const notPreparedRoute = deriveOfflineReadiness({
   currentRouteContext,

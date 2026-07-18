@@ -32,10 +32,37 @@ export type CampLayerMenuLayout = {
   maxHeight: number;
 };
 
+export type NavigateRouteOverlaySelection = {
+  mvumEnabled: boolean;
+  routeGeometryEnabled: boolean;
+};
+
+export type NavigateRouteOverlayTarget = 'mvum' | 'route_geometry';
+
 const DEFAULT_MENU_WIDTH = 276;
 const DEFAULT_RAIL_GAP = 6;
 const DEFAULT_TRIGGER_COUNT = 4;
 const MIN_MENU_HEIGHT = 156;
+
+/**
+ * MVUM is a segment-by-segment route builder while ECS Route Geometry is a
+ * catalog-route selector. Keeping this transition pure prevents the mounted
+ * controls from ever requesting both high-density route overlays at once.
+ */
+export function resolveNavigateRouteOverlayToggle(
+  current: NavigateRouteOverlaySelection,
+  target: NavigateRouteOverlayTarget,
+): NavigateRouteOverlaySelection {
+  if (target === 'mvum') {
+    return current.mvumEnabled
+      ? { mvumEnabled: false, routeGeometryEnabled: current.routeGeometryEnabled }
+      : { mvumEnabled: true, routeGeometryEnabled: false };
+  }
+
+  return current.routeGeometryEnabled
+    ? { mvumEnabled: current.mvumEnabled, routeGeometryEnabled: false }
+    : { mvumEnabled: false, routeGeometryEnabled: true };
+}
 
 function finiteNumber(value: number, fallback: number): number {
   return Number.isFinite(value) ? value : fallback;

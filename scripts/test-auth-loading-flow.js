@@ -471,23 +471,28 @@ assertIncludes(
 );
 assertIncludes(
   videoSource,
-  'const animatedFallbackVisible = STARTUP_LOADING_VIDEO_ENABLED && (!videoReady || videoFailed);',
-  'Animated loading fallback should be limited to platforms where the transition video is enabled.',
+  'const loadingIndicatorVisible = !videoReady || videoFailed;',
+  'The native startup indicator should remain visible until media is ready or the loading route unmounts.',
 );
 assertIncludes(
   videoSource,
-  'const staticFallbackVisible = !STARTUP_LOADING_VIDEO_ENABLED && (!videoReady || videoFailed);',
-  'Android loading fallback should use a static indicator so cold-start waits do not continuously repaint.',
+  '{loadingIndicatorVisible ? (',
+  'Every platform should use the same native animated startup fallback.',
 );
 assertIncludes(
   videoSource,
-  '{animatedFallbackVisible ? (',
-  'The ActivityIndicator should be gated behind the animated fallback flag.',
+  'accessibilityRole="progressbar"',
+  'The startup indicator should expose progress semantics.',
 );
 assertIncludes(
   videoSource,
-  '{staticFallbackVisible ? (',
-  'The Android fallback should render a static visual marker instead of an ActivityIndicator.',
+  'animating={true}\n            size="large"',
+  'Android startup should render a complete explicitly animated native loading wheel.',
+);
+assertNotIncludes(
+  videoSource,
+  'staticLoadingGlyph',
+  'The partial static Android spinner segment must not return.',
 );
 
 console.log('Auth loading flow regression checks passed.');

@@ -17,11 +17,13 @@ import { ExplorePlanningTabs } from '../components/discover/ExplorePlanningTabs'
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 import TopoBackground from '../components/TopoBackground';
 import ECSOperationalAnnouncer from '../components/ECSOperationalAnnouncer';
+import { ECSButton } from '../components/ECSButton';
 import { ECS, TACTICAL } from '../lib/theme';
 import { getShellBottomClearance } from '../lib/shellLayout';
 import { getMapboxToken } from '../lib/mapConfig';
 import { hapticMicro } from '../lib/haptics';
 import { runAfterShellInteractions, type ShellInteractionTask } from '../lib/shellInteractionScheduler';
+import { withTimeout } from '../lib/ecsStabilityGuards';
 import { useECSNavigation } from '../lib/navigation/useECSNavigation';
 import {
   recordECSPerformanceRender,
@@ -37,18 +39,26 @@ import {
 } from '../lib/readiness/exploreRouteReadiness';
 import {
   buildOfflinePrepPackManifest,
+  buildOfflinePrepPackPresentation,
+  createOfflinePrepActionFingerprint,
+  createOfflinePrepActionLifecycle,
   clearOfflinePrepPackHandoff,
   getOfflinePrepRouteCacheRunId,
   getOfflinePrepPackRouteCoordinates,
+  getOfflinePrepPreparedRoadRoute,
   getOfflinePrepRouteCoordinates,
   hydrateOfflinePrepRouteGeometry,
   loadOfflinePrepPackHandoffAsync,
   offlineReadinessCoordinator,
   resolveOfflinePrepMapQueueState,
+  resolveOfflinePrepRetryRegionIds,
   type OfflinePrepCriticalMapSegment,
+  type OfflinePrepActionContext,
   type OfflinePrepPackInput,
   type OfflinePrepPackItem,
   type OfflinePrepPackManifest,
+  type OfflinePrepPackPresentation,
+  type OfflinePrepPresentationKind,
   type OfflinePrepPackStatus,
 } from '../lib/offlinePrepPack';
 import {
@@ -99,8 +109,10 @@ import type {
   TripBuilderVehicleProfile,
 } from '../lib/tripBuilder';
 import { exportExploreTripManifestPdf } from '../lib/explore/exploreTripManifestExport';
+import type { ExploreTripManifestExportResult } from '../lib/explore/exploreTripManifestExport';
 
-const OFFLINE_PREP_ACTION_BOTTOM_CLEARANCE = 184;
+const OFFLINE_PREP_CONTENT_BOTTOM_CLEARANCE = 20;
+const OFFLINE_PREP_HYDRATION_TIMEOUT_MS = 8_000;
 const OFFLINE_PREP_INITIAL_RENDER_COUNT = 5;
 const OFFLINE_PREP_BATCH_SIZE = 4;
 const OFFLINE_PREP_WINDOW_SIZE = 5;
@@ -112,12 +124,12 @@ type OfflinePrepContentRow =
   | { type: 'empty' }
   | { type: 'route_list' }
   | { type: 'manifest_header' }
+  | { type: 'pack_overview' }
+  | { type: 'details_toggle' }
   | { type: 'route_catalog_source_check' }
   | { type: 'map_queue' }
   | { type: 'manifest_item'; item: OfflinePrepPackItem }
   | { type: 'manifest_errors' }
-  | { type: 'manifest_prepare' }
-  | { type: 'manifest_export' }
   | { type: 'partial_confirm' }
   | { type: 'prepare_result' }
   | { type: 'error' };
@@ -523,6 +535,8 @@ function offlineCachedRouteToTripBuilderInput(cachedRoute: OfflineCachedRoute): 
       offlinePrepCacheId: cachedRoute.id,
       offlinePrepCachedAt: cachedRoute.cachedAt,
       offlinePrepTileCacheStatus: cachedRoute.tileCacheStatus ?? null,
+      tripBuilderPreparedRoadRoute: cachedRoute.preparedRoadRoute ?? null,
+      tripBuilderPreparedRoadRouteState: cachedRoute.roadGuidanceStatus ?? 'unavailable',
     },
   };
 }
@@ -660,6 +674,22 @@ function buildOfflinePrepRouteIntent(
       tripPlan: input.tripPlan ?? null,
       weatherSnapshot: input.weatherSnapshot ?? null,
       readiness: input.readiness ?? input.tripPlan?.readinessReference ?? null,
+      roadTurnGuidance: (() => {
+        const preparedRoadRoute = getOfflinePrepPreparedRoadRoute(input);
+        return preparedRoadRoute
+          ? {
+              status: 'cached_turn_by_turn',
+              routeId: preparedRoadRoute.id,
+              routeVersion: preparedRoadRoute.routeVersion ?? null,
+              stepCount: preparedRoadRoute.steps.length,
+              legCount: preparedRoadRoute.legs.length,
+            }
+          : {
+              status: 'unavailable',
+              reason: input.preparedRoadRouteUnavailableReason ??
+                'Detailed road turns are not cached for this pack.',
+            };
+      })(),
     },
     preparedAt,
   };
@@ -874,6 +904,99 @@ function MapPrepQueueCard({
   );
 }
 
+function offlinePrepPresentationColor(kind: OfflinePrepPresentationKind): string {
+  if (kind === 'ready') return '#66BB6A';
+  if (kind === 'preparing') return '#64B5F6';
+  if (kind === 'error') return '#EF5350';
+  if (kind === 'blocked') return '#EF9A9A';
+  return TACTICAL.amber;
+}
+
+function offlinePrepPresentationLabel(kind: OfflinePrepPresentationKind): string {
+  if (kind === 'needs_download') return 'DOWNLOAD NEEDED';
+  if (kind === 'preparing') return 'PREPARING';
+  if (kind === 'ready') return 'READY';
+  if (kind === 'degraded') return 'READY WITH LIMITS';
+  if (kind === 'blocked') return 'REQUIRED ITEMS MISSING';
+  return 'NEEDS RETRY';
+}
+
+function OfflinePrepOverview({ presentation }: { presentation: OfflinePrepPackPresentation }) {
+  const requiredAttention = presentation.attentionItems
+    .filter((item) => item.severity !== 'warning')
+    .slice(0, 3);
+  const groupIcons: Record<OfflinePrepPackPresentation['groups'][number]['id'], React.ComponentProps<typeof Ionicons>['name']> = {
+    map: 'map-outline',
+    route_geometry: 'git-branch-outline',
+    guidance_itinerary: 'navigate-outline',
+    optional_field_context: 'layers-outline',
+  };
+
+  return (
+    <View style={styles.overviewCard} testID="offline-prep-navigation-overview">
+      <View style={styles.overviewMetrics}>
+        <View style={styles.overviewMetric}>
+          <Text style={styles.overviewMetricLabel}>MAP</Text>
+          <Text style={[styles.overviewMetricValue, { color: presentation.mapReady ? '#66BB6A' : TACTICAL.amber }]}>
+            {presentation.mapReady ? 'Cached' : presentation.mapStatus.replace('_', ' ')}
+          </Text>
+        </View>
+        <View style={styles.overviewMetric}>
+          <Text style={styles.overviewMetricLabel}>ROUTE</Text>
+          <Text style={[styles.overviewMetricValue, { color: presentation.routeGeometryReady ? '#66BB6A' : '#EF9A9A' }]}>
+            {presentation.routeGeometryReady ? 'Ready' : 'Missing'}
+          </Text>
+        </View>
+        <View style={styles.overviewMetric}>
+          <Text style={styles.overviewMetricLabel}>TURN GUIDANCE</Text>
+          <Text style={[styles.overviewMetricValue, { color: presentation.turnGuidanceState === 'ready' ? '#66BB6A' : TACTICAL.amber }]}>
+            {presentation.turnGuidanceState.replace('_', ' ')}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.overviewGroupGrid}>
+        {presentation.groups.map((group) => {
+          const color = offlinePrepPresentationColor(group.status);
+          return (
+            <View key={group.id} style={styles.overviewGroup} testID={`offline-prep-group-${group.id}`}>
+              <View style={styles.overviewGroupHeader}>
+                <Ionicons name={groupIcons[group.id]} size={15} color={color} />
+                <Text style={styles.overviewGroupTitle}>{group.label}</Text>
+                <Text style={[styles.overviewGroupStatus, { color }]}>
+                  {offlinePrepPresentationLabel(group.status)}
+                </Text>
+              </View>
+              <Text style={styles.overviewGroupSummary}>{group.summary}</Text>
+              <Text style={styles.overviewGroupMeta}>
+                {group.requiredCount > 0
+                  ? `${group.requiredReadyCount}/${group.requiredCount} required ready`
+                  : `${group.readyCount}/${group.items.length} available`}
+                {group.estimatedSizeMB != null ? ` | ${group.estimatedSizeMB} MB` : ''}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+
+      {requiredAttention.length > 0 ? (
+        <View style={styles.attentionBlock} testID="offline-prep-required-attention">
+          <Text style={styles.attentionTitle}>Required attention</Text>
+          {requiredAttention.map((item) => (
+            <View key={item.id} style={styles.attentionRow}>
+              <Ionicons name="alert-circle-outline" size={14} color={item.severity === 'error' ? '#EF5350' : TACTICAL.amber} />
+              <View style={styles.attentionCopy}>
+                <Text style={styles.attentionItemTitle}>{item.title}</Text>
+                <Text style={styles.attentionItemText}>{item.message}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 export default function ExploreOfflinePrepPackScreen() {
   recordECSPerformanceRender('offline_prep_departure_audit', 'offline_prep_screen');
   const [offlinePrepPerformance] = useState(() => startECSPerformanceSpan(
@@ -904,11 +1027,21 @@ export default function ExploreOfflinePrepPackScreen() {
   const [syncSnapshot, setSyncSnapshot] = useState<OfflineTileSyncSnapshot>(() => offlineTileSyncCoordinator.getSnapshot());
   const [tileRegions, setTileRegions] = useState<TileCacheRegion[]>(() => tileCacheStore.getRegions());
   const [mapRetrying, setMapRetrying] = useState(false);
+  const [routeLoadRevision, setRouteLoadRevision] = useState(0);
+  const [refreshRevision, setRefreshRevision] = useState(0);
+  const [detailsVisible, setDetailsVisible] = useState(false);
   const geometryResolveAttemptedRef = useRef<Set<string>>(new Set());
   const weatherResolveAttemptedRef = useRef<Set<string>>(new Set());
+  const geometryRequestGenerationRef = useRef(0);
+  const weatherRequestGenerationRef = useRef(0);
+  const mapRetryRequestRef = useRef(false);
+  const prepareActionLifecycleRef = useRef(createOfflinePrepActionLifecycle<void>());
+  const exportActionLifecycleRef = useRef(createOfflinePrepActionLifecycle<ExploreTripManifestExportResult>());
   const importingRouteRef = useRef(false);
   const autoImportOpenedRef = useRef(false);
   const routeLoadTaskRef = useRef<ShellInteractionTask | null>(null);
+  const contentListRef = useRef<FlatList<OfflinePrepContentRow> | null>(null);
+  const mountedRef = useRef(true);
   const queuedActionCount = actionMessage?.match(/^(\d+)\s/)?.[1];
   const errorAnnouncement = error
     ? {
@@ -947,16 +1080,42 @@ export default function ExploreOfflinePrepPackScreen() {
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
+    prepareActionLifecycleRef.current = createOfflinePrepActionLifecycle<void>();
+    exportActionLifecycleRef.current = createOfflinePrepActionLifecycle<ExploreTripManifestExportResult>();
+    return () => {
+      mountedRef.current = false;
+      prepareActionLifecycleRef.current.dispose();
+      exportActionLifecycleRef.current.dispose();
+    };
+  }, []);
+
+  useEffect(() => {
+    prepareActionLifecycleRef.current.cancel('route_changed');
+    exportActionLifecycleRef.current.cancel('route_changed');
+    setPrepareSaving(false);
+    setManifestExporting(false);
+  }, [selectedRouteId]);
+
+  useEffect(() => {
     let cancelled = false;
     setLoading(true);
     routeLoadTaskRef.current?.cancel();
     routeLoadTaskRef.current = runAfterShellInteractions(() => {
       void (async () => {
         try {
-          const [handoff, exploreContext] = await Promise.all([
-            loadOfflinePrepPackHandoffAsync(),
-            loadExplorePlanningRouteContextAsync(),
-          ]);
+          const hydrated = await withTimeout(
+            Promise.all([
+              loadOfflinePrepPackHandoffAsync(),
+              loadExplorePlanningRouteContextAsync(),
+            ]),
+            OFFLINE_PREP_HYDRATION_TIMEOUT_MS,
+            'offline-prep-hydration',
+          );
+          if (!hydrated) {
+            throw new Error('Offline Prep route options did not finish loading. Retry when local storage is available.');
+          }
+          const [handoff, exploreContext] = hydrated;
           const suggestedRoutes = (exploreContext?.routes?.length
             ? exploreContext.routes
             : loadOpportunitiesWithCompatibility(null).opportunities
@@ -981,8 +1140,12 @@ export default function ExploreOfflinePrepPackScreen() {
           setSelectedRouteId(nextSelectedRouteId);
           setRouteListVisible(!nextSelectedRouteId || params.action === 'import');
           setError(null);
-        } catch {
-          if (!cancelled) setError('Offline Prep Pack could not load route options.');
+        } catch (loadError) {
+          if (!cancelled) {
+            setError(loadError instanceof Error
+              ? loadError.message
+              : 'Offline Prep Pack could not load route options.');
+          }
         } finally {
           if (!cancelled) setLoading(false);
         }
@@ -996,7 +1159,7 @@ export default function ExploreOfflinePrepPackScreen() {
       routeLoadTaskRef.current?.cancel();
       routeLoadTaskRef.current = null;
     };
-  }, [params.action, params.routeId]);
+  }, [params.action, params.routeId, routeLoadRevision]);
 
   const selectedRoute = useMemo(
     () => routes.find((route) => routeId(route) === selectedRouteId) ?? null,
@@ -1033,6 +1196,7 @@ export default function ExploreOfflinePrepPackScreen() {
       setPrepareAttempted(false);
       setPrepareConfirmVisible(false);
       setPrepareSaving(false);
+      setManifestExporting(false);
       setActionMessage(null);
     } catch {
       setManifest(null);
@@ -1055,11 +1219,15 @@ export default function ExploreOfflinePrepPackScreen() {
     if (!selectedInput) return;
     try {
       setManifest(buildOfflinePrepPackManifest(selectedInput));
-    } catch {}
+    } catch {
+      setError('Offline Prep status could not refresh from the local route cache. Retry the manifest.');
+    }
   }, [selectedInput, tileRegions]);
 
   useEffect(() => {
-    if (!selectedInput || geometryResolving) return;
+    const requestGeneration = ++geometryRequestGenerationRef.current;
+    setGeometryResolving(false);
+    if (!selectedInput) return;
     const points = getOfflinePrepRouteCoordinates(selectedInput.route);
     const metadataSource =
       typeof selectedInput.route.routeMetadata?.offlinePrepGeometrySource === 'string'
@@ -1072,11 +1240,12 @@ export default function ExploreOfflinePrepPackScreen() {
 
     let cancelled = false;
     const geometryRefreshTask = runAfterShellInteractions(() => {
+      if (cancelled || geometryRequestGenerationRef.current !== requestGeneration) return;
       setGeometryResolving(true);
       getMapboxToken()
         .then((token) => hydrateOfflinePrepRouteGeometry(selectedInput, { accessToken: token }))
         .then((hydratedInput) => {
-          if (cancelled) return;
+          if (cancelled || geometryRequestGenerationRef.current !== requestGeneration) return;
           const hydratedPoints = getOfflinePrepRouteCoordinates(hydratedInput.route);
           if (hydratedPoints.length <= points.length) return;
           setHandoffInput(hydratedInput);
@@ -1084,12 +1253,14 @@ export default function ExploreOfflinePrepPackScreen() {
           setActionMessage('Route geometry refreshed for offline prep from the selected route endpoints.');
         })
         .catch(() => {
-          if (!cancelled) {
+          if (!cancelled && geometryRequestGenerationRef.current === requestGeneration) {
             setActionMessage('Offline Prep is using the best available route line. Full route geometry can refresh when Mapbox route data is available.');
           }
         })
         .finally(() => {
-          if (!cancelled) setGeometryResolving(false);
+          if (!cancelled && geometryRequestGenerationRef.current === requestGeneration) {
+            setGeometryResolving(false);
+          }
         });
     }, {
       delayMs: 180,
@@ -1100,10 +1271,12 @@ export default function ExploreOfflinePrepPackScreen() {
       cancelled = true;
       geometryRefreshTask.cancel();
     };
-  }, [geometryResolving, selectedInput]);
+  }, [refreshRevision, selectedInput]);
 
   useEffect(() => {
-    if (!selectedInput || selectedInput.weatherSnapshot || weatherResolving) return;
+    const requestGeneration = ++weatherRequestGenerationRef.current;
+    setWeatherResolving(false);
+    if (!selectedInput || selectedInput.weatherSnapshot) return;
     const weatherSampleSelection = offlinePrepWeatherSampleSelection(selectedInput);
     const weatherCoordinates = routeWeatherSamplesToCoordinates(weatherSampleSelection);
     if (weatherCoordinates.length === 0) return;
@@ -1114,10 +1287,11 @@ export default function ExploreOfflinePrepPackScreen() {
 
     let cancelled = false;
     const weatherRefreshTask = runAfterShellInteractions(() => {
+      if (cancelled || weatherRequestGenerationRef.current !== requestGeneration) return;
       setWeatherResolving(true);
       fetchSharedWeatherForCoordinates(weatherCoordinates, 'imperial', false, 'route_segment')
         .then((weather) => {
-          if (cancelled) return;
+          if (cancelled || weatherRequestGenerationRef.current !== requestGeneration) return;
           const weatherSnapshot = buildOfflinePrepWeatherSnapshot(
             selectedInput.route,
             weatherCoordinates,
@@ -1132,12 +1306,14 @@ export default function ExploreOfflinePrepPackScreen() {
           setActionMessage('Weather snapshot refreshed for the selected route.');
         })
         .catch(() => {
-          if (!cancelled) {
-            setActionMessage('Weather snapshot is still unavailable. ECS will retry when route weather is reachable.');
+          if (!cancelled && weatherRequestGenerationRef.current === requestGeneration) {
+            setActionMessage('Weather snapshot is still unavailable. Retry the manifest when route weather is reachable.');
           }
         })
         .finally(() => {
-          if (!cancelled) setWeatherResolving(false);
+          if (!cancelled && weatherRequestGenerationRef.current === requestGeneration) {
+            setWeatherResolving(false);
+          }
         });
     }, {
       delayMs: 220,
@@ -1148,13 +1324,27 @@ export default function ExploreOfflinePrepPackScreen() {
       cancelled = true;
       weatherRefreshTask.cancel();
     };
-  }, [selectedInput, weatherResolving]);
+  }, [refreshRevision, selectedInput]);
 
   const stateCopy = manifestStateCopy(manifest?.progress.status ?? 'not_started', manifest?.progress);
   const mapQueueState = useMemo(
     () => resolveOfflinePrepMapQueueState({ manifest, syncSnapshot, regions: tileRegions }),
     [manifest, syncSnapshot, tileRegions],
   );
+  const packPresentation = useMemo(
+    () => manifest
+      ? buildOfflinePrepPackPresentation({ manifest, mapQueueState })
+      : null,
+    [manifest, mapQueueState],
+  );
+  const packStateAnnouncement = packPresentation && ['ready', 'degraded', 'blocked', 'error'].includes(packPresentation.kind)
+    ? {
+        id: `offline-prep-state:${packPresentation.routeName}:${packPresentation.kind}`,
+        kind: packPresentation.kind === 'error' ? 'error' as const : 'status_changed' as const,
+        subject: packPresentation.headline,
+        detail: packPresentation.summary,
+      }
+    : null;
   const selectedRouteCatalogMetadata = selectedInput?.route.routeMetadata ?? null;
   const routeCatalogSourceRows = useMemo(
     () => buildRouteCatalogSourceRows(selectedRouteCatalogMetadata),
@@ -1192,6 +1382,7 @@ export default function ExploreOfflinePrepPackScreen() {
     setPrepareAttempted(false);
     setActionMessage(null);
     setError(null);
+    setDetailsVisible(false);
   }, []);
 
   const handleReturnToOfflinePrepRouteList = useCallback(() => {
@@ -1203,6 +1394,7 @@ export default function ExploreOfflinePrepPackScreen() {
     setPrepareAttempted(false);
     setActionMessage(null);
     setError(null);
+    setDetailsVisible(false);
   }, []);
 
   const handleOfflinePrepImportRouteFile = useCallback(async () => {
@@ -1281,12 +1473,14 @@ export default function ExploreOfflinePrepPackScreen() {
     regionId: string,
     routeIntent: OfflineRouteIntentMetadata,
     tileCacheStatus: OfflineCachedRoute['tileCacheStatus'],
-    tileCacheError: string | null = null,
+    tileCacheError: string | null | undefined = undefined,
+    requiredRegionIds?: string[],
   ) => {
     const updated = await cacheOfflineRoute({
       run,
       health: computeRunHealth(run),
       offlineTileRegionId: regionId,
+      offlineTileRegionIds: requiredRegionIds,
       tileCacheStatus,
       tileCacheError,
       routeIntent,
@@ -1297,17 +1491,22 @@ export default function ExploreOfflinePrepPackScreen() {
         weatherSnapshot: selectedInput?.weatherSnapshot ?? null,
       },
       includeRemoteConnectivityCache: true,
+      preparedRoadRoute: selectedInput
+        ? getOfflinePrepPreparedRoadRoute(selectedInput)
+        : null,
     });
     runStore.upsert({
       ...run,
       offline_cache: offlineCachedRouteToRunCacheManifest(updated, run),
     });
-    setRoutes((current) => {
-      const routeMap = new Map<string, TripBuilderRouteInput>();
-      current.forEach((route) => upsertExplorePlanningRoute(routeMap, route));
-      upsertExplorePlanningRoute(routeMap, offlineCachedRouteToTripBuilderInput(updated));
-      return Array.from(routeMap.values());
-    });
+    if (mountedRef.current) {
+      setRoutes((current) => {
+        const routeMap = new Map<string, TripBuilderRouteInput>();
+        current.forEach((route) => upsertExplorePlanningRoute(routeMap, route));
+        upsertExplorePlanningRoute(routeMap, offlineCachedRouteToTripBuilderInput(updated));
+        return Array.from(routeMap.values());
+      });
+    }
     return updated;
   };
 
@@ -1342,7 +1541,9 @@ export default function ExploreOfflinePrepPackScreen() {
           region.id,
           routeIntent,
           tileCacheStatus,
-          job.errorMessage ?? null,
+          tileCacheStatus === 'failed'
+            ? job.errorMessage ?? 'Offline map region download failed.'
+            : undefined,
         );
       })
       .catch(async (syncError: unknown) => {
@@ -1362,7 +1563,9 @@ export default function ExploreOfflinePrepPackScreen() {
       });
   };
 
-  const prepareOfflinePack = async () => {
+  const performOfflinePackPreparation = async (context: OfflinePrepActionContext) => {
+    const canPublishActionState = () => mountedRef.current && context.isCurrent() && !context.signal.aborted;
+    if (!canPublishActionState()) return;
     hapticMicro();
     if (!manifest || !selectedInput) {
       setError('Select a route before preparing an Offline Prep Pack.');
@@ -1439,12 +1642,14 @@ export default function ExploreOfflinePrepPackScreen() {
           return { region, routeIntent: segmentRouteIntent };
         });
         const primary = regions[0];
-        const cachedRoute = await updateCachedRouteTileStatus(
+        const requiredRegionIds = regions.map(({ region }) => region.id);
+        await updateCachedRouteTileStatus(
           run,
           primary.region.id,
           primary.routeIntent,
           'downloading',
           null,
+          requiredRegionIds,
         );
         saveExplorePlanningRouteContext({
           routes: [selectedInput.route],
@@ -1452,14 +1657,10 @@ export default function ExploreOfflinePrepPackScreen() {
           refinementLabel: 'Prepared Low-Signal Offline Segments',
           source: 'offline_prep_tab',
         });
-        setRoutes((current) => {
-          const routeMap = new Map<string, TripBuilderRouteInput>();
-          current.forEach((route) => upsertExplorePlanningRoute(routeMap, route));
-          upsertExplorePlanningRoute(routeMap, offlineCachedRouteToTripBuilderInput(cachedRoute));
-          return Array.from(routeMap.values());
-        });
-        setPrepareAttempted(true);
-        setActionMessage(`${criticalSegments.length} low-signal map segment${criticalSegments.length === 1 ? '' : 's'} queued. ECS is caching the route sections most likely to lose service instead of the oversized full-route map.`);
+        if (canPublishActionState()) {
+          setPrepareAttempted(true);
+          setActionMessage(`${criticalSegments.length} low-signal map segment${criticalSegments.length === 1 ? '' : 's'} queued. ECS is caching the route sections most likely to lose service instead of the oversized full-route map.`);
+        }
         offlineReadinessCoordinator.attachMapRegions(
           manifest.readinessManifest.manifestId,
           regions.map(({ region }) => region),
@@ -1494,12 +1695,13 @@ export default function ExploreOfflinePrepPackScreen() {
         corridorMiles: analysis.bufferMiles,
         routeIntent: routeIntent as unknown as Record<string, unknown>,
       });
-      const cachedRoute = await updateCachedRouteTileStatus(
+      await updateCachedRouteTileStatus(
         run,
         region.id,
         routeIntent,
         existingCompleteRegion ? 'complete' : 'downloading',
         null,
+        [region.id],
       );
       saveExplorePlanningRouteContext({
         routes: [selectedInput.route],
@@ -1507,16 +1709,12 @@ export default function ExploreOfflinePrepPackScreen() {
         refinementLabel: 'Prepared Offline Pack',
         source: 'offline_prep_tab',
       });
-      setRoutes((current) => {
-        const routeMap = new Map<string, TripBuilderRouteInput>();
-        current.forEach((route) => upsertExplorePlanningRoute(routeMap, route));
-        upsertExplorePlanningRoute(routeMap, offlineCachedRouteToTripBuilderInput(cachedRoute));
-        return Array.from(routeMap.values());
-      });
-      setPrepareAttempted(true);
-      setActionMessage(existingCompleteRegion
-        ? `${manifestStateCopy(manifest.progress.status, manifest.progress).message} Offline route package is already cached and saved to Navigate, Offline Cache, and the Offline Prep list.`
-        : 'Offline Prep Pack download started. Progress will remain visible above the ECS banner while you move through the app.');
+      if (canPublishActionState()) {
+        setPrepareAttempted(true);
+        setActionMessage(existingCompleteRegion
+          ? `${manifestStateCopy(manifest.progress.status, manifest.progress).message} Offline route package is already cached and saved to Navigate, Offline Cache, and the Offline Prep list.`
+          : 'Offline Prep Pack download started. Progress will remain visible above the ECS banner while you move through the app.');
+      }
       offlineReadinessCoordinator.attachMapRegions(manifest.readinessManifest.manifestId, [region]);
       offlineReadinessCoordinator.reconcileTileState(
         offlineTileSyncCoordinator.getSnapshot().jobs,
@@ -1532,12 +1730,36 @@ export default function ExploreOfflinePrepPackScreen() {
         offlineReadinessCoordinator.failPreparation(manifest.readinessManifest.manifestId, 'offline_preparation_failed');
       }
       void offlineReadinessCoordinator.flush();
-      setPrepareAttempted(true);
-      setError(prepareError instanceof Error ? prepareError.message : 'Offline Prep Pack could not be saved.');
-      setActionMessage(null);
+      if (canPublishActionState()) {
+        setPrepareAttempted(true);
+        setError(prepareError instanceof Error ? prepareError.message : 'Offline Prep Pack could not be saved.');
+        setActionMessage(null);
+      }
+      throw prepareError;
     } finally {
-      setPrepareSaving(false);
+      if (canPublishActionState()) setPrepareSaving(false);
     }
+  };
+
+  const prepareOfflinePack = async () => {
+    if (!manifest || !selectedInput) {
+      setError('Select a route before preparing an Offline Prep Pack.');
+      return;
+    }
+    const fingerprint = createOfflinePrepActionFingerprint({
+      action: 'prepare_pack',
+      routeId: routeId(selectedInput.route),
+      manifestId: manifest.id,
+      sourceRevision: manifest.generatedAt,
+    });
+    const execution = prepareActionLifecycleRef.current.run({
+      action: 'prepare_pack',
+      fingerprint,
+      attempt: 'refresh',
+      safeErrorCode: 'OFFLINE_PREP_PREPARATION_FAILED',
+      execute: performOfflinePackPreparation,
+    });
+    await execution.promise;
   };
 
   const handlePrepare = () => {
@@ -1549,6 +1771,7 @@ export default function ExploreOfflinePrepPackScreen() {
       hapticMicro();
       setPrepareConfirmVisible(true);
       setActionMessage(null);
+      contentListRef.current?.scrollToOffset({ offset: 0, animated: true });
       return;
     }
     void prepareOfflinePack();
@@ -1556,38 +1779,67 @@ export default function ExploreOfflinePrepPackScreen() {
 
   const handleExportPrintableManifest = useCallback(async () => {
     if (!manifest || !selectedInput) {
-      setError('Select a route before exporting an Offline Prep manifest.');
+      setError('Select a route before exporting a family emergency manifest.');
+      return;
+    }
+    const fingerprint = createOfflinePrepActionFingerprint({
+      action: 'export_manifest',
+      routeId: routeId(selectedInput.route),
+      manifestId: manifest.id,
+      sourceRevision: manifest.generatedAt,
+    });
+    const execution = exportActionLifecycleRef.current.run({
+      action: 'export_manifest',
+      fingerprint,
+      attempt: 'refresh',
+      safeErrorCode: 'OFFLINE_PREP_MANIFEST_EXPORT_FAILED',
+      execute: () => exportExploreTripManifestPdf({
+        title: `${routeName(selectedInput.route)} Family Emergency Trip Manifest`,
+        manifest,
+        route: selectedInput.route,
+        routeCoordinates: getOfflinePrepPackRouteCoordinates(selectedInput),
+        itinerary: selectedInput.itinerary ?? null,
+        tripPlan: selectedInput.tripPlan ?? null,
+        readiness: selectedInput.readiness ?? selectedInput.tripPlan?.readinessReference ?? null,
+        vehicleProfile: selectedInput.vehicleProfile ?? null,
+        emergencyPoints: selectedInput.emergencyPoints ?? null,
+        emergencyNotes: selectedInput.emergencyNotes ?? null,
+        offlinePresentation: packPresentation,
+      }),
+    });
+    if (execution.decision === 'started') {
+      hapticMicro();
+      setManifestExporting(true);
+      setError(null);
+    }
+    const outcome = await execution.promise;
+    setManifestExporting(false);
+    if (!outcome.accepted) return;
+    if (outcome.status === 'succeeded' && outcome.data?.success) {
+      setActionMessage('Family emergency trip manifest is ready to print or share with a trusted contact.');
+    } else {
+      setError(outcome.data?.error ?? 'Family emergency manifest export failed.');
+    }
+  }, [manifest, packPresentation, selectedInput]);
+
+  const handleRetry = () => {
+    if (!selectedInput) {
+      hapticMicro();
+      setError(null);
+      setLoading(true);
+      setRouteLoadRevision((revision) => revision + 1);
       return;
     }
     hapticMicro();
-    setManifestExporting(true);
-    setError(null);
-    const inputRecord = readRecord(selectedInput) ?? {};
-    const tripPlanRecord = readRecord(inputRecord.tripPlan);
-    const result = await exportExploreTripManifestPdf({
-      title: `${routeName(selectedInput.route)} Offline Manifest`,
-      manifest,
-      route: selectedInput.route,
-      itinerary:
-        inputRecord.itinerary ??
-        inputRecord.tripItinerary ??
-        tripPlanRecord?.itinerary ??
-        null,
-    });
-    setManifestExporting(false);
-    if (result.success) {
-      setActionMessage('Printable Offline Prep manifest generated.');
-    } else {
-      setError(result.error ?? 'Offline Prep manifest export failed.');
-    }
-  }, [manifest, selectedInput]);
-
-  const handleRetry = () => {
-    if (!selectedInput) return;
-    hapticMicro();
-    if (manifest && mapQueueState?.retryable && mapQueueState.regionId) {
-      const retryRegionId = mapQueueState.regionId;
+    if (manifest && mapQueueState?.retryable && (mapQueueState.regionIds?.length || mapQueueState.regionId)) {
+      if (mapRetryRequestRef.current) return;
+      const packageRegionIds = Array.from(new Set(
+        (mapQueueState.regionIds?.length ? mapQueueState.regionIds : [mapQueueState.regionId])
+          .filter((regionId): regionId is string => Boolean(regionId)),
+      ));
+      const retryRegionIds = resolveOfflinePrepRetryRegionIds(mapQueueState, tileCacheStore.getRegions());
       void (async () => {
+        mapRetryRequestRef.current = true;
         setMapRetrying(true);
         setError(null);
         try {
@@ -1595,43 +1847,76 @@ export default function ExploreOfflinePrepPackScreen() {
           if (!run) throw new Error('Route geometry is required before retrying offline map preparation.');
           const analysis = analyzeRoute(run);
           if (!analysis) throw new Error('Route corridor analysis is required before retrying offline map preparation.');
-          const region = tileCacheStore.getRegion(retryRegionId);
-          if (!region) throw new Error('Offline map region is missing. Start Prepare Offline Pack again.');
-          const routeIntent = buildOfflinePrepRouteIntent(selectedInput, manifest, run, analysis);
-          tileCacheStore.updateRegion(region.id, {
-            status: 'pending',
-            errorMessage: undefined,
-            routeId: run.id,
-            sourceType: 'route-corridor',
-            syncType: 'route',
-            corridorMiles: analysis.bufferMiles,
-            routeIntent: routeIntent as unknown as Record<string, unknown>,
+          const defaultRouteIntent = buildOfflinePrepRouteIntent(selectedInput, manifest, run, analysis);
+          const retryRegions = retryRegionIds.map((regionId) => {
+            const region = tileCacheStore.getRegion(regionId);
+            if (!region) throw new Error('A required offline map region is missing. Start Prepare Offline Pack again.');
+            const routeIntent = (region.routeIntent ?? defaultRouteIntent) as unknown as OfflineRouteIntentMetadata;
+            tileCacheStore.updateRegion(region.id, {
+              status: 'pending',
+              errorMessage: undefined,
+              routeId: run.id,
+              sourceType: 'route-corridor',
+              syncType: 'route',
+              corridorMiles: region.corridorMiles ?? analysis.bufferMiles,
+              routeIntent: routeIntent as unknown as Record<string, unknown>,
+            });
+            return { region: tileCacheStore.getRegion(region.id) ?? region, routeIntent };
           });
-          await updateCachedRouteTileStatus(run, region.id, routeIntent, 'downloading', null);
+          if (retryRegions.length === 0) {
+            throw new Error('No incomplete offline map regions remain to retry. Refresh the manifest to verify this pack.');
+          }
+          for (const { region, routeIntent } of retryRegions) {
+            await updateCachedRouteTileStatus(run, region.id, routeIntent, 'downloading', null);
+          }
           const quotaStatus = tileCacheStore.getQuotaStatus();
           offlineReadinessCoordinator.beginPreparation(manifest.readinessManifest, {
             availableBytes: Math.round(quotaStatus.availableMB * 1024 * 1024),
             quotaBytes: Math.round(quotaStatus.config.quotaLimitMB * 1024 * 1024),
           });
-          offlineReadinessCoordinator.attachMapRegions(manifest.readinessManifest.manifestId, [region]);
+          const packageRegions = packageRegionIds.map((regionId) => {
+            const region = tileCacheStore.getRegion(regionId);
+            if (!region) throw new Error('A required offline map region is missing. Start Prepare Offline Pack again.');
+            return region;
+          });
+          offlineReadinessCoordinator.attachMapRegions(
+            manifest.readinessManifest.manifestId,
+            packageRegions,
+          );
           void offlineReadinessCoordinator.flush();
-          startMapSyncForRegion(region, run, routeIntent, manifest.readinessManifest.manifestId);
+          retryRegions.forEach(({ region, routeIntent }) => {
+            startMapSyncForRegion(region, run, routeIntent, manifest.readinessManifest.manifestId);
+          });
           setPrepareAttempted(true);
           setPrepareConfirmVisible(false);
-          setActionMessage('Offline map retry started. Progress is shown here and in the shared ECS sync banner.');
+          setActionMessage(`${retryRegions.length} incomplete offline map region${retryRegions.length === 1 ? '' : 's'} queued for retry. Progress is shown here and in the shared ECS sync banner.`);
         } catch (retryError) {
           setError(retryError instanceof Error ? retryError.message : 'Offline map retry could not start.');
           setActionMessage(null);
         } finally {
+          mapRetryRequestRef.current = false;
           setMapRetrying(false);
         }
       })();
       return;
     }
-    setManifest(buildOfflinePrepPackManifest(selectedInput));
-    setPrepareAttempted(false);
-    setPrepareConfirmVisible(false);
-    setActionMessage('Offline Prep Pack manifest refreshed.');
+    geometryResolveAttemptedRef.current.clear();
+    weatherResolveAttemptedRef.current.clear();
+    geometryRequestGenerationRef.current += 1;
+    weatherRequestGenerationRef.current += 1;
+    setGeometryResolving(false);
+    setWeatherResolving(false);
+    try {
+      setManifest(buildOfflinePrepPackManifest(selectedInput));
+      setPrepareAttempted(false);
+      setPrepareConfirmVisible(false);
+      setError(null);
+      setActionMessage('Offline Prep Pack manifest refreshed.');
+      setRefreshRevision((revision) => revision + 1);
+    } catch {
+      setError('Offline Prep Pack manifest could not be refreshed from the selected route.');
+      setActionMessage(null);
+    }
   };
 
   const handleBackToSuggestedRoutes = () => {
@@ -1644,12 +1929,32 @@ export default function ExploreOfflinePrepPackScreen() {
     returnSingleFlight('/discover');
   };
 
+  const handlePrimaryPackAction = () => {
+    if (!packPresentation) return;
+    if (packPresentation.kind === 'degraded' || packPresentation.kind === 'blocked') {
+      hapticMicro();
+      setDetailsVisible(true);
+      contentListRef.current?.scrollToOffset({ offset: 0, animated: true });
+      return;
+    }
+    if (mapQueueState?.retryable) {
+      handleRetry();
+      return;
+    }
+    handlePrepare();
+  };
+
   const showRouteList = routes.length > 0 && (routeListVisible || !selectedRouteId);
   const offlinePrepContentRows = useMemo<OfflinePrepContentRow[]>(() => {
     const rows: OfflinePrepContentRow[] = [{ type: 'hero' }];
 
     if (loading) {
       rows.push({ type: 'loading' });
+      return rows;
+    }
+
+    if (error && routes.length === 0) {
+      rows.push({ type: 'error' });
       return rows;
     }
 
@@ -1665,13 +1970,16 @@ export default function ExploreOfflinePrepPackScreen() {
 
     if (manifest) {
       rows.push({ type: 'manifest_header' });
-      if (showRouteCatalogSourceCheck) rows.push({ type: 'route_catalog_source_check' });
-      if (mapQueueState) rows.push({ type: 'map_queue' });
-      manifest.items.forEach((item) => rows.push({ type: 'manifest_item', item }));
-      if (manifest.errors.length > 0) rows.push({ type: 'manifest_errors' });
-      rows.push({ type: 'manifest_prepare' }, { type: 'manifest_export' });
       if (prepareConfirmVisible) rows.push({ type: 'partial_confirm' });
       if (prepareAttempted || actionMessage) rows.push({ type: 'prepare_result' });
+      if (error) rows.push({ type: 'error' });
+      if (mapQueueState) rows.push({ type: 'map_queue' });
+      rows.push({ type: 'pack_overview' }, { type: 'details_toggle' });
+      if (detailsVisible) {
+        if (showRouteCatalogSourceCheck) rows.push({ type: 'route_catalog_source_check' });
+        manifest.items.forEach((item) => rows.push({ type: 'manifest_item', item }));
+        if (manifest.errors.length > 0) rows.push({ type: 'manifest_errors' });
+      }
       return rows;
     }
 
@@ -1679,6 +1987,7 @@ export default function ExploreOfflinePrepPackScreen() {
     return rows;
   }, [
     actionMessage,
+    detailsVisible,
     error,
     loading,
     manifest,
@@ -1702,7 +2011,7 @@ export default function ExploreOfflinePrepPackScreen() {
               <Text style={styles.eyebrow}>EXPLORE PLANNING</Text>
               <Text style={styles.heroTitle}>Offline Prep Pack</Text>
               <Text style={styles.heroText}>
-                Save route essentials for low-service travel. Unavailable items stay clearly marked.
+                Download the map, route, guidance, and itinerary needed to follow this trip without service.
               </Text>
             </View>
           </View>
@@ -1816,15 +2125,19 @@ export default function ExploreOfflinePrepPackScreen() {
             </View>
           </View>
         );
-      case 'manifest_header':
-        if (!manifest) return null;
+      case 'manifest_header': {
+        if (!manifest || !packPresentation) return null;
+        const requiredPercent = packPresentation.requiredCount > 0
+          ? Math.round((packPresentation.requiredReadyCount / packPresentation.requiredCount) * 100)
+          : 0;
+        const presentationColor = offlinePrepPresentationColor(packPresentation.kind);
         return (
           <View style={styles.sectionCard} testID="offline-prep-manifest">
             <View style={styles.sectionHeader}>
               <View style={styles.sectionHeaderCopy}>
-                <Text style={styles.sectionTitle}>{stateCopy.title}</Text>
-                <Text style={[styles.sectionMeta, { color: statusColor(manifest.progress.status) }]}>
-                  {progressStatusLabel(manifest.progress.status)}
+                <Text style={styles.sectionTitle}>{packPresentation.headline}</Text>
+                <Text style={[styles.sectionMeta, { color: presentationColor }]}>
+                  {offlinePrepPresentationLabel(packPresentation.kind)}
                 </Text>
               </View>
               <TouchableOpacity
@@ -1839,16 +2152,48 @@ export default function ExploreOfflinePrepPackScreen() {
                 <Text style={styles.backToListText}>Back</Text>
               </TouchableOpacity>
             </View>
+            <Text style={styles.routeNameText} numberOfLines={2}>{packPresentation.routeName}</Text>
             <Text style={styles.stateTextLeft}>
-              {geometryResolving ? 'Refreshing route geometry for offline prep...' : stateCopy.message}
+              {geometryResolving ? 'Refreshing route geometry for offline prep...' : packPresentation.summary}
             </Text>
-            <View style={styles.progressTrack} accessibilityLabel={`Offline Prep Pack ${manifest.progress.percent} percent ready`}>
-              <View style={[styles.progressFill, { width: `${manifest.progress.percent}%` }]} />
+            <View
+              style={styles.progressTrack}
+              accessibilityRole="progressbar"
+              accessibilityLabel="Required offline navigation assets"
+              accessibilityValue={{ min: 0, max: 100, now: requiredPercent, text: `${requiredPercent} percent ready` }}
+            >
+              <View style={[styles.progressFill, { width: `${requiredPercent}%`, backgroundColor: presentationColor }]} />
             </View>
             <Text style={styles.progressMeta}>
-              {manifest.progress.readyItems}/{manifest.progress.totalItems} ready | {manifest.progress.unavailableItems} unavailable | {manifest.progress.failedItems} need review
+              {packPresentation.requiredReadyCount}/{packPresentation.requiredCount} navigation essentials ready
+              {packPresentation.optionalGapCount > 0 ? ` | ${packPresentation.optionalGapCount} optional not included` : ''}
             </Text>
           </View>
+        );
+      }
+      case 'pack_overview':
+        return packPresentation ? <OfflinePrepOverview presentation={packPresentation} /> : null;
+      case 'details_toggle':
+        if (!manifest) return null;
+        return (
+          <TouchableOpacity
+            style={styles.detailsToggle}
+            activeOpacity={0.82}
+            onPress={() => setDetailsVisible((visible) => !visible)}
+            accessibilityRole="button"
+            accessibilityLabel={detailsVisible ? 'Hide Offline Prep pack details' : 'Show Offline Prep pack details'}
+            accessibilityHint="Shows individual assets, source details, and optional items"
+            accessibilityState={{ expanded: detailsVisible }}
+            testID="offline-prep-details-toggle"
+          >
+            <View style={styles.detailsToggleCopy}>
+              <Text style={styles.detailsToggleTitle}>{detailsVisible ? 'Hide Pack Details' : 'View Pack Details'}</Text>
+              <Text style={styles.detailsToggleText}>
+                {manifest.items.length} assets | source, optional, and troubleshooting details
+              </Text>
+            </View>
+            <Ionicons name={detailsVisible ? 'chevron-up' : 'chevron-down'} size={16} color={TACTICAL.amber} />
+          </TouchableOpacity>
         );
       case 'route_catalog_source_check':
         return (
@@ -1969,38 +2314,6 @@ export default function ExploreOfflinePrepPackScreen() {
             </TouchableOpacity>
           </View>
         );
-      case 'manifest_prepare':
-        return (
-          <TouchableOpacity
-            style={[styles.primaryButton, (!manifest || prepareSaving) && styles.primaryButtonDisabled]}
-            activeOpacity={manifest && !prepareSaving ? 0.84 : 1}
-            disabled={!manifest || prepareSaving}
-            onPress={handlePrepare}
-            accessibilityRole="button"
-            accessibilityLabel="Prepare Offline Pack"
-            testID="offline-prep-prepare"
-          >
-            {prepareSaving ? <ActivityIndicator size="small" color="#081014" /> : <Ionicons name="download-outline" size={14} color="#081014" />}
-            <Text style={styles.primaryButtonText}>{prepareSaving ? 'Preparing...' : 'Prepare Offline Pack'}</Text>
-          </TouchableOpacity>
-        );
-      case 'manifest_export':
-        return (
-          <TouchableOpacity
-            style={[styles.secondaryButton, (!manifest || manifestExporting) && styles.secondaryButtonDisabled]}
-            activeOpacity={manifest && !manifestExporting ? 0.84 : 1}
-            disabled={!manifest || manifestExporting}
-            onPress={() => {
-              void handleExportPrintableManifest();
-            }}
-            accessibilityRole="button"
-            accessibilityLabel="Print or share Offline Prep manifest"
-            testID="offline-prep-printable-manifest"
-          >
-            {manifestExporting ? <ActivityIndicator size="small" color={TACTICAL.amber} /> : <Ionicons name="print-outline" size={14} color={TACTICAL.amber} />}
-            <Text style={styles.secondaryButtonText}>{manifestExporting ? 'Generating...' : 'Print / Share Manifest'}</Text>
-          </TouchableOpacity>
-        );
       case 'partial_confirm':
         return (
           <View style={styles.confirmCard} testID="offline-prep-partial-confirm">
@@ -2049,7 +2362,17 @@ export default function ExploreOfflinePrepPackScreen() {
         return error ? (
           <View style={styles.errorCard} testID="offline-prep-failed-state">
             <Ionicons name="warning-outline" size={14} color="#EF5350" />
-            <Text style={styles.errorText}>{error}</Text>
+            <View style={styles.errorCopy}>
+              <Text style={styles.errorText}>{error}</Text>
+              <ECSButton
+                label={selectedInput ? 'Retry Status' : 'Retry Loading'}
+                icon="refresh-outline"
+                variant="secondary"
+                size="compact"
+                onPress={handleRetry}
+                accessibilityHint="Retries the failed Offline Prep operation"
+              />
+            </View>
           </View>
         ) : null;
       default:
@@ -2061,11 +2384,13 @@ export default function ExploreOfflinePrepPackScreen() {
     <TopoBackground>
       <ECSOperationalAnnouncer event={errorAnnouncement} announceInitial />
       <ECSOperationalAnnouncer event={queuedActionAnnouncement} announceInitial />
+      <ECSOperationalAnnouncer event={packStateAnnouncement} />
       <View style={[styles.safeContainer, { paddingBottom: bottomClearance }]}>
         <Header title="Explore" />
         <ExplorePlanningTabs activeTab="offline_prep_pack" />
         <View style={styles.scrollArea} testID="offline-prep-pack-screen">
           <FlatList<OfflinePrepContentRow>
+            ref={contentListRef}
             data={offlinePrepContentRows}
             keyExtractor={offlinePrepContentRowKey}
             renderItem={renderOfflinePrepContentRow}
@@ -2080,6 +2405,56 @@ export default function ExploreOfflinePrepPackScreen() {
             testID="offline-prep-content-list"
           />
         </View>
+        {manifest && packPresentation && selectedInput && !showRouteList ? (
+          <View style={styles.actionDock} testID="offline-prep-action-dock">
+            <View style={styles.actionDockHeader}>
+              <View style={styles.actionDockCopy}>
+                <Text style={styles.actionDockTitle}>Offline navigation pack</Text>
+                <Text style={styles.actionDockStatus} numberOfLines={1}>
+                  {offlinePrepPresentationLabel(packPresentation.kind)}
+                  {packPresentation.estimatedSizeMB != null ? ` | ${packPresentation.estimatedSizeMB} MB estimated` : ''}
+                </Text>
+              </View>
+              <Ionicons
+                name={packPresentation.navigationReady ? 'checkmark-circle-outline' : 'download-outline'}
+                size={18}
+                color={offlinePrepPresentationColor(packPresentation.kind)}
+              />
+            </View>
+            <View style={styles.actionDockButtons}>
+              <View style={styles.actionDockButton} testID="offline-prep-prepare">
+                <ECSButton
+                  label={prepareSaving || mapRetrying ? 'Working…' : packPresentation.primaryActionLabel}
+                  icon={mapQueueState?.retryable ? 'refresh-outline' : 'download-outline'}
+                  variant="primary"
+                  size="large"
+                  grow
+                  loading={prepareSaving || mapRetrying}
+                  disabled={!packPresentation.primaryActionEnabled}
+                  onPress={handlePrimaryPackAction}
+                  accessibilityHint={packPresentation.kind === 'degraded' || packPresentation.kind === 'blocked'
+                    ? 'Opens the required and degraded Offline Prep details'
+                    : 'Downloads or retries the route assets required for offline navigation'}
+                />
+              </View>
+              <View style={styles.actionDockButton} testID="offline-prep-printable-manifest">
+                <ECSButton
+                  label={manifestExporting ? 'Generating…' : 'Print / Share Emergency Manifest'}
+                  icon="share-outline"
+                  variant="secondary"
+                  size="large"
+                  grow
+                  loading={manifestExporting}
+                  onPress={() => {
+                    void handleExportPrintableManifest();
+                  }}
+                  accessibilityLabel="Print or share family emergency trip manifest"
+                  accessibilityHint="Creates a private family-facing packet with the saved itinerary, route-readiness score, planned coordinates, and offline status"
+                />
+              </View>
+            </View>
+          </View>
+        ) : null}
       </View>
     </TopoBackground>
   );
@@ -2088,7 +2463,15 @@ export default function ExploreOfflinePrepPackScreen() {
 const styles = StyleSheet.create({
   safeContainer: { flex: 1 },
   scrollArea: { flex: 1 },
-  scrollContent: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: OFFLINE_PREP_ACTION_BOTTOM_CLEARANCE, gap: 12 },
+  scrollContent: {
+    width: '100%',
+    maxWidth: 960,
+    alignSelf: 'center',
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: OFFLINE_PREP_CONTENT_BOTTOM_CLEARANCE,
+    gap: 12,
+  },
   heroCard: {
     flexDirection: 'row',
     gap: 12,
@@ -2124,6 +2507,76 @@ const styles = StyleSheet.create({
   sectionHeaderCopy: { flex: 1, minWidth: 0, gap: 3 },
   sectionTitle: { flex: 1, color: TACTICAL.text, fontSize: 13, fontWeight: '900' },
   sectionMeta: { color: TACTICAL.amber, fontSize: 8, fontWeight: '900', letterSpacing: 1.2 },
+  routeNameText: { color: TACTICAL.text, fontSize: 15, lineHeight: 20, fontWeight: '900' },
+  overviewCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgPanel,
+    padding: 12,
+    gap: 12,
+  },
+  overviewMetrics: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  overviewMetric: {
+    flexGrow: 1,
+    flexBasis: 96,
+    minHeight: 58,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(0,0,0,0.16)',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 4,
+  },
+  overviewMetricLabel: { color: TACTICAL.textMuted, fontSize: 9, lineHeight: 12, fontWeight: '900', letterSpacing: 0.8 },
+  overviewMetricValue: { fontSize: 12, lineHeight: 16, fontWeight: '900', textTransform: 'capitalize' },
+  overviewGroupGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  overviewGroup: {
+    flexGrow: 1,
+    flexBasis: 260,
+    minWidth: 0,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(0,0,0,0.14)',
+    padding: 10,
+    gap: 6,
+  },
+  overviewGroupHeader: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  overviewGroupTitle: { flex: 1, color: TACTICAL.text, fontSize: 11, lineHeight: 15, fontWeight: '900' },
+  overviewGroupStatus: { fontSize: 8, lineHeight: 11, fontWeight: '900', letterSpacing: 0.7, textAlign: 'right' },
+  overviewGroupSummary: { color: TACTICAL.textMuted, fontSize: 10, lineHeight: 15, fontWeight: '700' },
+  overviewGroupMeta: { color: TACTICAL.textMuted, opacity: 0.82, fontSize: 9, lineHeight: 12, fontWeight: '800' },
+  attentionBlock: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '32',
+    backgroundColor: TACTICAL.amber + '09',
+    padding: 10,
+    gap: 8,
+  },
+  attentionTitle: { color: TACTICAL.text, fontSize: 11, lineHeight: 15, fontWeight: '900' },
+  attentionRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  attentionCopy: { flex: 1, minWidth: 0, gap: 2 },
+  attentionItemTitle: { color: TACTICAL.text, fontSize: 10, lineHeight: 14, fontWeight: '900' },
+  attentionItemText: { color: TACTICAL.textMuted, fontSize: 10, lineHeight: 15, fontWeight: '700' },
+  detailsToggle: {
+    minHeight: 54,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '30',
+    backgroundColor: TACTICAL.amber + '08',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  detailsToggleCopy: { flex: 1, minWidth: 0, gap: 2 },
+  detailsToggleTitle: { color: TACTICAL.amber, fontSize: 11, lineHeight: 15, fontWeight: '900' },
+  detailsToggleText: { color: TACTICAL.textMuted, fontSize: 9, lineHeight: 13, fontWeight: '700' },
   routeListCard: {
     borderRadius: 16,
     borderWidth: 1,
@@ -2394,6 +2847,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#EF53500D',
     padding: 10,
   },
+  errorCopy: { flex: 1, gap: 8, alignItems: 'flex-start' },
   errorText: { flex: 1, color: '#EF9A9A', fontSize: 10, lineHeight: 14, fontWeight: '800' },
   retryButton: {
     alignSelf: 'flex-start',
@@ -2407,4 +2861,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
   },
   retryButtonText: { color: TACTICAL.amber, fontSize: 9, fontWeight: '900', letterSpacing: 0.8, textTransform: 'uppercase' },
+  actionDock: {
+    width: '100%',
+    maxWidth: 960,
+    alignSelf: 'center',
+    borderTopWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: ECS.bgPanel,
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 10,
+    gap: 9,
+  },
+  actionDockHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  actionDockCopy: { flex: 1, minWidth: 0, gap: 2 },
+  actionDockTitle: { color: TACTICAL.text, fontSize: 11, lineHeight: 15, fontWeight: '900' },
+  actionDockStatus: { color: TACTICAL.textMuted, fontSize: 9, lineHeight: 12, fontWeight: '800' },
+  actionDockButtons: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  actionDockButton: { flex: 1, minWidth: 150 },
 });

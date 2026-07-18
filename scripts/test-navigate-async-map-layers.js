@@ -47,6 +47,10 @@ const {
   normalizeRouteGeometryViewportBbox,
   normalizeRouteGeometryViewportResponse,
 } = load('lib/routeGeometryViewport.ts');
+const {
+  buildRouteCatalogViewportQuery,
+  queryRouteCatalogViewportRecords,
+} = load('lib/routeCatalogViewport.ts');
 
 const viewportA = {
   minLng: -120.72,
@@ -96,6 +100,45 @@ function resultFromSegments(segments, meta = {}) {
       ...meta,
     },
   });
+}
+
+function routeCatalogResult(id = 'ecs-route-success') {
+  const query = buildRouteCatalogViewportQuery({ bbox: viewportA, zoom: 9 });
+  return queryRouteCatalogViewportRecords([{
+    id,
+    public_id: id,
+    name: `Route ${id}`,
+    route_type: 'point_to_point',
+    center_latitude: 39.3,
+    center_longitude: -120.5,
+    distance_miles: 10,
+    official_access_coverage_pct: 100,
+    unknown_access_coverage_pct: 0,
+    restricted_access_coverage_pct: 0,
+    active_closure_count: 0,
+    seasonal_restriction_count: 0,
+    vehicle_mismatch: false,
+    geometry_quality: 'full',
+    verification_status: 'official_verified',
+    recommendation_status: 'recommendable',
+    review_status: 'approved',
+    confidence_score: 90,
+    tags: [],
+    source_records: [{
+      provider_id: 'ecs_catalog_fixture',
+      label: 'ECS catalog fixture',
+      source_type: 'official',
+      authority: 'fixture',
+      last_verified_at: new Date().toISOString(),
+    }],
+    route_geometry_mode: 'full',
+    route_geometry: {
+      type: 'LineString',
+      coordinates: [[-120.6, 39.2], [-120.5, 39.3]],
+    },
+    updated_at: new Date().toISOString(),
+    created_at: new Date().toISOString(),
+  }], query);
 }
 
 function createSurface(surfaceId) {
@@ -229,17 +272,20 @@ function testMvumTerminalStates() {
 }
 
 function testRouteGeometryTerminalStatesAndMalformedFeatures() {
-  const successResult = resultFromSegments([makeRawSegment('route-success')]);
+  const successResult = routeCatalogResult('route-success');
   let success = beginSurface(createSurface('navigate_route_geometry'), 'route-success', 100);
   success = settleSurface(success, 'ready', {
     data: successResult,
-    resultCount: successResult.segments.length,
+    resultCount: successResult.returnedCount,
     now: 110,
   }).state;
   assert.strictEqual(success.status, 'ready');
   assert.strictEqual(success.resultCount, 1);
 
-  const emptyResult = resultFromSegments([]);
+  const emptyResult = queryRouteCatalogViewportRecords(
+    [],
+    buildRouteCatalogViewportQuery({ bbox: viewportA, zoom: 9 }),
+  );
   let empty = beginSurface(createSurface('navigate_route_geometry'), 'route-empty', 120);
   empty = settleSurface(empty, 'empty', { data: emptyResult, resultCount: 0, now: 130 }).state;
   assert.strictEqual(empty.status, 'empty');
@@ -364,7 +410,7 @@ function testOfflineCacheAndLayerIsolation() {
   const mvumKey = buildNavigateMvumViewportCacheKey(bbox, 12, null);
   const sharedKey = 'same-provider-fingerprint';
   const mvumResult = resultFromSegments([makeRawSegment('cached-mvum')]);
-  const routeResult = resultFromSegments([makeRawSegment('cached-route')]);
+  const routeResult = routeCatalogResult('cached-route');
 
   coordinator.writeCache({ layer: 'mvum', key: mvumKey, value: mvumResult, ttlMs: 5_000, now: 500 });
   coordinator.writeCache({ layer: 'route_geometry', key: sharedKey, value: routeResult, ttlMs: 5_000, now: 500 });
@@ -374,7 +420,7 @@ function testOfflineCacheAndLayerIsolation() {
   assert.strictEqual(hit.value.segments[0].id, 'cached-mvum');
   assert.strictEqual(coordinator.readCache('mvum', 'missing', { now: 501 }), null, 'Offline cache miss is explicit');
   assert.strictEqual(
-    coordinator.readCache('route_geometry', sharedKey, { now: 501 }).value.segments[0].id,
+    coordinator.readCache('route_geometry', sharedKey, { now: 501 }).value.featureCollection.features[0].properties.routeId,
     'cached-route',
   );
   assert.strictEqual(
@@ -594,9 +640,11 @@ function testMountedPathContract() {
     'Vector MVUM empty must require a request-scoped source or idle cycle',
   );
   assert(
-    (navigate.match(/void readRouteGeometryViewportOfflineCache\(/g) ?? []).length >= 2 &&
-      (navigate.match(/writeRouteGeometryViewportOfflineCache\(\{/g) ?? []).length >= 2,
-    'Mounted MVUM and Route Geometry must independently read and write persistent viewport caches',
+    (navigate.match(/void readRouteGeometryViewportOfflineCache\(/g) ?? []).length >= 1 &&
+      (navigate.match(/writeRouteGeometryViewportOfflineCache\(\{/g) ?? []).length >= 1 &&
+      (navigate.match(/void readRouteCatalogViewportOfflineCache\(/g) ?? []).length >= 1 &&
+      (navigate.match(/writeRouteCatalogViewportOfflineCache\(\{/g) ?? []).length >= 1,
+    'Mounted MVUM and ECS Route Geometry must independently persist their segment and whole-route cache shapes',
   );
   assert(
     navigate.includes('getRouteGeometryViewportProviderAvailability()') &&
@@ -632,9 +680,9 @@ function testMountedPathContract() {
   );
   assert(
     (navigate.match(/preserveData: false/g) ?? []).length >= 3 &&
-      navigate.includes('preserveData: Boolean(cached?.stale)') &&
+      navigate.includes('preserveData: true') &&
       navigate.includes('data: activeResult'),
-    'Cleared mounted geometry must not remain active in async state; only explicit stale data may be preserved',
+    'Cleared geometry must not remain active after unavailable/offline transitions, while an in-flight refresh may preserve explicit last-good data',
   );
 
   const diagnosticContract = `${navigate}\n${renderer}\n${coordinator}\n${diagnosticModel}`;

@@ -106,10 +106,11 @@ assert(
   'Weather should expose live failure and usable cached last-good evidence together.',
 );
 assert(
-  fleet.includes('buildFleetWeightSourceTruthBinding') &&
-    fleet.includes('sourceTruthBinding={selectedVehicleWeightSourceTruth}') &&
-    fleet.includes('label="Weight sources"'),
-  'Fleet confidence should expose canonical weight provenance without changing Fleet scoring.',
+  !fleet.includes('sourceTruthBinding={selectedVehicleWeightSourceTruth}') &&
+    !fleet.includes('label="Weight sources"') &&
+    fleet.includes('Source: {formatFleetSourceSummary(weightResult)}') &&
+    adapters.includes('export function buildFleetWeightSourceTruthBinding'),
+  'Fleet detail popups should omit the weight-source drilldown while the card and canonical adapter retain truthful provenance.',
 );
 assert(
   campground.includes('buildEstablishedCampgroundSourceTruthBinding') &&

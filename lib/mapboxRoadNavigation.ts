@@ -16,6 +16,7 @@ import {
   recordMapboxSearchBillingEvent,
   type MapboxSearchBillingContext,
 } from './mapboxSearchBillingGuard';
+export { getValidatedRoadNavRoute } from './navigation/roadNavRoutePersistence';
 
 export type RoadNavStatus =
   | 'idle'
@@ -66,6 +67,23 @@ export interface RoadNavSearchSuggestion {
   coordinate?: RoadNavCoordinate | null;
   raw?: unknown;
 }
+
+/**
+ * An ordered stop that must remain in a provider route. Coordinates alone are
+ * insufficient for rerouting because they cannot tell guidance which fuel or
+ * supply stop is still ahead, or give the arrival leg a useful name.
+ */
+export interface RoadNavWaypointDescriptor {
+  id: string;
+  title: string;
+  subtitle: string | null;
+  coordinate: RoadNavCoordinate;
+  role: string | null;
+  /** Provider-normalized distance to this stop on the route, when known. */
+  routeDistanceFromStartM?: number | null;
+}
+
+export type RoadNavWaypointInput = RoadNavCoordinate | RoadNavWaypointDescriptor;
 
 export type RoadNavGuidanceMode = 'turn_by_turn' | 'summary_only';
 
@@ -119,6 +137,8 @@ export interface RoadNavLeg {
   stepStartIndex: number;
   stepEndIndex: number;
   stepCount: number;
+  /** Named arrival for this leg, including the final destination leg. */
+  arrivalWaypoint?: RoadNavWaypointDescriptor | null;
 }
 
 export interface RoadNavRoute {
@@ -136,6 +156,8 @@ export interface RoadNavRoute {
   durationS: number;
   steps: RoadNavStep[];
   legs: RoadNavLeg[];
+  /** Intermediate stops only; the final destination remains `destination`. */
+  orderedWaypoints?: RoadNavWaypointDescriptor[];
   guidanceMode: RoadNavGuidanceMode;
   bounds: {
     north: number;
@@ -151,6 +173,8 @@ const SEARCHBOX_RETRIEVE_URL = 'https://api.mapbox.com/search/searchbox/v1/retri
 const FORWARD_GEOCODE_URL = 'https://api.mapbox.com/geocoding/v5/mapbox.places';
 const DIRECTIONS_PROFILE = 'driving-traffic';
 const DIRECTIONS_URL = `https://api.mapbox.com/directions/v5/mapbox/${DIRECTIONS_PROFILE}`;
+export const ROAD_NAV_MAX_INTERMEDIATE_WAYPOINTS = 23;
+export const ROAD_NAV_TOO_MANY_WAYPOINTS_SAFE_CODE = 'ROAD_ROUTE_TOO_MANY_WAYPOINTS';
 const MAP_MATCHING_PROFILE = 'driving';
 const MAP_MATCHING_URL = `https://api.mapbox.com/matching/v5/mapbox/${MAP_MATCHING_PROFILE}`;
 const MAP_MATCHING_MAX_COORDINATES = 100;
@@ -162,6 +186,16 @@ const IMPORTED_TRACE_MAX_DISTANCE_RATIO = 2.5;
 const SEARCHBOX_SUGGEST_TIMEOUT_MS = 2000;
 const FORWARD_GEOCODE_TIMEOUT_MS = 2500;
 const SEARCHBOX_SUGGEST_LIMIT = 5;
+
+export class RoadNavRouteRequestError extends Error {
+  readonly safeCode: string;
+
+  constructor(message: string, safeCode: string) {
+    super(message);
+    this.name = 'RoadNavRouteRequestError';
+    this.safeCode = safeCode;
+  }
+}
 
 function randomId(prefix: string): string {
   const cryptoRef = typeof crypto !== 'undefined' ? crypto : null;
@@ -704,6 +738,7 @@ export function buildRoadRouteFromCachedGeometry(params: {
   segmentNames?: BuildSyntheticEcsGuidanceRouteOptions['segmentNames'];
   limitedTrailGuidance?: boolean;
   guidanceLimitationLabel?: string | null;
+  orderedWaypoints?: RoadNavWaypointDescriptor[];
 }): RoadNavRoute {
   const validGeometry = params.geometry.filter((point) => toCoordinate(point));
   const geometry = validGeometry;
@@ -805,8 +840,13 @@ export function buildRoadRouteFromCachedGeometry(params: {
         stepStartIndex: 0,
         stepEndIndex: 0,
         stepCount: 0,
+        arrivalWaypoint: destinationAsRoadWaypoint(params.destination),
       }]
       : [],
+    orderedWaypoints: (params.orderedWaypoints ?? []).map((waypoint) => ({
+      ...waypoint,
+      coordinate: { ...waypoint.coordinate },
+    })),
     guidanceMode: guidance.guidanceMode === 'turn_by_turn' ? 'turn_by_turn' : 'summary_only',
     bounds: bounds
       ? {
@@ -818,6 +858,137 @@ export function buildRoadRouteFromCachedGeometry(params: {
       : null,
     createdAt,
   };
+}
+
+function sameRoadNavCoordinate(
+  left: RoadNavCoordinate,
+  right: RoadNavCoordinate,
+  precision = 6,
+): boolean {
+  return left.lat.toFixed(precision) === right.lat.toFixed(precision) &&
+    left.lng.toFixed(precision) === right.lng.toFixed(precision);
+}
+
+function normalizeRoadNavWaypointInput(
+  input: RoadNavWaypointInput,
+  index: number,
+): RoadNavWaypointDescriptor | null {
+  const record = input && typeof input === 'object'
+    ? input as RoadNavWaypointInput & Record<string, unknown>
+    : null;
+  if (!record) return null;
+  const hasDescriptorCoordinate = !!record.coordinate && typeof record.coordinate === 'object';
+  const coordinate = toCoordinate(hasDescriptorCoordinate ? record.coordinate : record);
+  if (!coordinate) return null;
+  const rawTitle = hasDescriptorCoordinate ? String(record.title ?? '').trim() : '';
+  const rawSubtitle = hasDescriptorCoordinate ? String(record.subtitle ?? '').trim() : '';
+  const rawRole = hasDescriptorCoordinate ? String(record.role ?? '').trim() : '';
+  const routeDistanceFromStartM = Number(record.routeDistanceFromStartM);
+  return {
+    id: hasDescriptorCoordinate && String(record.id ?? '').trim()
+      ? String(record.id).trim()
+      : `road-waypoint-${index + 1}`,
+    title: rawTitle || `Stop ${index + 1}`,
+    subtitle: rawSubtitle || null,
+    coordinate,
+    role: rawRole || null,
+    ...(Number.isFinite(routeDistanceFromStartM)
+      ? { routeDistanceFromStartM }
+      : null),
+  };
+}
+
+function normalizeIntermediateRoadWaypoints(params: {
+  origin: RoadNavCoordinate;
+  destination: RoadNavCoordinate;
+  waypoints?: RoadNavWaypointInput[];
+}): RoadNavWaypointDescriptor[] {
+  const normalized: RoadNavWaypointDescriptor[] = [];
+  let previousCoordinate = params.origin;
+  (params.waypoints ?? []).forEach((input, index) => {
+    const waypoint = normalizeRoadNavWaypointInput(input, index);
+    if (!waypoint || sameRoadNavCoordinate(previousCoordinate, waypoint.coordinate)) return;
+    normalized.push(waypoint);
+    previousCoordinate = waypoint.coordinate;
+  });
+
+  // A final intermediate at the exact destination would create a zero-length
+  // leg and a duplicate arrival. Keep the canonical destination instead.
+  while (
+    normalized.length > 0 &&
+    sameRoadNavCoordinate(normalized[normalized.length - 1].coordinate, params.destination)
+  ) {
+    normalized.pop();
+  }
+  return normalized;
+}
+
+function destinationAsRoadWaypoint(destination: RoadNavDestination): RoadNavWaypointDescriptor {
+  return {
+    id: destination.id,
+    title: destination.title,
+    subtitle: destination.subtitle,
+    coordinate: { ...destination.coordinate },
+    role: 'destination',
+  };
+}
+
+export function getRemainingRoadRouteWaypoints(
+  route: Pick<RoadNavRoute, 'orderedWaypoints' | 'legs'>,
+  progress: {
+    currentLegIndex?: number | null;
+    currentStepIndex?: number | null;
+    routeDistanceFromStartM?: number | null;
+  } = {},
+): RoadNavWaypointDescriptor[] {
+  const waypoints = Array.isArray(route.orderedWaypoints)
+    ? route.orderedWaypoints
+        .map((waypoint, index) => normalizeRoadNavWaypointInput(waypoint, index))
+        .filter((waypoint): waypoint is RoadNavWaypointDescriptor => !!waypoint)
+    : [];
+  if (waypoints.length === 0) return [];
+
+  let completedWaypointCount = 0;
+  const explicitLegIndex = Number(progress.currentLegIndex);
+  if (Number.isInteger(explicitLegIndex) && explicitLegIndex >= 0) {
+    completedWaypointCount = Math.min(waypoints.length, explicitLegIndex);
+  } else {
+    const currentStepIndex = Number(progress.currentStepIndex);
+    if (Number.isInteger(currentStepIndex) && currentStepIndex >= 0) {
+      const currentLegIndex = route.legs.findIndex((leg, legIndex) => {
+        if (leg.stepCount <= 0) return false;
+        const isLastLeg = legIndex === route.legs.length - 1;
+        return currentStepIndex >= leg.stepStartIndex &&
+          (currentStepIndex < leg.stepEndIndex || (isLastLeg && currentStepIndex === leg.stepEndIndex));
+      });
+      if (currentLegIndex >= 0) {
+        completedWaypointCount = Math.min(waypoints.length, currentLegIndex);
+      }
+    }
+  }
+
+  const routeDistanceFromStartM = Number(progress.routeDistanceFromStartM);
+  if (Number.isFinite(routeDistanceFromStartM) && routeDistanceFromStartM >= 0) {
+    let distanceCompletedCount = 0;
+    waypoints.forEach((waypoint, index) => {
+      const persistedDistance = Number(waypoint.routeDistanceFromStartM);
+      const legDistance = route.legs
+        .slice(0, index + 1)
+        .reduce((sum, leg) => sum + (Number.isFinite(leg.distanceM) ? leg.distanceM : 0), 0);
+      const arrivalDistance = Number.isFinite(persistedDistance)
+        ? persistedDistance
+        : legDistance;
+      if (arrivalDistance > 0 && routeDistanceFromStartM >= arrivalDistance) {
+        distanceCompletedCount = index + 1;
+      }
+    });
+    completedWaypointCount = Math.max(completedWaypointCount, distanceCompletedCount);
+  }
+
+  return waypoints.slice(completedWaypointCount).map((waypoint) => ({
+    ...waypoint,
+    coordinate: { ...waypoint.coordinate },
+  }));
 }
 
 function normalizeRoadNavGeometry(geometry: RoadNavCoordinate[]): RoadNavCoordinate[] {
@@ -889,6 +1060,7 @@ function normalizeMapboxRoadRoute(
   params: {
     origin: RoadNavCoordinate;
     destination: RoadNavDestination;
+    waypoints?: RoadNavWaypointDescriptor[];
     rerouteGeneration?: number | null;
     provider?: string;
     profile?: string;
@@ -916,21 +1088,44 @@ function normalizeMapboxRoadRoute(
 
   let cumulativeDistanceM = 0;
   let cumulativeDurationS = 0;
+  let cumulativeLegDistanceM = 0;
   const steps: RoadNavStep[] = [];
   const legs: RoadNavLeg[] = [];
   let totalResponseStepCount = 0;
+  const requestedArrivals = [
+    ...(params.waypoints ?? []),
+    destinationAsRoadWaypoint(params.destination),
+  ];
 
   const responseLegs = Array.isArray(route?.legs) ? route.legs : [];
   responseLegs.forEach((leg: any, legIndex: number) => {
     const legSteps = Array.isArray(leg?.steps) ? leg.steps : [];
     const stepStartIndex = steps.length;
+    const legDistanceM = finiteNumber(leg?.distance) ?? 0;
+    cumulativeLegDistanceM += legDistanceM;
+    const requestedArrival = requestedArrivals[legIndex] ?? null;
+    const arrivalWaypoint = requestedArrival
+      ? {
+          ...requestedArrival,
+          coordinate: { ...requestedArrival.coordinate },
+          routeDistanceFromStartM: cumulativeLegDistanceM,
+        }
+      : null;
     totalResponseStepCount += legSteps.length;
 
     legSteps.forEach((step: any, stepIndex: number) => {
       const stepDistanceM = Number(step?.distance ?? 0);
       const stepDurationS = Number(step?.duration ?? 0);
       const location = normalizeStepLocation(step);
-      const instruction = normalizeStepInstruction(step).trim() || 'Continue';
+      const maneuverType = String(step?.maneuver?.type ?? 'continue');
+      const providerInstruction = normalizeStepInstruction(step).trim() || 'Continue';
+      const hasNamedArrival = !!arrivalWaypoint && (
+        arrivalWaypoint.role != null ||
+        !arrivalWaypoint.id.startsWith('road-waypoint-')
+      );
+      const instruction = maneuverType === 'arrive' && hasNamedArrival && arrivalWaypoint?.title
+        ? `Arrive at ${arrivalWaypoint.title}`
+        : providerInstruction;
       const stepGeometry = normalizeStepGeometry(step);
       const fallbackLocation =
         stepGeometry[0] ??
@@ -946,7 +1141,7 @@ function normalizeMapboxRoadRoute(
         endDistanceM: cumulativeDistanceM + (Number.isFinite(stepDistanceM) ? stepDistanceM : 0),
         startDurationS: cumulativeDurationS,
         endDurationS: cumulativeDurationS + (Number.isFinite(stepDurationS) ? stepDurationS : 0),
-        maneuverType: String(step?.maneuver?.type ?? 'continue'),
+        maneuverType,
         modifier: step?.maneuver?.modifier ? String(step.maneuver.modifier) : null,
         roadName: step?.name ? String(step.name) : null,
         location: location ?? fallbackLocation,
@@ -968,6 +1163,7 @@ function normalizeMapboxRoadRoute(
       stepStartIndex,
       stepEndIndex: steps.length,
       stepCount: steps.length - stepStartIndex,
+      arrivalWaypoint,
     });
   });
 
@@ -1017,13 +1213,25 @@ function normalizeMapboxRoadRoute(
     routeIndex,
     alternativesRequested: params.alternativesRequested ?? true,
   };
-  const guidance = normalizeMapboxDirectionsRouteToEcsGuidanceRoute(route, {
+  const providerGuidance = normalizeMapboxDirectionsRouteToEcsGuidanceRoute(route, {
     id: routeId,
     source: params.guidanceSource ?? 'mapbox_directions',
     destinationName: params.destination.title,
     createdAt,
     rerouteGeneration: params.rerouteGeneration ?? 0,
   });
+  const namedGuidanceSteps = providerGuidance.steps.map((step, index) => ({
+    ...step,
+    instruction: steps[index]?.instruction ?? step.instruction,
+  }));
+  const guidance = {
+    ...providerGuidance,
+    steps: namedGuidanceSteps,
+    legs: providerGuidance.legs.map((leg) => ({
+      ...leg,
+      steps: namedGuidanceSteps.filter((step) => step.legIndex === leg.legIndex),
+    })),
+  };
   const routeVersion = buildRouteVersionFromParts({
     routeId,
     routeUuid,
@@ -1055,6 +1263,12 @@ function normalizeMapboxRoadRoute(
     durationS: Number(route.duration ?? 0),
     steps,
     legs,
+    orderedWaypoints: (params.waypoints ?? []).map((waypoint, index) => {
+      const normalizedArrival = legs[index]?.arrivalWaypoint;
+      return normalizedArrival
+        ? { ...normalizedArrival, coordinate: { ...normalizedArrival.coordinate } }
+        : { ...waypoint, coordinate: { ...waypoint.coordinate } };
+    }),
     guidanceMode,
     bounds: bounds
       ? {
@@ -1201,9 +1415,38 @@ export async function fetchRoadRouteAlternatives(params: {
   accessToken: string;
   origin: RoadNavCoordinate;
   destination: RoadNavDestination;
+  /**
+   * Ordered intermediate stops for a single Directions request. Mapbox
+   * returns one leg per stop so the existing road-guidance engine can advance
+   * through the itinerary without issuing a new route for every waypoint.
+   */
+  waypoints?: RoadNavWaypointInput[];
   rerouteGeneration?: number | null;
 }): Promise<RoadNavRoute[]> {
-  const coordinates = `${params.origin.lng},${params.origin.lat};${params.destination.coordinate.lng},${params.destination.coordinate.lat}`;
+  const origin = toCoordinate(params.origin);
+  const destinationCoordinate = toCoordinate(params.destination.coordinate);
+  if (!origin || !destinationCoordinate) {
+    throw new Error('Road route requires valid origin and destination coordinates');
+  }
+  const orderedWaypoints = normalizeIntermediateRoadWaypoints({
+    origin,
+    destination: destinationCoordinate,
+    waypoints: params.waypoints,
+  });
+  if (orderedWaypoints.length > ROAD_NAV_MAX_INTERMEDIATE_WAYPOINTS) {
+    throw new RoadNavRouteRequestError(
+      `Road guidance supports up to ${ROAD_NAV_MAX_INTERMEDIATE_WAYPOINTS} ordered intermediate stops. Remove or combine stops before retrying.`,
+      ROAD_NAV_TOO_MANY_WAYPOINTS_SAFE_CODE,
+    );
+  }
+  const routePoints = [
+    origin,
+    ...orderedWaypoints.map((waypoint) => waypoint.coordinate),
+    destinationCoordinate,
+  ];
+  const coordinates = routePoints
+    .map((point) => `${point.lng},${point.lat}`)
+    .join(';');
   const url = new URL(`${DIRECTIONS_URL}/${coordinates}`);
   url.searchParams.set('access_token', params.accessToken);
   url.searchParams.set('geometries', 'geojson');
@@ -1219,7 +1462,15 @@ export async function fetchRoadRouteAlternatives(params: {
 
   const data = await fetchJsonWithTimeout<{ routes?: any[] }>(url.toString(), 9000);
   const routes = (data?.routes ?? [])
-    .map((route, index) => normalizeMapboxRoadRoute(route, params, index))
+    .map((route, index) => normalizeMapboxRoadRoute(route, {
+      ...params,
+      origin,
+      destination: {
+        ...params.destination,
+        coordinate: destinationCoordinate,
+      },
+      waypoints: orderedWaypoints,
+    }, index))
     .filter((route): route is RoadNavRoute => !!route)
     .sort((a, b) => {
       const durationDelta = a.durationS - b.durationS;
@@ -1240,6 +1491,7 @@ export async function fetchRoadRoute(params: {
   accessToken: string;
   origin: RoadNavCoordinate;
   destination: RoadNavDestination;
+  waypoints?: RoadNavWaypointInput[];
 }): Promise<RoadNavRoute> {
   const routes = await fetchRoadRouteAlternatives(params);
   return routes[0];

@@ -10,6 +10,7 @@ import type {
   TripPlan,
 } from '../tripBuilder';
 import type { ECSJourneyLinkage } from '../lifecycle/routeTripExpeditionLifecycle';
+import type { RoadNavRoute } from '../mapboxRoadNavigation';
 import type { OfflineReadinessManifest } from './offlineReadinessManifest';
 
 export type OfflinePrepPackItemType =
@@ -24,6 +25,7 @@ export type OfflinePrepPackItemType =
   | 'vehicle_readiness_summary'
   | 'trip_itinerary'
   | 'approach_route'
+  | 'road_turn_guidance'
   | 'trailhead'
   | 'trail_route'
   | 'trail_waypoints'
@@ -138,6 +140,9 @@ export type OfflinePrepPack = {
 
 export type OfflinePrepPackInput = {
   route: TripBuilderRouteInput;
+  /** Provider-normalized road approach, including ordered steps and legs. */
+  preparedRoadRoute?: RoadNavRoute | null;
+  preparedRoadRouteUnavailableReason?: string | null;
   itinerary?: TripItinerary | null;
   tripPlan?: TripPlan | null;
   smartResupplyPlan?: SmartResupplyPlan | null;
@@ -157,6 +162,9 @@ export type OfflinePrepPackInput = {
 
 export type OfflinePrepPackFromItineraryInput = {
   itinerary: TripItinerary;
+  /** Provider-normalized road approach, including ordered steps and legs. */
+  preparedRoadRoute?: RoadNavRoute | null;
+  preparedRoadRouteUnavailableReason?: string | null;
   weatherSnapshot?: Record<string, unknown> | null;
   remotenessSnapshot?: Record<string, unknown> | null;
   sunlightWindow?: Record<string, unknown> | null;

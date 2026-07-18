@@ -253,6 +253,7 @@ import {
 import { resolveDispersedCampingRegionPanelLayout } from '../../lib/navigation/dispersedCampingOverlayLayout';
 import {
   resolveCampLayerMenuToggles,
+  resolveNavigateRouteOverlayToggle,
 } from '../../lib/navigation/campLayerMenuPresentation';
 import {
   DISPERSED_ROUTE_LEG_PLANNING_WARNING,
@@ -307,7 +308,6 @@ import {
   type ExploreRouteOverlaySegment,
 } from '../../lib/navigateExploreRoutesOverlay';
 import {
-  routeGeometrySegmentToRouteBuilderSegment,
   ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING,
   type RouteGeometryOverlaySegment,
 } from '../../lib/navigateRouteGeometryOverlay';
@@ -336,13 +336,8 @@ import {
 import { resolveNavigateRouteProfileFocus } from '../../lib/navigateRouteProfileScrubber';
 import { useECSNavigation } from '../../lib/navigation/useECSNavigation';
 import {
-  buildRouteGeometryViewportCacheKey,
-  isRouteGeometryViewportZoomEligible,
-  mergeRouteGeometryViewportSegmentsWithSelected,
   normalizeRouteGeometryViewportBbox,
   resolveNearestRouteGeometryEndpoint,
-  routeGeometryViewportSegmentsToOverlaySegments,
-  ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM,
   ROUTE_GEOMETRY_VIEWPORT_PLANNING_SOURCE,
   ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
   type RouteGeometryViewportBbox,
@@ -355,14 +350,30 @@ import {
   RouteGeometryViewportProviderUnavailableError,
 } from '../../lib/routeGeometryViewportClient';
 import {
+  readRouteCatalogViewportOfflineCache,
   readRouteGeometryViewportOfflineCache,
+  writeRouteCatalogViewportOfflineCache,
   writeRouteGeometryViewportOfflineCache,
 } from '../../lib/routeGeometryViewportCache';
 import {
+  buildRouteCatalogViewportGuidancePlan,
+  buildRouteCatalogViewportPersistencePlan,
+  buildRouteCatalogViewportQuery,
+  isRouteCatalogViewportZoomEligible,
+  resolveRouteCatalogViewportSelection,
+  routeCatalogViewportFeaturesToRouteGeometrySegments,
+  ROUTE_CATALOG_VIEWPORT_MIN_ZOOM,
   type RouteCatalogViewportFeature,
   type RouteCatalogViewportFeatureCollection,
   type RouteCatalogViewportResult,
 } from '../../lib/routeCatalogViewport';
+import {
+  fetchRouteCatalogViewportFeatures,
+  getRouteCatalogViewportProviderAvailability,
+  RouteCatalogViewportProviderUnavailableError,
+  RouteCatalogViewportResponseError,
+  RouteCatalogViewportTimeoutError,
+} from '../../lib/routeCatalogViewportClient';
 import type {
   MvumSegmentSummary,
   MvumSelectedSegment,
@@ -370,9 +381,11 @@ import type {
 } from '../../lib/routeDataContracts';
 import {
   buildMvumCanonicalSegmentsFromViewport,
+  buildMvumGuidanceEntryPlan,
   buildMvumSelectedSegments,
   buildNavigateMvumMapOverlay,
   buildNavigateMvumStitchedRoutePreview,
+  buildMvumStitchedRoutePersistenceKey,
   buildMvumStitchedRouteDraft,
   createNavigateMvumSelectionStore,
   createNavigateMvumOverlayState,
@@ -768,6 +781,7 @@ import {
 } from '../../lib/tileCacheStore';
 import {
   cacheOfflineRoute,
+  getOfflineCachedPreparedRoadRoute,
   listOfflineCachedRoutes,
   offlineCachedRouteToRunCacheManifest,
   type OfflineCachedRoute,
@@ -825,6 +839,7 @@ import {
   clearNavigationHandoffPayload,
   computeTrailLengthMiles,
   getNavigationHandoffActiveGuidanceUnavailableReason,
+  getNavigationHandoffPreparedRoadRoute,
   getNavigationHandoffRouteUnavailableReason,
   getRoadDestinationCoordinate,
   loadNavigationHandoffPayload,
@@ -1023,7 +1038,33 @@ function formatCampLayerErrorDiagnostic(diagnostic?: CampLayerUiState['diagnosti
   return `${diagnostic.layer} - ${status} - ${code} - ${diagnostic.endpoint}`;
 }
 
-type RouteGeometryViewportUiState = ECSAsyncSurfaceState<RouteGeometryViewportResult> & {
+type NavigateViewportGeometryResult = RouteGeometryViewportResult | RouteCatalogViewportResult;
+
+function isRouteCatalogViewportResult(
+  result: NavigateViewportGeometryResult | null | undefined,
+): result is RouteCatalogViewportResult {
+  return !!result && 'featureCollection' in result && result.source === 'route_catalog';
+}
+
+function viewportGeometryResultCount(result: NavigateViewportGeometryResult | null | undefined): number {
+  return isRouteCatalogViewportResult(result)
+    ? result.returnedCount
+    : result?.segments.length ?? 0;
+}
+
+function viewportGeometryCappedCount(result: NavigateViewportGeometryResult | null | undefined): number {
+  return isRouteCatalogViewportResult(result)
+    ? Math.max(0, result.candidateCount - result.skippedOutsideViewportCount - result.returnedCount)
+    : result?.cappedCount ?? 0;
+}
+
+function viewportGeometryInvalidCount(result: NavigateViewportGeometryResult | null | undefined): number {
+  return isRouteCatalogViewportResult(result)
+    ? 0
+    : result?.invalidFeatureCount ?? result?.skippedMissingGeometryCount ?? 0;
+}
+
+type RouteGeometryViewportUiState = ECSAsyncSurfaceState<NavigateViewportGeometryResult> & {
   enabled: boolean;
   errorMessage: string | null;
   featureCount: number;
@@ -1040,7 +1081,7 @@ type RouteGeometryViewportUiState = ECSAsyncSurfaceState<RouteGeometryViewportRe
 };
 
 const NAVIGATE_VIEWPORT_BOUNDS_TIMEOUT_MS = 5_000;
-const NAVIGATE_ROUTE_GEOMETRY_PROVIDER = 'route-geometry-segments:all';
+const NAVIGATE_ROUTE_GEOMETRY_PROVIDER = 'route-catalog-search';
 const NAVIGATE_MVUM_PROVIDER = `route-geometry-segments:${MVUM_SOURCE_PROVIDER_PREFIX}`;
 
 type NavigateRouteRuntimeContract = {
@@ -1054,7 +1095,7 @@ function createRouteGeometryViewportUiState(
   surfaceId = 'navigate_route_geometry',
   provider = NAVIGATE_ROUTE_GEOMETRY_PROVIDER,
 ): RouteGeometryViewportUiState {
-  const lifecycle = createECSAsyncSurfaceState<RouteGeometryViewportResult>({
+  const lifecycle = createECSAsyncSurfaceState<NavigateViewportGeometryResult>({
     surfaceId,
     featureEnabled: enabled,
     provider,
@@ -1116,7 +1157,7 @@ function settleRouteGeometryViewportUiRequest(
   current: RouteGeometryViewportUiState,
   options: {
     status: ECSAsyncTerminalStatus;
-    result?: RouteGeometryViewportResult | null;
+    result?: NavigateViewportGeometryResult | null;
     errorMessage?: string | null;
     safeErrorCode?: string | null;
     dataState: RouteGeometryViewportUiState['dataState'];
@@ -1160,7 +1201,7 @@ function settleRouteGeometryViewportUiRequest(
     retryEligible: options.retryEligible,
     providerStatus: options.providerStatus,
     cancellationReason: options.cancellationReason,
-    resultCount: result?.segments.length ?? (options.status === 'empty' ? 0 : undefined),
+    resultCount: result ? viewportGeometryResultCount(result) : options.status === 'empty' ? 0 : undefined,
   });
   if (!transition.applied) return current;
   const resetResultMetrics =
@@ -1171,16 +1212,18 @@ function settleRouteGeometryViewportUiRequest(
     ...transition.state,
     enabled: options.status !== 'disabled',
     errorMessage: options.errorMessage ?? null,
-    featureCount: result?.segments.length ?? (resetResultMetrics ? 0 : current.featureCount),
-    cappedCount: result?.cappedCount ?? (resetResultMetrics ? 0 : current.cappedCount),
+    featureCount: result ? viewportGeometryResultCount(result) : resetResultMetrics ? 0 : current.featureCount,
+    cappedCount: result ? viewportGeometryCappedCount(result) : resetResultMetrics ? 0 : current.cappedCount,
     skippedMissingGeometryCount:
-      result?.skippedMissingGeometryCount ?? (resetResultMetrics ? 0 : current.skippedMissingGeometryCount),
+      (isRouteCatalogViewportResult(result)
+        ? 0
+        : result?.skippedMissingGeometryCount) ??
+      (resetResultMetrics ? 0 : current.skippedMissingGeometryCount),
     invalidFeatureCount:
-      result?.invalidFeatureCount ??
-      result?.skippedMissingGeometryCount ??
-      (resetResultMetrics ? 0 : current.invalidFeatureCount),
+      result ? viewportGeometryInvalidCount(result) : resetResultMetrics ? 0 : current.invalidFeatureCount,
     skippedClosedCount:
-      result?.skippedClosedCount ?? (resetResultMetrics ? 0 : current.skippedClosedCount),
+      (isRouteCatalogViewportResult(result) ? 0 : result?.skippedClosedCount) ??
+      (resetResultMetrics ? 0 : current.skippedClosedCount),
     cacheHit: options.cacheHit ?? options.source === 'cached',
     dataState: options.dataState,
     lastAttemptedBbox: options.bbox ?? current.lastAttemptedBbox,
@@ -1343,10 +1386,17 @@ function routeCatalogViewportFeatureToPinMarker(
 
 function buildRouteCatalogViewportNavigationPayload(
   feature: RouteCatalogViewportFeature,
+  options: {
+    origin?: RoadNavCoordinate | null;
+    accuracyM?: number | null;
+  } = {},
 ): NavigationHandoffPayload | null {
-  const trailGeometrySegments = routeCatalogViewportFeatureLines(feature);
-  const trailGeometry = flattenRouteCatalogViewportFeatureLines(feature);
-  const anchor = routeCatalogViewportFeatureAnchor(feature);
+  const sourceTrailGeometrySegments = routeCatalogViewportFeatureLines(feature);
+  const guidancePlan = buildRouteCatalogViewportGuidancePlan(feature, options);
+  const trailGeometry = guidancePlan.status === 'ready'
+    ? guidancePlan.remainingGeometry
+    : [];
+  const anchor = guidancePlan.entryCoordinate ?? routeCatalogViewportFeatureAnchor(feature);
   if (!anchor) return null;
   const hasTrailGeometry = trailGeometry.length > 1;
   const destination = hasTrailGeometry ? trailGeometry[trailGeometry.length - 1] : anchor;
@@ -1367,12 +1417,14 @@ function buildRouteCatalogViewportNavigationPayload(
     trailheadCoordinate: anchor,
     roadDestinationCoordinate: anchor,
     trailGeometry,
-    trailGeometrySegments,
+    trailGeometrySegments: guidancePlan.status === 'ready'
+      ? [guidancePlan.canonicalGeometry]
+      : sourceTrailGeometrySegments,
     trailLengthMiles: feature.properties.distanceMiles ?? (hasTrailGeometry ? computeTrailLengthMiles(trailGeometry) : null),
     trailCategory: feature.properties.tripType ?? 'ECS route catalog',
     tripMode: hasTrailGeometry ? 'hybrid' : 'road',
     routeSource: 'explore',
-    requiresOnlineRouting: true,
+    requiresOnlineRouting: guidancePlan.requiresApproach,
     trailWaypoints: [],
     trailDecisionPoints: [],
     routeMetadata: {
@@ -1389,10 +1441,18 @@ function buildRouteCatalogViewportNavigationPayload(
       region: feature.properties.region,
       distanceMiles: feature.properties.distanceMiles,
       segmentIds: feature.properties.segmentIds,
+      canonicalGeometryStatus: guidancePlan.status,
+      canonicalGeometrySourceSegmentCount: guidancePlan.sourceSegmentCount,
+      canonicalGeometryJoinedSegmentGapCount: guidancePlan.joinedSegmentGapCount,
+      routeEntryDistanceMeters: guidancePlan.entryDistanceFromRouteStartM,
+      routeEntryOffRouteDistanceMeters: guidancePlan.entryDistanceFromOriginM,
+      routeEntrySnapToleranceMeters: guidancePlan.snapToleranceM,
+      requiresOnlineRouting: guidancePlan.requiresApproach,
       offRouteReturnPolicy: 'closest_viable_point_on_ecs_route_geometry',
-      activeGuidanceUnavailableReason: feature.properties.guidanceReady
-        ? null
-        : geometryStatusDetail(feature),
+      activeGuidanceUnavailableReason:
+        feature.properties.guidanceReady && guidancePlan.status === 'ready'
+          ? null
+          : guidancePlan.reason ?? geometryStatusDetail(feature),
     },
     landmarkMetadata: null,
     raw: feature,
@@ -2274,10 +2334,6 @@ const HIDDEN_ROAD_NAVIGATION_SEARCH_QUERY = '';
 const EMPTY_ROAD_NAVIGATION_SEARCH_SUGGESTIONS: RoadNavSearchSuggestion[] =
   Object.freeze([]) as unknown as RoadNavSearchSuggestion[];
 
-function sameNavigateRoadPreviewPoint(left: { lat: number; lng: number }, right: { lat: number; lng: number }) {
-  return Math.abs(left.lat - right.lat) < 0.0000001 && Math.abs(left.lng - right.lng) < 0.0000001;
-}
-
 function simplifyNavigateRoadPreviewPoints<T extends { lat: number; lng: number }>(
   points: T[],
   maxPoints = NAVIGATE_ROAD_PREVIEW_MAX_VISUAL_POINTS,
@@ -2636,6 +2692,22 @@ function buildOfflineCachedRoadPreviewRoute(
   origin: RoadNavCoordinate,
   destination: RoadNavDestination,
 ): RoadNavRoute | null {
+  const preparedRoadRoute = getOfflineCachedPreparedRoadRoute(route);
+  if (preparedRoadRoute) {
+    return {
+      ...preparedRoadRoute,
+      destination: {
+        ...preparedRoadRoute.destination,
+        sourceType: 'offline_sync_open',
+        raw: {
+          routeId: route.id,
+          stableRouteKey: route.stableRouteKey,
+          restoredPreparedRoadRoute: true,
+        },
+      },
+    };
+  }
+
   const geometry = (route.routeGeometry ?? [])
     .map((point) => ({ lat: Number(point.latitude), lng: Number(point.longitude) }))
     .filter(isRoadNavCoordinate);
@@ -3677,7 +3749,7 @@ useEffect(() => subscribeActiveVehicleState(() => {
 const [stitchSegmentIds, setStitchSegmentIds] = useState<string[]>([]);
 const [stitchName, setStitchName] = useState('Stitched Expedition');
 const [stitchSaving, setStitchSaving] = useState(false);
-const [savedRoutesRefreshKey, setSavedRoutesRefreshKey] = useState(0);
+  const [savedRoutesRefreshKey, setSavedRoutesRefreshKey] = useState(0);
 const [savedRoutesQuery, setSavedRoutesQuery] = useState('');
 const [savedRoutesFilter, setSavedRoutesFilter] = useState<SavedRouteAssetFilter>('all');
 const [renamingSavedRouteAssetId, setRenamingSavedRouteAssetId] = useState<string | null>(null);
@@ -4980,7 +5052,12 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   const [mvumStitchedRouteDraft, setMvumStitchedRouteDraft] = useState<StitchedRouteDraft | null>(null);
   const [mvumStitchStatus, setMvumStitchStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [mvumStitchMessage, setMvumStitchMessage] = useState<string | null>(null);
+  const [mvumRouteActionStatus, setMvumRouteActionStatus] = useState<'idle' | 'saving' | 'starting' | 'error'>('idle');
+  const [ecsRouteActionStatus, setEcsRouteActionStatus] = useState<'idle' | 'saving' | 'starting' | 'error'>('idle');
   const mvumStitchRequestIdRef = useRef(0);
+  const mvumStitchAbortRef = useRef<AbortController | null>(null);
+  const mvumRouteActionInFlightRef = useRef(false);
+  const ecsRouteActionInFlightRef = useRef(false);
   const routeGeometryViewportOverlayEnabled = useMemo(
     () => isRouteGeometryViewportOverlayFeatureEnabled(),
     [],
@@ -4989,17 +5066,14 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     () => getRouteGeometryViewportProviderAvailability(),
     [],
   );
+  const routeCatalogViewportProviderAvailability = useMemo(
+    () => getRouteCatalogViewportProviderAvailability(),
+    [],
+  );
   const navigateMvumVectorTileUrl = useMemo(() => resolveNavigateMvumVectorTileUrl(), []);
   const navigateMvumVectorSourceLayer = useMemo(() => resolveNavigateMvumVectorSourceLayer(), []);
   const [routeCatalogViewportResult, setRouteCatalogViewportResult] = useState<RouteCatalogViewportResult | null>(null);
   const [mvumViewportResult, setMvumViewportResult] = useState<RouteGeometryViewportResult | null>(null);
-  const [routeGeometryViewportResult, setRouteGeometryViewportResult] = useState<RouteGeometryViewportResult | null>(null);
-  const [
-    routeGeometryViewportSelectedSegments,
-    setRouteGeometryViewportSelectedSegments,
-  ] = useState<RouteGeometryOverlaySegment[]>([]);
-  const routeGeometryViewportSelectedSegmentsRef = useRef<RouteGeometryOverlaySegment[]>([]);
-  const routeGeometryViewportSelectionTimestampsRef = useRef(new Map<string, string>());
   const [selectedRouteCatalogViewportFeatureId, setSelectedRouteCatalogViewportFeatureId] = useState<string | null>(null);
   const [routeGeometryViewportUiState, setRouteGeometryViewportUiState] = useState<RouteGeometryViewportUiState>(
     () => createRouteGeometryViewportUiState(false, 'navigate_route_geometry'),
@@ -5034,6 +5108,9 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
   useEffect(() => () => {
     activeRouteImportAbortRef.current?.abort();
     activeRouteImportAbortRef.current = null;
+    mvumStitchRequestIdRef.current += 1;
+    mvumStitchAbortRef.current?.abort('navigate_unmounted');
+    mvumStitchAbortRef.current = null;
     routeBuilderFinalSnapGenerationRef.current += 1;
     for (const controller of routeBuilderFinalSnapInFlightRef.current.values()) controller.abort();
     routeBuilderFinalSnapInFlightRef.current.clear();
@@ -5646,25 +5723,15 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     (!navigateConnectivity.initialized ||
       (navigateConnectivity.status === 'online' && navigateConnectivity.isInternetReachable));
   const routeGeometryViewportFetchOnline = campLayerFetchOnline;
-  const routeGeometryViewportZoomReady = isRouteGeometryViewportZoomEligible(mapZoom);
+  const routeGeometryViewportZoomReady = isRouteCatalogViewportZoomEligible(mapZoom);
   const mvumViewportFetchOnline = campLayerFetchOnline;
   const mvumViewportZoomReady = mapZoom >= MVUM_OVERLAY_MIN_ZOOM;
 
-  useEffect(() => {
-    routeGeometryViewportSelectedSegmentsRef.current = routeGeometryViewportSelectedSegments;
-  }, [routeGeometryViewportSelectedSegments]);
-
-  useEffect(() => {
-    const selectedIds = new Set(selectedRouteGeometrySegmentIds);
-    for (const segmentId of routeGeometryViewportSelectionTimestampsRef.current.keys()) {
-      if (!selectedIds.has(segmentId)) {
-        routeGeometryViewportSelectionTimestampsRef.current.delete(segmentId);
-      }
-    }
-  }, [selectedRouteGeometrySegmentIds]);
-
   useEffect(() => mvumSelectionStoreRef.current.subscribe(() => {
     const snapshot = mvumSelectionStoreRef.current.getSnapshot();
+    mvumStitchRequestIdRef.current += 1;
+    mvumStitchAbortRef.current?.abort('selection_changed');
+    mvumStitchAbortRef.current = null;
     recordMvumSelectionUpdate(exploreNavigateSeparationRunRef.current, {
       selectedSegmentIds: snapshot.selectedSegmentIds,
       selectedUpdateCount: snapshot.selectedSegmentIds.length,
@@ -5674,6 +5741,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     setMvumStitchedRouteDraft(null);
     setMvumStitchStatus('idle');
     setMvumStitchMessage(null);
+    setMvumRouteActionStatus('idle');
   }), []);
 
   useEffect(() => {
@@ -6339,7 +6407,6 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         layer: 'route_geometry', enabled: false, zoomEligible: false, itemCount: 0, sourceState: 'unknown',
       });
       setRouteCatalogViewportResult(null);
-      setRouteGeometryViewportResult(null);
       setSelectedRouteCatalogViewportFeatureId(null);
       setRouteGeometryViewportUiState(disableRouteGeometryViewportUiState);
       return;
@@ -6351,7 +6418,6 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         layer: 'route_geometry', enabled: true, zoomEligible: false, itemCount: 0, sourceState: 'unknown',
       });
       setRouteCatalogViewportResult(null);
-      setRouteGeometryViewportResult(null);
       setSelectedRouteCatalogViewportFeatureId(null);
       setRouteGeometryViewportUiState((current) =>
         settleRouteGeometryViewportUiRequest(current, {
@@ -6369,7 +6435,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
 
     if (
       routeGeometryViewportFetchOnline &&
-      !routeGeometryViewportProviderAvailability.available
+      !routeCatalogViewportProviderAvailability.available
     ) {
       clearRouteGeometryFetchTimer();
       navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'provider_unavailable');
@@ -6381,14 +6447,13 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         renderPriority: 'high',
       });
       setRouteCatalogViewportResult(null);
-      setRouteGeometryViewportResult(null);
       setSelectedRouteCatalogViewportFeatureId(null);
       setRouteGeometryViewportUiState((current) =>
         settleRouteGeometryViewportUiRequest(current, {
           status: 'error',
           errorMessage: 'ECS route geometry is unavailable because the route catalog provider is not configured in this build.',
           safeErrorCode:
-            routeGeometryViewportProviderAvailability.safeErrorCode ?? 'PROVIDER_CONFIGURATION_UNAVAILABLE',
+            routeCatalogViewportProviderAvailability.safeErrorCode ?? 'PROVIDER_CONFIGURATION_UNAVAILABLE',
           dataState: 'unknown',
           source: 'unavailable',
           freshness: 'unavailable',
@@ -6431,11 +6496,12 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       if (!mapBounds) setRequestBoundsTrigger((prev) => prev + 1);
       return;
     }
-    const cacheKey = buildRouteGeometryViewportCacheKey(normalizedBbox, mapZoom, {
-      includeReferenceGeometry: true,
-      vehicleClass: null,
+    const routeCatalogQuery = buildRouteCatalogViewportQuery({
+      bbox: normalizedBbox,
+      zoom: mapZoom,
     });
-    const cached = navigateMapLayerCoordinatorRef.current.readCache<RouteGeometryViewportResult>(
+    const cacheKey = routeCatalogQuery.cacheKey;
+    const cached = navigateMapLayerCoordinatorRef.current.readCache<RouteCatalogViewportResult>(
       'route_geometry',
       cacheKey,
       { allowStale: true },
@@ -6447,28 +6513,25 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         navigateMapLayerCoordinatorRef.current.syncLocalLayer({
           layer: 'route_geometry',
           enabled: true,
-          itemCount: cached.value.segments.length,
+          itemCount: cached.value.returnedCount,
           sourceState: 'offline',
           renderPriority: 'high',
         });
-        setRouteCatalogViewportResult(null);
-        setRouteGeometryViewportResult(cached.value);
+        setRouteCatalogViewportResult(cached.value);
         setRouteGeometryViewportUiState((current) =>
           settleRouteGeometryViewportUiRequest(current, {
-            status: cached.value.degraded ? 'degraded' : 'stale',
+            status: 'stale',
             result: cached.value,
-            errorMessage: cached.value.degraded
-              ? cached.value.userMessage ?? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE
-              : 'Offline. Showing cached ECS route geometry for this map view.',
-            safeErrorCode: cached.value.degraded ? 'PROVIDER_DEGRADED' : 'OFFLINE_STALE_CACHE',
-            dataState: cached.value.degraded ? 'degraded' : 'stale',
+            errorMessage: 'Offline. Showing cached ECS catalog routes for this map view.',
+            safeErrorCode: 'OFFLINE_STALE_CACHE',
+            dataState: 'stale',
             bbox: normalizedBbox,
             cacheKey,
             source: 'cached',
             freshness: 'stale',
             retryEligible: true,
             cacheHit: true,
-            providerStatus: routeGeometryViewportProviderAvailability.available
+            providerStatus: routeCatalogViewportProviderAvailability.available
               ? 'active'
               : 'unavailable',
           }),
@@ -6479,7 +6542,6 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         layer: 'route_geometry', enabled: true, itemCount: 0, sourceState: 'offline', renderPriority: 'high',
       });
       setRouteCatalogViewportResult(null);
-      setRouteGeometryViewportResult(null);
       setRouteGeometryViewportUiState((current) =>
         beginRouteGeometryViewportUiRequest(current, {
           requestFingerprint: cacheKey,
@@ -6489,7 +6551,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         }),
       );
       let cancelled = false;
-      void readRouteGeometryViewportOfflineCache(cacheKey)
+      void readRouteCatalogViewportOfflineCache(cacheKey)
         .then((entry) => {
           if (cancelled) return;
           if (!entry) {
@@ -6504,7 +6566,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
                 source: 'unavailable',
                 freshness: 'unavailable',
                 retryEligible: true,
-                providerStatus: routeGeometryViewportProviderAvailability.available
+                providerStatus: routeCatalogViewportProviderAvailability.available
                   ? 'active'
                   : 'unavailable',
               }),
@@ -6521,27 +6583,25 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
           navigateMapLayerCoordinatorRef.current.syncLocalLayer({
             layer: 'route_geometry',
             enabled: true,
-            itemCount: entry.result.segments.length,
+            itemCount: entry.result.returnedCount,
             sourceState: 'offline',
             renderPriority: 'high',
           });
-          setRouteGeometryViewportResult(entry.result);
+          setRouteCatalogViewportResult(entry.result);
           setRouteGeometryViewportUiState((current) =>
             settleRouteGeometryViewportUiRequest(current, {
-              status: entry.result.degraded ? 'degraded' : 'stale',
+              status: 'stale',
               result: entry.result,
-              errorMessage: entry.result.degraded
-                ? entry.result.userMessage ?? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE
-                : 'Offline. Showing cached ECS route geometry for this map view.',
-              safeErrorCode: entry.result.degraded ? 'PROVIDER_DEGRADED' : 'OFFLINE_STALE_CACHE',
-              dataState: entry.result.degraded ? 'degraded' : 'stale',
+              errorMessage: 'Offline. Showing cached ECS catalog routes for this map view.',
+              safeErrorCode: 'OFFLINE_STALE_CACHE',
+              dataState: 'stale',
               bbox: normalizedBbox,
               cacheKey,
               source: 'cached',
               freshness: 'stale',
               retryEligible: true,
               cacheHit: true,
-              providerStatus: routeGeometryViewportProviderAvailability.available
+              providerStatus: routeCatalogViewportProviderAvailability.available
                 ? 'active'
                 : 'unavailable',
             }),
@@ -6572,34 +6632,28 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       clearRouteGeometryFetchTimer();
       navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'cache_hit');
       navigateMapLayerCoordinatorRef.current.syncLocalLayer({
-        layer: 'route_geometry', enabled: true, itemCount: cached.value.segments.length, sourceState: cached.sourceState, renderPriority: 'high',
+        layer: 'route_geometry', enabled: true, itemCount: cached.value.returnedCount, sourceState: cached.sourceState, renderPriority: 'high',
       });
-      setRouteGeometryViewportResult(cached.value);
+      setRouteCatalogViewportResult(cached.value);
       setRouteGeometryViewportUiState((current) =>
         settleRouteGeometryViewportUiRequest(current, {
-          status: cached.value.degraded
-            ? 'degraded'
-            : cached.value.segments.length > 0
-              ? 'ready'
-              : 'empty',
+          status: cached.value.returnedCount > 0 ? 'ready' : 'empty',
           result: cached.value,
-          errorMessage: cached.value.degraded
-            ? cached.value.userMessage ?? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE
-            : null,
-          safeErrorCode: cached.value.degraded ? 'PROVIDER_DEGRADED' : null,
-          dataState: cached.value.degraded ? 'degraded' : 'cached',
+          errorMessage: null,
+          safeErrorCode: null,
+          dataState: 'cached',
           bbox: normalizedBbox,
           cacheKey,
           source: 'cached',
           freshness: 'recent',
-          retryEligible: cached.value.degraded,
+          retryEligible: false,
           cacheHit: true,
         }),
       );
       return;
     }
     if (cached?.stale) {
-      setRouteGeometryViewportResult(cached.value);
+      setRouteCatalogViewportResult(cached.value);
       setRouteGeometryViewportUiState((current) =>
         settleRouteGeometryViewportUiRequest(current, {
           status: 'stale',
@@ -6636,15 +6690,12 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     clearRouteGeometryFetchTimer();
 
     const now = Date.now();
-    if (!cached?.stale) {
-      setRouteGeometryViewportResult(null);
-    }
     setRouteGeometryViewportUiState((current) =>
       beginRouteGeometryViewportUiRequest(current, {
         requestFingerprint: cacheKey,
         bbox: normalizedBbox,
         cacheKey,
-        preserveData: Boolean(cached?.stale),
+        preserveData: true,
       }),
     );
 
@@ -6676,68 +6727,53 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         maxLat: request.bounds.north,
       };
 
-      fetchRouteGeometryViewportSegments({
+      const requestQuery = buildRouteCatalogViewportQuery({
         bbox: requestBbox,
         zoom: mapZoom,
-        includeReferenceGeometry: true,
-        vehicleClass: null,
+      });
+      fetchRouteCatalogViewportFeatures(requestQuery, {
         signal: request.signal,
       })
         .then((result) => {
-          const resultForCache = {
-            ...result,
-            cacheKey: result.cacheKey ?? request.viewportFingerprint,
-          };
+          const resultForCache = result;
           if (!navigateMapLayerCoordinatorRef.current.complete(request, {
-            itemCount: resultForCache.segments.length,
-            sourceState: resultForCache.degraded ? 'unavailable' : 'live',
+            itemCount: resultForCache.returnedCount,
+            sourceState: 'live',
           })) return;
-          if (!resultForCache.degraded) {
-            navigateMapLayerCoordinatorRef.current.writeCache({
-              layer: 'route_geometry',
-              key: request.viewportFingerprint,
-              value: resultForCache,
-              ttlMs: 5 * 60 * 1000,
-            });
-            writeRouteGeometryViewportOfflineCache({
-              lookup: {
-                bbox: requestBbox,
-                cacheKey: request.viewportFingerprint,
-                sourceProviderPrefix: null,
-              },
-              result: resultForCache,
-            });
-          }
-          setRouteCatalogViewportResult(null);
-          setRouteGeometryViewportResult(resultForCache);
+          navigateMapLayerCoordinatorRef.current.writeCache({
+            layer: 'route_geometry',
+            key: request.viewportFingerprint,
+            value: resultForCache,
+            ttlMs: 5 * 60 * 1000,
+          });
+          writeRouteCatalogViewportOfflineCache({
+            bbox: requestBbox,
+            cacheKey: request.viewportFingerprint,
+            result: resultForCache,
+          });
+          setRouteCatalogViewportResult(resultForCache);
           setRouteGeometryViewportUiState((current) =>
             settleRouteGeometryViewportUiRequest(current, {
-              status: resultForCache.degraded
-                ? 'degraded'
-                : resultForCache.segments.length > 0
-                  ? 'ready'
-                  : 'empty',
+              status: resultForCache.returnedCount > 0 ? 'ready' : 'empty',
               result: resultForCache,
-              errorMessage: resultForCache.degraded
-                ? resultForCache.userMessage ?? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE
-                : null,
-              safeErrorCode: resultForCache.degraded ? 'PROVIDER_DEGRADED' : null,
-              dataState: resultForCache.degraded ? 'degraded' : 'live',
+              errorMessage: null,
+              safeErrorCode: null,
+              dataState: 'live',
               bbox: requestBbox,
               cacheKey: request.viewportFingerprint,
-              source: resultForCache.degraded ? 'unavailable' : 'live',
-              freshness: resultForCache.degraded ? 'unavailable' : 'live',
-              retryEligible: resultForCache.degraded,
+              source: 'live',
+              freshness: 'live',
+              retryEligible: false,
             }),
           );
         })
         .catch((error) => {
           if (request.signal.aborted) return;
           if (!navigateMapLayerCoordinatorRef.current.fail(request, error)) return;
-          const providerUnavailable = error instanceof RouteGeometryViewportProviderUnavailableError;
-          const requestTimedOut = error instanceof Error && error.name === 'RouteGeometryViewportTimeoutError';
-          setRouteCatalogViewportResult(null);
-          setRouteGeometryViewportResult(cached?.stale ? cached.value : null);
+          const providerUnavailable = error instanceof RouteCatalogViewportProviderUnavailableError;
+          const responseError = error instanceof RouteCatalogViewportResponseError;
+          const requestTimedOut = error instanceof RouteCatalogViewportTimeoutError;
+          setRouteCatalogViewportResult(cached?.stale ? cached.value : null);
           setRouteGeometryViewportUiState((current) =>
             settleRouteGeometryViewportUiRequest(current, {
               status: cached?.stale ? 'stale' : 'error',
@@ -6749,9 +6785,11 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
                   : ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
               safeErrorCode: providerUnavailable
                 ? error.safeErrorCode
-                : requestTimedOut
-                  ? 'REQUEST_TIMEOUT'
-                  : 'PROVIDER_UNAVAILABLE',
+                : responseError
+                  ? error.safeErrorCode
+                  : requestTimedOut
+                    ? 'REQUEST_TIMEOUT'
+                    : 'PROVIDER_UNAVAILABLE',
               dataState: cached?.stale ? 'stale' : 'unknown',
               bbox: requestBbox,
               cacheKey: request.viewportFingerprint,
@@ -6771,7 +6809,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     routeGeometryViewportRetryTrigger,
     routeGeometryViewportFetchOnline,
     routeGeometryViewportOverlayEnabled,
-    routeGeometryViewportProviderAvailability,
+    routeCatalogViewportProviderAvailability,
     routeGeometryViewportZoomReady,
   ]);
 
@@ -9447,6 +9485,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       return;
     }
 
+    const cachedTurnByTurnRoute = getOfflineCachedPreparedRoadRoute(route);
     const cachedRoadRoute = buildOfflineCachedRoadPreviewRoute(route, origin, destination);
     if (!cachedRoadRoute) {
       focusOfflineCacheBounds(
@@ -9457,7 +9496,11 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
     }
 
     await previewRoadRoute(cachedRoadRoute, 'offline_sync_open');
-    showToast('OFFLINE ROUTE PREVIEW LOADED FROM CACHE');
+    showToast(
+      cachedTurnByTurnRoute
+        ? 'OFFLINE TURN-BY-TURN ROUTE LOADED FROM CACHE'
+        : 'OFFLINE ROUTE LINE LOADED - TURN-BY-TURN WAS NOT CACHED',
+    );
   }, [
     clearExploreNavigationPayload,
     closeTopPopup,
@@ -9523,7 +9566,9 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         ...payload,
         createdAt: payload.createdAt ?? new Date().toISOString(),
       };
+      const preparedRoadRoute = getNavigationHandoffPreparedRoadRoute(stampedPayload);
       const importedTraceGuidance =
+        !preparedRoadRoute &&
         roadNavigationCurrentLocation &&
         isImportedTraceNavigationPayload(stampedPayload) &&
         getExplorePayloadAction(stampedPayload) !== 'view_camps'
@@ -9562,6 +9607,10 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
         (stampedPayload.campMarkers?.length ?? 0) > 0;
       if (isRecoveryAssistNavigationPayload(stampedPayload)) {
         void endTrailNavigation();
+      }
+      if (preparedRoadRoute) {
+        await previewRoadRoute(preparedRoadRoute, 'explore_handoff');
+        return;
       }
       if (importedTraceGuidance) {
         await endTrailNavigation();
@@ -14494,31 +14543,29 @@ const handleCreateRun = useCallback(() => {
     () => mvumSegmentsToSummaries(mvumViewportResult?.segments ?? [], mvumViewportResult?.fetchedAt),
     [mvumViewportResult?.fetchedAt, mvumViewportResult?.segments],
   );
+  const routeCatalogViewportSelection = useMemo(
+    () =>
+      resolveRouteCatalogViewportSelection(
+        routeCatalogViewportFeatureCollection,
+        selectedRouteCatalogViewportFeatureId,
+      ),
+    [routeCatalogViewportFeatureCollection, selectedRouteCatalogViewportFeatureId],
+  );
   const visibleCatalogRouteGeometryOverlaySegments = useMemo(
     () =>
       routeGeometryViewportOverlayEnabled
-        ? routeGeometryViewportSegmentsToOverlaySegments(
-            routeGeometryViewportResult?.segments ?? [],
-            selectedRouteGeometrySegmentIds,
+        ? routeCatalogViewportFeaturesToRouteGeometrySegments(
+            routeCatalogViewportFeatureCollection,
+            routeCatalogViewportSelection?.overlaySegmentIds ?? [],
           )
         : [],
     [
+      routeCatalogViewportFeatureCollection,
+      routeCatalogViewportSelection?.overlaySegmentIds,
       routeGeometryViewportOverlayEnabled,
-      routeGeometryViewportResult?.segments,
-      selectedRouteGeometrySegmentIds,
     ],
   );
-  const catalogRouteGeometryOverlaySegments = useMemo(
-    () =>
-      mergeRouteGeometryViewportSegmentsWithSelected(
-        visibleCatalogRouteGeometryOverlaySegments,
-        routeGeometryViewportSelectedSegments,
-      ),
-    [
-      routeGeometryViewportSelectedSegments,
-      visibleCatalogRouteGeometryOverlaySegments,
-    ],
-  );
+  const catalogRouteGeometryOverlaySegments = visibleCatalogRouteGeometryOverlaySegments;
   const navigateRouteRuntimeContract = useMemo<NavigateRouteRuntimeContract>(
     () => {
       const selectionSnapshot = mvumSelectionStoreRef.current.getSnapshot();
@@ -14547,7 +14594,7 @@ const handleCreateRun = useCallback(() => {
             .map((feature) =>
               routeCatalogViewportFeatureToPinMarker(
                 feature,
-                selectedRouteCatalogViewportFeatureId === feature.properties.routeId,
+                routeCatalogViewportSelection?.routeId === feature.properties.routeId,
               ),
             )
             .filter((marker): marker is PinMarker => !!marker)
@@ -14556,7 +14603,7 @@ const handleCreateRun = useCallback(() => {
       routeCatalogViewportFeatureCollection,
       routeGeometryOverlayEnabled,
       routeGeometryViewportOverlayEnabled,
-      selectedRouteCatalogViewportFeatureId,
+      routeCatalogViewportSelection?.routeId,
     ],
   );
   const routeGeometryOverlayBuild = useMemo(
@@ -14625,14 +14672,14 @@ const handleCreateRun = useCallback(() => {
     if (!routeGeometryViewportFetchOnline) {
       return routeGeometryViewportUiState.cacheHit ? 'offline_cache' : 'offline_unavailable';
     }
-    if (!routeGeometryViewportProviderAvailability.available) return 'provider_unavailable';
+    if (!routeCatalogViewportProviderAvailability.available) return 'provider_unavailable';
     return 'eligible';
   }, [
     mapBounds,
     routeGeometryOverlayEnabled,
     routeGeometryViewportFetchOnline,
     routeGeometryViewportOverlayEnabled,
-    routeGeometryViewportProviderAvailability.available,
+    routeCatalogViewportProviderAvailability.available,
     routeGeometryViewportUiState.cacheHit,
     routeGeometryViewportZoomReady,
   ]);
@@ -14737,10 +14784,10 @@ const handleCreateRun = useCallback(() => {
       return 'ECS catalog route service is disabled in this build.';
     }
     if (routeGeometryViewportOverlayEnabled && !routeGeometryViewportZoomReady) {
-      return 'Zoom to 10+ to show ECS catalog routes.';
+      return `Zoom to ${ROUTE_CATALOG_VIEWPORT_MIN_ZOOM}+ to show ECS catalog routes.`;
     }
     if (
-      !routeGeometryViewportProviderAvailability.available &&
+      !routeCatalogViewportProviderAvailability.available &&
       !routeGeometryViewportUiState.cacheHit
     ) {
       return 'ECS catalog route provider is unavailable in this build.';
@@ -14804,7 +14851,7 @@ const handleCreateRun = useCallback(() => {
     routeGeometryLayerDiagnostic.renderStatus,
     routeCatalogViewportPointMarkers.length,
     routeGeometryViewportOverlayEnabled,
-    routeGeometryViewportProviderAvailability.available,
+    routeCatalogViewportProviderAvailability.available,
     routeGeometryViewportUiState.cacheHit,
     routeGeometryViewportUiState.dataState,
     routeGeometryViewportUiState.errorMessage,
@@ -14872,16 +14919,38 @@ const handleCreateRun = useCallback(() => {
     selectedMvumSegmentIds.length,
   ]);
   const mvumStitchActionDisabled =
-    selectedMvumSegmentIds.length === 0 || mvumStitchStatus === 'loading';
+    selectedMvumSegmentIds.length === 0 ||
+    mvumStitchStatus === 'loading' ||
+    mvumRouteActionStatus === 'saving' ||
+    mvumRouteActionStatus === 'starting';
+  const mvumSaveStitchedRouteDisabled =
+    mvumStitchStatus === 'loading' ||
+    mvumRouteActionStatus === 'saving' ||
+    mvumRouteActionStatus === 'starting' ||
+    !mvumStitchedRouteDraft?.geometry ||
+    (mvumStitchedRouteDraft.unresolvedGaps.length ?? 0) > 0 ||
+    mvumStitchedRouteDraft.geometrySourceState !== 'canonical';
   const mvumStartStitchedGuidanceDisabled =
     mvumStitchStatus === 'loading' ||
+    mvumRouteActionStatus === 'saving' ||
+    mvumRouteActionStatus === 'starting' ||
     !mvumStitchedRouteDraft?.geometry ||
-    (mvumStitchedRouteDraft.unresolvedGaps.length ?? 0) > 0;
+    (mvumStitchedRouteDraft.unresolvedGaps.length ?? 0) > 0 ||
+    mvumStitchedRouteDraft.geometrySourceState !== 'canonical' ||
+    !roadNavigationCurrentLocation;
   const mvumStitchLegendMessage =
-    mvumStitchMessage ??
-    (selectedMvumSegmentIds.length > 0
-      ? 'Build a stitched route from selected MVUM segments when ready.'
-      : 'Tap highlighted MVUM segments to build a route.');
+    mvumRouteActionStatus === 'saving'
+      ? 'Saving the connected MVUM custom route.'
+      : mvumRouteActionStatus === 'starting'
+        ? 'Preparing guidance from current GPS to the nearest point on the selected route.'
+        : mvumStitchedRouteDraft?.geometry && mvumStitchedRouteDraft.geometrySourceState !== 'canonical'
+          ? 'Route preview uses limited viewport geometry. Saving and active guidance require canonical MVUM geometry.'
+          : mvumStitchedRouteDraft?.geometry && !roadNavigationCurrentLocation
+            ? 'Route is ready to save. A current GPS fix is required to start guidance.'
+            : mvumStitchMessage ??
+              (selectedMvumSegmentIds.length > 0
+                ? 'Build a stitched route from selected MVUM segments when ready.'
+                : 'Tap highlighted MVUM segments to build a route.');
   const selectedExploreRouteSegment = useMemo(
     () =>
       selectedExploreRouteSegmentId
@@ -14923,29 +14992,33 @@ const handleCreateRun = useCallback(() => {
         : null,
     [routeCatalogViewportFeatureCollection, selectedRouteCatalogViewportFeatureId],
   );
-  const selectedRouteCatalogViewportOverlaySegments = useMemo(
-    () =>
-      selectedRouteCatalogViewportFeature
-        ? routeGeometryOverlayBuild.segments.filter(
-            (segment) =>
-              segment.sourceMetadata?.routeCatalogRouteId ===
-              selectedRouteCatalogViewportFeature.properties.routeId,
-          )
-        : [],
-    [routeGeometryOverlayBuild.segments, selectedRouteCatalogViewportFeature],
-  );
   const selectedRouteCatalogViewportNavigationPayload = useMemo(
     () =>
       selectedRouteCatalogViewportFeature
-        ? buildRouteCatalogViewportNavigationPayload(selectedRouteCatalogViewportFeature)
+        ? buildRouteCatalogViewportNavigationPayload(selectedRouteCatalogViewportFeature, {
+            origin: safeUserLocation,
+            accuracyM:
+              gps.rawGPS.position?.accuracyM ??
+              gps.position?.accuracyM ??
+              roadNavLocationMeta.accuracyM ??
+              null,
+          })
         : null,
-    [selectedRouteCatalogViewportFeature],
+    [
+      gps.position?.accuracyM,
+      gps.rawGPS.position?.accuracyM,
+      roadNavLocationMeta.accuracyM,
+      safeUserLocation,
+      selectedRouteCatalogViewportFeature,
+    ],
   );
   const selectedRouteCatalogViewportBuildUnavailableReason = useMemo(
     () =>
       selectedRouteCatalogViewportNavigationPayload &&
-      !canStageNavigationHandoffRoute(selectedRouteCatalogViewportNavigationPayload)
-        ? getNavigationHandoffRouteUnavailableReason(selectedRouteCatalogViewportNavigationPayload)
+      (!canStageNavigationHandoffRoute(selectedRouteCatalogViewportNavigationPayload) ||
+        getNavigationHandoffActiveGuidanceUnavailableReason(selectedRouteCatalogViewportNavigationPayload))
+        ? getNavigationHandoffActiveGuidanceUnavailableReason(selectedRouteCatalogViewportNavigationPayload) ??
+          getNavigationHandoffRouteUnavailableReason(selectedRouteCatalogViewportNavigationPayload)
         : null,
     [selectedRouteCatalogViewportNavigationPayload],
   );
@@ -15053,25 +15126,6 @@ const handleCreateRun = useCallback(() => {
         : next;
     });
   }, [routeGeometryOverlayBuild.segments, selectedRouteGeometrySegmentIds.length]);
-
-  useEffect(() => {
-    if (selectedRouteGeometrySegmentIds.length === 0) {
-      if (routeGeometryViewportSelectedSegmentsRef.current.length > 0) {
-        routeGeometryViewportSelectedSegmentsRef.current = [];
-        setRouteGeometryViewportSelectedSegments([]);
-      }
-      return;
-    }
-    const selectedIds = new Set(selectedRouteGeometrySegmentIds);
-    setRouteGeometryViewportSelectedSegments((current) => {
-      const next = current.filter((segment) => selectedIds.has(segment.id));
-      if (next.length === current.length && next.every((segment, index) => segment.id === current[index].id)) {
-        return current;
-      }
-      routeGeometryViewportSelectedSegmentsRef.current = next;
-      return next;
-    });
-  }, [selectedRouteGeometrySegmentIds]);
 
   const cachedRemoteRemotenessScore = getRemoteCacheFallbackScore(activeRun?.offline_cache?.remote_cache);
   const remotenessOverlayRouteAvailable = displayedRoutePoints.length > 1;
@@ -15606,12 +15660,11 @@ const handleCreateRun = useCallback(() => {
     idleDestinationSearchVisible &&
     (destinationSearchInputActive || idleDestinationSearchDraftTrimmedQuery.length > 0 || recentSearchesVisible);
   const floatingToolsVisible = mapOverlayStartupReady && !destinationSearchMapFrozen;
-  const campLayerControlsAvailable =
-    canUseCommunityCampsiteLayers ||
-    dispersedCampingEligibilityLayerAvailable ||
-    establishedCampsitesLayerAvailable;
-  const campLayerControlActive =
+  const mapLayerControlActive =
     campLayerMenuOpen ||
+    mvumOverlayEnabled ||
+    routeGeometryOverlayEnabled ||
+    showRemotenessOverlay ||
     dispersedCampingEligibilityEnabled ||
     establishedCampsitesEnabled ||
     (canUseCommunityCampsiteLayers && Object.values(campsiteLayerVisibility).some(Boolean));
@@ -19045,8 +19098,7 @@ const routeBuilderStartDisabledReason = !safeUserLocation
     : null;
 const routeBuilderCanPlanGeometry =
   routeBuilderCanSave &&
-  routeBuilderHasRouteGeometrySegments &&
-  navigateRouteRuntimeContract.selectedSegments.length > 0;
+  routeBuilderHasRouteGeometrySegments;
 const selectedRouteGeometryOverlaySegmentsForPlanning = useMemo(() => {
   if (selectedRouteGeometrySegmentIds.length === 0) return [];
   const selectedIds = new Set(selectedRouteGeometrySegmentIds);
@@ -19410,8 +19462,6 @@ const resetBuildRouteDraft = useCallback((options?: { clearDesignContext?: boole
   routeBuilderFinalSnapInFlightRef.current.clear();
   setSelectedDispersedRouteLegIds([]);
   setSelectedRouteGeometrySegmentIds([]);
-  routeGeometryViewportSelectedSegmentsRef.current = [];
-  setRouteGeometryViewportSelectedSegments([]);
   setDispersedRouteBuildRenderKey((key) => key + 1);
   if (options?.clearDesignContext) {
     setRouteDesignContext(null);
@@ -20870,19 +20920,31 @@ const toggleRemotenessOverlay = useCallback(() => {
 
   const toggleRouteGeometryOverlay = useCallback(() => {
     hapticMicro();
-    const next = !routeGeometryOverlayEnabled;
+    const selection = resolveNavigateRouteOverlayToggle(
+      { mvumEnabled: mvumOverlayEnabled, routeGeometryEnabled: routeGeometryOverlayEnabled },
+      'route_geometry',
+    );
+    const next = selection.routeGeometryEnabled;
+    if (mvumOverlayEnabled && !selection.mvumEnabled) {
+      navigateMapLayerCoordinatorRef.current.cancel('mvum', 'exclusive_overlay_switch');
+      if (mvumViewportFetchTimerRef.current) {
+        clearTimeout(mvumViewportFetchTimerRef.current);
+        mvumViewportFetchTimerRef.current = null;
+      }
+    }
+    setMvumOverlayEnabled(selection.mvumEnabled);
     setRouteGeometryOverlayEnabled(next);
     if (!next) return;
 
     if (routeGeometryViewportOverlayEnabled && !routeGeometryViewportZoomReady) {
-      showToast(`ZOOM TO ${ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM}+ TO SHOW ECS CATALOG ROUTES`);
+      showToast(`ZOOM TO ${ROUTE_CATALOG_VIEWPORT_MIN_ZOOM}+ TO SHOW ECS CATALOG ROUTES`);
       return;
     }
     if (!routeGeometryViewportFetchOnline) {
       showToast('CHECKING OFFLINE ECS ROUTE GEOMETRY CACHE');
       return;
     }
-    if (!routeGeometryViewportProviderAvailability.available) {
+    if (!routeCatalogViewportProviderAvailability.available) {
       showToast('ECS CATALOG ROUTE PROVIDER UNAVAILABLE');
       return;
     }
@@ -20899,17 +20961,31 @@ const toggleRemotenessOverlay = useCallback(() => {
   }, [
     routeGeometryOverlayBuild.segments.length,
     routeCatalogViewportPointMarkers.length,
+    mvumOverlayEnabled,
     routeGeometryOverlayEnabled,
     routeGeometryViewportFetchOnline,
     routeGeometryViewportOverlayEnabled,
-    routeGeometryViewportProviderAvailability.available,
+    routeCatalogViewportProviderAvailability.available,
     routeGeometryViewportZoomReady,
     showToast,
   ]);
 
   const toggleMvumOverlay = useCallback(() => {
     hapticMicro();
-    const next = !mvumOverlayEnabled;
+    const selection = resolveNavigateRouteOverlayToggle(
+      { mvumEnabled: mvumOverlayEnabled, routeGeometryEnabled: routeGeometryOverlayEnabled },
+      'mvum',
+    );
+    const next = selection.mvumEnabled;
+    if (routeGeometryOverlayEnabled && !selection.routeGeometryEnabled) {
+      navigateMapLayerCoordinatorRef.current.cancel('route_geometry', 'exclusive_overlay_switch');
+      if (routeGeometryViewportFetchTimerRef.current) {
+        clearTimeout(routeGeometryViewportFetchTimerRef.current);
+        routeGeometryViewportFetchTimerRef.current = null;
+      }
+      setSelectedRouteCatalogViewportFeatureId(null);
+    }
+    setRouteGeometryOverlayEnabled(selection.routeGeometryEnabled);
     setMvumOverlayEnabled(next);
     if (!next) {
       showToast('MVUM TRAIL SEGMENTS OFF');
@@ -20937,6 +21013,7 @@ const toggleRemotenessOverlay = useCallback(() => {
     mvumViewportFetchOnline,
     mvumViewportZoomReady,
     navigateMvumVectorTileUrl,
+    routeGeometryOverlayEnabled,
     routeGeometryViewportProviderAvailability.available,
     showToast,
   ]);
@@ -21014,106 +21091,40 @@ const toggleRemotenessOverlay = useCallback(() => {
 
     const segmentId = String(segment.id);
     const match = routeGeometryOverlaySegments.find((item) => String(item.id) === segmentId);
-    if (!match) {
-      showToast('ROUTE GEOMETRY DETAILS UNAVAILABLE');
+    const selection = resolveRouteCatalogViewportSelection(
+      routeCatalogViewportFeatureCollection,
+      match?.sourceMetadata?.routeCatalogRouteId ?? segmentId,
+    );
+    if (!match || !selection) {
+      showToast('WHOLE ECS ROUTE DETAILS UNAVAILABLE');
       return;
     }
 
     hapticMicro();
-    const catalogRouteId = match.sourceMetadata?.routeCatalogRouteId ?? null;
-    if (catalogRouteId) {
-      if (roadStepListExpanded) {
-        setRoadStepListExpanded(false);
-      }
-      raiseNavigateLayer('mapSelection');
-      clearNavigateMapSelection();
-      setSelectedRouteCatalogViewportFeatureId(catalogRouteId);
-      showToast('ECS CATALOG ROUTE SELECTED');
-      return;
+    if (roadStepListExpanded) {
+      setRoadStepListExpanded(false);
     }
-
-    if (roadNavigationActive || trailNavigationActive || pendingHybridTrailTransition) {
-      showToast('END ACTIVE NAVIGATION TO BUILD FROM ROUTE GEOMETRY');
-      return;
-    }
-
-    const alreadySelected = selectedRouteGeometrySegmentIds.includes(match.id);
-    const nextSegments = alreadySelected
-      ? routeBuilderSegments.filter((item) => item.sourceSegmentId !== match.id)
-      : [
-          ...routeBuilderSegments,
-          routeGeometrySegmentToRouteBuilderSegment(match) as RouteBuilderSegmentData,
-        ];
-    const previousEndpointSegment = [...nextSegments]
-      .reverse()
-      .find((item) => Array.isArray(item.coordinates) && item.coordinates.length > 1);
-
-    closeNavigateDetailSurfaces();
-    setToolsMenuOpen(false);
-    setActiveTopPopup(null);
-    setPinDropMode(false);
-    setCampsiteDrawMode(false);
-    setShowCrosshair(false);
-    setFollowUser(false);
-    setUserHasManuallyMovedMap(true);
-    setRouteBuilderActive(true);
-    setRouteBuilderDrawing(false);
-    setDispersedRouteBuildActive(false);
-    setDispersedRouteBuildStatus(null);
-    setRouteBuilderSegments(nextSegments);
-    setSelectedRouteGeometrySegmentIds((current) =>
-      alreadySelected
-        ? current.filter((id) => id !== match.id)
-        : current.includes(match.id)
-          ? current
-          : [...current, match.id],
-    );
-    if (match.sourceKind === 'route_catalog') {
-      setRouteGeometryViewportSelectedSegments((current) => {
-        const next = alreadySelected
-          ? current.filter((item) => item.id !== match.id)
-          : current.some((item) => item.id === match.id)
-            ? current
-            : [
-                ...current,
-                {
-                  ...match,
-                  routeGeometrySelected: true,
-                },
-              ];
-        routeGeometryViewportSelectedSegmentsRef.current = next;
-        return next;
-      });
-    }
-    setRouteBuilderSnapSource(previousEndpointSegment?.snapSource ?? null);
-    setRouteBuilderSnapStatus(previousEndpointSegment?.snapStatus ?? null);
-    setRouteBuilderSnapMessage(
-      alreadySelected
-        ? 'ECS trail segment removed.'
-        : ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING,
-    );
-    showToast(
-      alreadySelected
-        ? 'ECS TRAIL SEGMENT REMOVED'
-        : 'ECS TRAIL SEGMENT ADDED',
-    );
+    raiseNavigateLayer('mapSelection');
+    clearNavigateMapSelection();
+    setSelectedRouteCatalogViewportFeatureId(selection.routeId);
+    setEcsRouteActionStatus('idle');
+    showToast('ECS SUGGESTED ROUTE SELECTED');
   }, [
-    closeNavigateDetailSurfaces,
     clearNavigateMapSelection,
     raiseNavigateLayer,
-    pendingHybridTrailTransition,
-    roadNavigationActive,
     roadStepListExpanded,
-    routeBuilderSegments,
+    routeCatalogViewportFeatureCollection,
     routeGeometryOverlaySegments,
-    selectedRouteGeometrySegmentIds,
     setRoadStepListExpanded,
     showToast,
-    trailNavigationActive,
   ]);
 
   const handleBuildMvumStitchedRoute = useCallback(async () => {
     hapticCommand();
+    if (mvumRouteActionInFlightRef.current) {
+      showToast('WAIT FOR THE MVUM ROUTE ACTION TO FINISH');
+      return;
+    }
     const selectedIds = mvumSelectionStoreRef.current.getSnapshot().selectedSegmentIds;
     if (selectedIds.length === 0) {
       setMvumStitchStatus('error');
@@ -21124,17 +21135,28 @@ const toggleRemotenessOverlay = useCallback(() => {
 
     const requestId = mvumStitchRequestIdRef.current + 1;
     mvumStitchRequestIdRef.current = requestId;
+    mvumStitchAbortRef.current?.abort('superseded');
+    const requestController = new AbortController();
+    mvumStitchAbortRef.current = requestController;
     setMvumStitchStatus('loading');
+    setMvumRouteActionStatus('idle');
     setMvumStitchMessage('Fetching canonical MVUM segment geometry...');
     const stitchStartedAtMs = Date.now();
 
     let canonicalSegments: MvumCanonicalSegment[] = [];
     let canonicalFetchFailed = false;
     try {
-      canonicalSegments = await fetchNavigateMvumCanonicalSegments({ segmentIds: selectedIds });
+      canonicalSegments = await fetchNavigateMvumCanonicalSegments({
+        segmentIds: selectedIds,
+        signal: requestController.signal,
+      });
     } catch (error) {
       canonicalFetchFailed = true;
       canonicalSegments = [];
+    } finally {
+      if (mvumStitchAbortRef.current === requestController) {
+        mvumStitchAbortRef.current = null;
+      }
     }
 
     if (mvumStitchRequestIdRef.current !== requestId) return;
@@ -21190,7 +21212,62 @@ const toggleRemotenessOverlay = useCallback(() => {
     );
   }, [mvumViewportResult?.segments, showToast]);
 
-  const handleStartMvumStitchedGuidance = useCallback(async () => {
+  const persistMvumStitchedRoute = useCallback((draft: StitchedRouteDraft) => {
+    const persistenceKey = buildMvumStitchedRoutePersistenceKey(draft);
+    const routeLines: [number, number][][] =
+      draft.geometry?.type === 'LineString'
+        ? [draft.geometry.coordinates as [number, number][]]
+        : draft.geometry?.type === 'MultiLineString'
+          ? draft.geometry.coordinates as [number, number][][]
+          : [];
+    const routeSegments = routeLines
+      .map((line) =>
+        line
+          .map((coordinate) => [Number(coordinate[0]), Number(coordinate[1])] as [number, number])
+          .filter(([longitude, latitude]) =>
+            Number.isFinite(longitude) &&
+            Number.isFinite(latitude) &&
+            Math.abs(longitude) <= 180 &&
+            Math.abs(latitude) <= 90,
+          ),
+      )
+      .filter((line) => line.length > 1);
+    if (!persistenceKey || routeSegments.length !== 1 || draft.unresolvedGaps.length > 0) {
+      throw new Error('MVUM_ROUTE_NOT_CONNECTED');
+    }
+
+    const segmentMetadata: RouteSegmentSourceMetadata = {
+      kind: 'ecs_route_geometry',
+      sourceLabel: 'Navigate MVUM segment stitch',
+      confidence: 'planning_geometry',
+      dataState: draft.geometrySourceState ?? 'unavailable',
+      warnings: draft.warnings,
+      segmentIds: draft.orderedSegmentIds,
+    };
+    const savedRoute = routeStore.createCustomRoute(
+      routeSegments.map((coordinates) => ({
+        coordinates,
+        source_metadata: segmentMetadata,
+      })),
+      {
+        name: 'MVUM Custom Route',
+        description:
+          "kind: 'mvum_segment_stitch'. Built from selected Navigate MVUM segment IDs. Verify posted access, closures, and vehicle legality before travel.",
+        sourceApp: 'ecs_navigate_mvum_stitch',
+        externalSourceId: persistenceKey,
+        externalSourceType: 'mvum_segment_stitch',
+        idempotencyKey: persistenceKey,
+      },
+    );
+    const savedRun = runStore.createFromRoute(savedRoute, activeRun?.build_snapshot);
+    routeStore.attachRun(savedRoute.id, savedRun.id);
+    loadRuns();
+    setCustomRouteRefreshKey((key) => key + 1);
+    setSavedRoutesRefreshKey((key) => key + 1);
+    return { savedRoute, savedRun, routeSegments, persistenceKey };
+  }, [activeRun?.build_snapshot, loadRuns]);
+
+  const handleSaveMvumStitchedRoute = useCallback(async () => {
     hapticCommand();
     const draft = mvumStitchedRouteDraft;
     if (!draft?.geometry) {
@@ -21198,124 +21275,181 @@ const toggleRemotenessOverlay = useCallback(() => {
       return;
     }
     if (draft.unresolvedGaps.length > 0) {
-      setMvumStitchMessage('Resolve or review MVUM gaps before starting guidance.');
-      showToast('MVUM STITCH HAS GAPS - REVIEW FIRST');
+      setMvumStitchMessage('Resolve MVUM segment gaps before saving this route.');
+      showToast('MVUM STITCH HAS GAPS');
+      return;
+    }
+    if (mvumRouteActionInFlightRef.current) {
+      showToast('MVUM ROUTE ACTION ALREADY RUNNING');
       return;
     }
 
-    const routeLines: [number, number][][] =
-      draft.geometry.type === 'LineString'
-        ? [draft.geometry.coordinates as [number, number][]]
-        : draft.geometry.coordinates as [number, number][][];
-    const routeSegments = routeLines
-      .map((line) =>
-        line
-          .map((coordinate) => [Number(coordinate[0]), Number(coordinate[1])] as [number, number])
-          .filter(([longitude, latitude]) => Number.isFinite(longitude) && Number.isFinite(latitude)),
-      )
-      .filter((line) => line.length > 1);
+    mvumRouteActionInFlightRef.current = true;
+    setMvumRouteActionStatus('saving');
+    try {
+      const { savedRoute } = persistMvumStitchedRoute(draft);
+      setMvumRouteActionStatus('idle');
+      setMvumStitchMessage(`Saved ${savedRoute.name}. Selected MVUM geometry remains available for preview.`);
+      showToast('MVUM CUSTOM ROUTE SAVED');
+    } catch {
+      setMvumRouteActionStatus('error');
+      setMvumStitchMessage('MVUM route could not be saved. Verify connected geometry and retry.');
+      showToast('MVUM ROUTE SAVE FAILED');
+    } finally {
+      mvumRouteActionInFlightRef.current = false;
+    }
+  }, [mvumStitchedRouteDraft, persistMvumStitchedRoute, showToast]);
 
-    if (routeSegments.length === 0) {
-      showToast('MVUM ROUTE GEOMETRY UNAVAILABLE');
+  const handleStartMvumStitchedGuidance = useCallback(async () => {
+    hapticCommand();
+    const draft = mvumStitchedRouteDraft;
+    if (!draft?.geometry) {
+      showToast('BUILD MVUM ROUTE FIRST');
+      return;
+    }
+    if (mvumRouteActionInFlightRef.current) {
+      showToast('MVUM ROUTE ACTION ALREADY RUNNING');
       return;
     }
 
-    const segmentMetadata: RouteSegmentSourceMetadata = {
-      kind: 'ecs_route_geometry',
-      sourceLabel: 'Navigate MVUM segment stitch',
-      confidence: 'planning_geometry',
-      dataState: draft.warnings.some((warning) => warning.toLowerCase().includes('limited'))
-        ? 'limited_tile_geometry'
-        : 'canonical_mvum_geometry',
-      warnings: draft.warnings,
-      segmentIds: draft.orderedSegmentIds,
-    };
-
-    const savedRoute = routeStore.createCustomRoute(
-      routeSegments.map((coordinates) => ({
-        coordinates,
-        source_metadata: segmentMetadata,
-      })),
-      {
-        name: 'MVUM Stitched Route',
-        description:
-          "kind: 'mvum_segment_stitch'. Built from selected Navigate MVUM segment IDs. Verify posted access, closures, and vehicle legality before travel.",
-        sourceApp: 'ecs_navigate_mvum_stitch',
-        externalSourceId: draft.draftId,
-        externalSourceType: 'mvum_segment_stitch',
-      },
-    );
-    const savedRun = runStore.createFromRoute(savedRoute, activeRun?.build_snapshot);
-    routeStore.attachRun(savedRoute.id, savedRun.id);
-    routeStore.setActive(savedRoute.id);
-    runStore.setActive(savedRun.id);
-    loadRuns();
-    setCustomRouteRefreshKey((key) => key + 1);
-    setSavedRoutesRefreshKey((key) => key + 1);
-
-    const payload = buildNavigationPayloadFromRun(savedRun, {
-      segmentCount: draft.orderedSegmentIds.length,
-      transitionLegCount: 0,
+    const guidanceEntry = buildMvumGuidanceEntryPlan({
+      draft,
+      origin: roadNavigationCurrentLocation
+        ? {
+            lat: roadNavigationCurrentLocation.lat,
+            lng: roadNavigationCurrentLocation.lng,
+          }
+        : null,
+      accuracyM: roadNavigationCurrentLocation?.accuracyM ?? null,
     });
-    if (!payload) {
-      showToast('MVUM GUIDANCE PAYLOAD UNAVAILABLE');
+    if (guidanceEntry.status === 'location_unavailable') {
+      setMvumRouteActionStatus('error');
+      setMvumStitchMessage(guidanceEntry.reason);
+      showToast('GPS FIX REQUIRED FOR MVUM GUIDANCE');
+      return;
+    }
+    if (guidanceEntry.status === 'preview_only' || guidanceEntry.status === 'invalid_geometry') {
+      setMvumRouteActionStatus('error');
+      setMvumStitchMessage(guidanceEntry.reason);
+      showToast('CANONICAL MVUM GEOMETRY REQUIRED');
+      return;
+    }
+    if (guidanceEntry.status === 'ready_with_approach' && !liveNavigateServicesEnabled) {
+      setMvumRouteActionStatus('error');
+      setMvumStitchMessage(
+        'Offline approach guidance is unavailable from this location. The route remains saved/previewable; reconnect or move onto the route before starting.',
+      );
+      showToast('MVUM APPROACH UNAVAILABLE OFFLINE');
       return;
     }
 
-    const trailPayload: NavigationHandoffPayload = {
-      ...payload,
-      source: 'saved',
-      type: 'trail',
-      tripMode: 'trail',
-      routeSource: 'built',
-      requiresOnlineRouting: false,
-      trailGeometrySegments: routeSegments.map((line) =>
-        line.map(([lng, lat]) => ({ lat, lng })),
-      ),
-      routeMetadata: {
-        ...(payload.routeMetadata ?? {}),
-        sourceApp: 'ecs_navigate_mvum_stitch',
-        routeOrigin: 'navigate_mvum_stitch',
-        selectedSegmentIds: draft.selectedSegmentIds,
-        orderedSegmentIds: draft.orderedSegmentIds,
-        warnings: draft.warnings,
-        unresolvedGaps: draft.unresolvedGaps,
-        requiresOnlineRouting: false,
-      },
-      raw: {
-        ...(typeof payload.raw === 'object' && payload.raw ? payload.raw : {}),
-        mvumStitchedRouteDraftId: draft.draftId,
-        selectedSegmentIds: draft.selectedSegmentIds,
-        orderedSegmentIds: draft.orderedSegmentIds,
-      },
-    };
+    mvumRouteActionInFlightRef.current = true;
+    setMvumRouteActionStatus('starting');
+    try {
+      const { savedRoute, savedRun, persistenceKey } = persistMvumStitchedRoute(draft);
+      const payload = buildNavigationPayloadFromRun(savedRun, {
+        segmentCount: draft.orderedSegmentIds.length,
+        transitionLegCount: guidanceEntry.status === 'ready_with_approach' ? 1 : 0,
+      });
+      if (!payload || !guidanceEntry.entryCoordinate || guidanceEntry.trailGeometry.length < 2) {
+        throw new Error('MVUM_GUIDANCE_PAYLOAD_UNAVAILABLE');
+      }
 
-    await endRoadNavigation();
-    await loadTrailPayload(trailPayload, 'route_preview_trail');
-    recordActiveGuidanceStart(exploreNavigateSeparationRunRef.current, {
-      routeId: draft.draftId,
-      routeVersion: draft.updatedAt,
-      sourceKind: 'stitched_route',
-      usesExploreStore: false,
-      usesMvumOverlayStore: false,
-      hasGeometry: true,
-      stepCount: 0,
-    });
-    setFollowUser(true);
-    requestStartExpedition('trail');
-    showToast('MVUM STITCHED GUIDANCE STARTING');
+      const requiresApproach = guidanceEntry.status === 'ready_with_approach';
+      const trailPayload: NavigationHandoffPayload = {
+        ...payload,
+        source: 'saved',
+        type: requiresApproach ? 'hybrid_route' : 'trail',
+        tripMode: requiresApproach ? 'hybrid' : 'trail',
+        routeSource: 'built',
+        coordinate: guidanceEntry.trailGeometry[guidanceEntry.trailGeometry.length - 1],
+        trailheadCoordinate: guidanceEntry.entryCoordinate,
+        roadDestinationCoordinate: guidanceEntry.entryCoordinate,
+        trailGeometry: guidanceEntry.trailGeometry,
+        trailGeometrySegments: [guidanceEntry.trailGeometry],
+        trailLengthMiles: guidanceEntry.remainingRouteDistanceM / 1609.344,
+        requiresOnlineRouting: requiresApproach,
+        routeMetadata: {
+          ...(payload.routeMetadata ?? {}),
+          sourceApp: 'ecs_navigate_mvum_stitch',
+          routeOrigin: 'navigate_mvum_stitch',
+          selectedSegmentIds: draft.selectedSegmentIds,
+          orderedSegmentIds: draft.orderedSegmentIds,
+          warnings: draft.warnings,
+          unresolvedGaps: draft.unresolvedGaps,
+          geometrySourceState: draft.geometrySourceState,
+          routePersistenceKey: persistenceKey,
+          guidanceEntrySource: 'projected_current_gps',
+          guidanceEntryDistanceMeters: guidanceEntry.distanceToEntryM,
+          skippedRouteDistanceMeters: guidanceEntry.skippedRouteDistanceM,
+          requiresOnlineRouting: requiresApproach,
+        },
+        raw: {
+          ...(typeof payload.raw === 'object' && payload.raw ? payload.raw : {}),
+          mvumStitchedRouteDraftId: draft.draftId,
+          selectedSegmentIds: draft.selectedSegmentIds,
+          orderedSegmentIds: draft.orderedSegmentIds,
+        },
+      };
+
+      const activeGuidanceSnapshot = navigateRouteSessionStore.getSnapshot();
+      if (shouldProtectActiveGuidanceFromHandoff(trailPayload, activeGuidanceSnapshot)) {
+        setMvumRouteActionStatus('error');
+        setMvumStitchMessage('End active guidance before starting this MVUM custom route.');
+        showToast('ACTIVE GUIDANCE PROTECTED - END NAVIGATION BEFORE STARTING A NEW ROUTE');
+        return;
+      }
+
+      routeStore.setActive(savedRoute.id);
+      runStore.setActive(savedRun.id);
+      loadRuns();
+      pendingAutoStartRouteIdRef.current = trailPayload.id;
+      await applyExploreNavigationPayload(trailPayload);
+      recordActiveGuidanceStart(exploreNavigateSeparationRunRef.current, {
+        routeId: persistenceKey,
+        routeVersion: draft.updatedAt,
+        sourceKind: 'stitched_route',
+        usesExploreStore: false,
+        usesMvumOverlayStore: false,
+        hasGeometry: true,
+        stepCount: 0,
+      });
+      setFollowUser(true);
+      setMvumRouteActionStatus('idle');
+      setMvumStitchMessage(
+        requiresApproach
+          ? 'Road guidance is preparing to the nearest point on the selected MVUM route.'
+          : 'Current GPS is on the selected MVUM route. Trail guidance is starting from the projected route point.',
+      );
+      showToast(
+        requiresApproach
+          ? 'MVUM APPROACH GUIDANCE PREPARING'
+          : 'MVUM ROUTE GUIDANCE STARTING',
+      );
+    } catch {
+      pendingAutoStartRouteIdRef.current = null;
+      setMvumRouteActionStatus('error');
+      setMvumStitchMessage('MVUM guidance could not be staged. The saved route remains available for retry.');
+      showToast('MVUM GUIDANCE UNAVAILABLE');
+    } finally {
+      mvumRouteActionInFlightRef.current = false;
+    }
   }, [
-    activeRun?.build_snapshot,
-    endRoadNavigation,
+    applyExploreNavigationPayload,
+    liveNavigateServicesEnabled,
     loadRuns,
-    loadTrailPayload,
     mvumStitchedRouteDraft,
-    requestStartExpedition,
+    persistMvumStitchedRoute,
+    roadNavigationCurrentLocation,
     showToast,
   ]);
 
   const handleMvumSegmentTap = useCallback((segment: SegmentSelectionPayload) => {
     if (segment?.kind !== 'mvum_segment' || segment.id == null) return;
+    if (mvumRouteActionInFlightRef.current) {
+      showToast('WAIT FOR THE MVUM ROUTE ACTION TO FINISH');
+      return;
+    }
     const segmentId = String(segment.id).trim();
     if (!segmentId) return;
     hapticMicro();
@@ -21348,160 +21482,121 @@ const toggleRemotenessOverlay = useCallback(() => {
     setSelectedRouteCatalogViewportFeatureId(null);
   }, []);
 
-  const stageRouteCatalogSegmentsForBuilder = useCallback((mode: 'build' | 'stitch') => {
-    if (!selectedRouteCatalogViewportFeature) return false;
-    if (roadNavigationActive || trailNavigationActive || pendingHybridTrailTransition) {
-      showToast('END ACTIVE NAVIGATION TO BUILD FROM ECS CATALOG GEOMETRY');
-      return false;
-    }
-    if (selectedRouteCatalogViewportOverlaySegments.length === 0) {
-      showToast(`${geometryStatusCopy(selectedRouteCatalogViewportFeature.properties.geometryStatus)} - ROUTE GEOMETRY UNAVAILABLE`);
-      return false;
-    }
-
-    const existingSourceIds = new Set(
-      mode === 'stitch'
-        ? routeBuilderSegments
-            .map((segment) => segment.sourceSegmentId)
-            .filter((id): id is string => typeof id === 'string' && id.length > 0)
-        : [],
-    );
-    const addedSegments = selectedRouteCatalogViewportOverlaySegments
-      .filter((segment) => !existingSourceIds.has(segment.id))
-      .map((segment) => routeGeometrySegmentToRouteBuilderSegment(segment) as RouteBuilderSegmentData);
-    if (addedSegments.length === 0) {
-      showToast('ECS CATALOG ROUTE ALREADY IN BUILDER');
-      return false;
-    }
-
-    const nextSegments = mode === 'build'
-      ? addedSegments
-      : [...routeBuilderSegments, ...addedSegments];
-    const previousEndpointSegment = [...nextSegments]
-      .reverse()
-      .find((item) => Array.isArray(item.coordinates) && item.coordinates.length > 1);
-
-    closeNavigateDetailSurfaces();
-    setToolsMenuOpen(false);
-    setActiveTopPopup(null);
-    setPinDropMode(false);
-    setCampsiteDrawMode(false);
-    setShowCrosshair(false);
-    setFollowUser(false);
-    setUserHasManuallyMovedMap(true);
-    setRouteBuilderActive(true);
-    setRouteBuilderDrawing(false);
-    setDispersedRouteBuildActive(false);
-    setDispersedRouteBuildStatus(null);
-    setRouteBuilderSegments(nextSegments);
-    setSelectedRouteGeometrySegmentIds((current) => {
-      const base = mode === 'build' ? [] : current;
-      const next = Array.from(new Set([...base, ...selectedRouteCatalogViewportOverlaySegments.map((segment) => segment.id)]));
-      return next;
-    });
-    setRouteGeometryViewportSelectedSegments((current) => {
-      const base = mode === 'build' ? [] : current;
-      const nextById = new Map(base.map((segment) => [segment.id, segment]));
-      selectedRouteCatalogViewportOverlaySegments.forEach((segment) => {
-        nextById.set(segment.id, {
-          ...segment,
-          routeGeometrySelected: true,
-        });
-      });
-      const next = Array.from(nextById.values());
-      routeGeometryViewportSelectedSegmentsRef.current = next;
-      return next;
-    });
-    setRouteBuilderSnapSource(previousEndpointSegment?.snapSource ?? null);
-    setRouteBuilderSnapStatus(previousEndpointSegment?.snapStatus ?? null);
-    setRouteBuilderSnapMessage(ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING);
-    showToast(
-      mode === 'build'
-        ? 'ECS CATALOG ROUTE LOADED IN BUILDER'
-        : 'ECS CATALOG SEGMENT ADDED TO BUILDER',
-    );
-    return true;
-  }, [
-    closeNavigateDetailSurfaces,
-    pendingHybridTrailTransition,
-    roadNavigationActive,
-    routeBuilderSegments,
-    selectedRouteCatalogViewportFeature,
-    selectedRouteCatalogViewportOverlaySegments,
-    showToast,
-    trailNavigationActive,
-  ]);
-
-  const handleRouteCatalogNavigateToTrailhead = useCallback(() => {
-    const feature = selectedRouteCatalogViewportFeature;
-    if (!feature) return;
-    const anchor = routeCatalogViewportFeatureAnchor(feature);
-    if (!anchor) {
-      showToast('TRAILHEAD COORDINATE UNAVAILABLE');
-      return;
-    }
-    hapticCommand();
-    const destination: RoadNavDestination = {
-      id: `route-catalog-trailhead-${feature.properties.routeId}`,
-      title: feature.properties.title,
-      subtitle: [feature.properties.forest ?? feature.properties.region, geometryStatusCopy(feature.properties.geometryStatus)]
-        .filter(Boolean)
-        .join(' | ') || null,
-      coordinate: anchor,
-      sourceType: 'explore_handoff',
-      raw: {
-        routeCatalogRouteId: feature.properties.routeId,
-        geometryStatus: feature.properties.geometryStatus,
-        guidanceReady: feature.properties.guidanceReady,
-        sourceLabel: feature.properties.sourceLabel,
-      },
-    };
-    closeRouteCatalogViewportSelection();
-    void previewRoadDestination(destination, 'explore_handoff').then(() => {
-      startRoadNavigation();
-    });
-  }, [
-    closeRouteCatalogViewportSelection,
-    previewRoadDestination,
-    selectedRouteCatalogViewportFeature,
-    showToast,
-    startRoadNavigation,
-  ]);
-
   const handleRouteCatalogStartHybridGuidance = useCallback(async () => {
     const feature = selectedRouteCatalogViewportFeature;
     const payload = selectedRouteCatalogViewportNavigationPayload;
     if (!feature || !payload) return;
+    if (ecsRouteActionInFlightRef.current) {
+      showToast('WAIT FOR THE ECS ROUTE ACTION TO FINISH');
+      return;
+    }
+    if (!safeUserLocation) {
+      showToast('CURRENT GPS LOCATION REQUIRED TO NAVIGATE TO THIS ROUTE');
+      return;
+    }
     if (!feature.properties.guidanceReady || selectedRouteCatalogViewportBuildUnavailableReason) {
       showToast(
         (selectedRouteCatalogViewportBuildUnavailableReason ?? geometryStatusDetail(feature)).toUpperCase(),
       );
       return;
     }
-    hapticCommand();
-    closeRouteCatalogViewportSelection();
-    pendingAutoStartRouteIdRef.current = payload.id;
-    setFollowUser(true);
-    await applyExploreNavigationPayload(payload);
-    showToast('HYBRID GUIDANCE STARTING FROM ECS CATALOG ROUTE');
+    if (payload.requiresOnlineRouting === true && !routeGeometryViewportFetchOnline) {
+      setEcsRouteActionStatus('error');
+      showToast('OFFLINE APPROACH ROUTING UNAVAILABLE - MOVE ON ROUTE OR RETRY ONLINE');
+      return;
+    }
+    const activeGuidanceSnapshot = navigateRouteSessionStore.getSnapshot();
+    if (shouldProtectActiveGuidanceFromHandoff(payload, activeGuidanceSnapshot)) {
+      setEcsRouteActionStatus('error');
+      showToast('ACTIVE GUIDANCE PROTECTED - END NAVIGATION BEFORE STARTING A NEW ECS ROUTE');
+      return;
+    }
+    ecsRouteActionInFlightRef.current = true;
+    setEcsRouteActionStatus('starting');
+    try {
+      hapticCommand();
+      pendingAutoStartRouteIdRef.current = payload.id;
+      setFollowUser(true);
+      await applyExploreNavigationPayload(payload);
+      closeRouteCatalogViewportSelection();
+      showToast('GUIDANCE STARTING TO THE NEAREST POINT ON THE ECS ROUTE');
+      setEcsRouteActionStatus('idle');
+    } catch (error) {
+      setEcsRouteActionStatus('error');
+      showToast(error instanceof Error ? error.message.toUpperCase() : 'ECS ROUTE GUIDANCE FAILED');
+    } finally {
+      ecsRouteActionInFlightRef.current = false;
+    }
   }, [
     applyExploreNavigationPayload,
     closeRouteCatalogViewportSelection,
+    routeGeometryViewportFetchOnline,
+    safeUserLocation,
     selectedRouteCatalogViewportBuildUnavailableReason,
     selectedRouteCatalogViewportFeature,
     selectedRouteCatalogViewportNavigationPayload,
     showToast,
   ]);
 
-  const handleRouteCatalogBuildRouteFromTrail = useCallback(() => {
-    hapticCommand();
-    stageRouteCatalogSegmentsForBuilder('build');
-  }, [stageRouteCatalogSegmentsForBuilder]);
+  const handleSaveRouteCatalogSelection = useCallback(() => {
+    const feature = selectedRouteCatalogViewportFeature;
+    if (!feature) return;
+    if (ecsRouteActionInFlightRef.current) {
+      showToast('WAIT FOR THE ECS ROUTE ACTION TO FINISH');
+      return;
+    }
+    if (!feature.properties.guidanceReady) {
+      showToast(geometryStatusDetail(feature).toUpperCase());
+      return;
+    }
 
-  const handleRouteCatalogAddOrStitchSegment = useCallback(() => {
-    hapticCommand();
-    stageRouteCatalogSegmentsForBuilder('stitch');
-  }, [stageRouteCatalogSegmentsForBuilder]);
+    const persistencePlan = buildRouteCatalogViewportPersistencePlan(feature);
+    if (
+      persistencePlan.status !== 'ready' ||
+      !persistencePlan.persistenceKey ||
+      !persistencePlan.sourceMetadata
+    ) {
+      showToast((persistencePlan.reason ?? 'CANONICAL ROUTE GEOMETRY UNAVAILABLE').toUpperCase());
+      return;
+    }
+
+    ecsRouteActionInFlightRef.current = true;
+    setEcsRouteActionStatus('saving');
+    try {
+      hapticCommand();
+      const savedRoute = routeStore.createCustomRoute(
+        [{
+          coordinates: persistencePlan.coordinates,
+          source_metadata: persistencePlan.sourceMetadata,
+        }],
+        {
+          name: feature.properties.title,
+          description: `Saved from the source-backed ECS route catalog. Source: ${feature.properties.sourceLabel}.`,
+          sourceApp: 'ecs_navigate_route_catalog',
+          externalSourceId: persistencePlan.persistenceKey,
+          externalSourceType: 'ecs_route_catalog',
+          idempotencyKey: persistencePlan.persistenceKey,
+        },
+      );
+      const savedRun = runStore.createFromRoute(savedRoute, activeRun?.build_snapshot);
+      routeStore.attachRun(savedRoute.id, savedRun.id);
+      loadRuns();
+      setCustomRouteRefreshKey((key) => key + 1);
+      setSavedRoutesRefreshKey((key) => key + 1);
+      setEcsRouteActionStatus('idle');
+      showToast('ECS ROUTE SAVED - AVAILABLE IN TOOLS STITCH');
+    } catch (error) {
+      setEcsRouteActionStatus('error');
+      showToast(error instanceof Error ? error.message.toUpperCase() : 'ECS ROUTE SAVE FAILED');
+    } finally {
+      ecsRouteActionInFlightRef.current = false;
+    }
+  }, [
+    activeRun?.build_snapshot,
+    loadRuns,
+    selectedRouteCatalogViewportFeature,
+    showToast,
+  ]);
 
   const handleBuildRouteFromExploreOverlay = useCallback(async () => {
     if (!selectedExploreRouteNavigationPayload) return;
@@ -23203,17 +23298,127 @@ const mapRendererElement = useMemo(() => (
 
 
 const stableMapSurface = useMemo(() => {
-  const campLayerMenuContent = campLayerControlsAvailable && campLayerMenuOpen ? (
-      <ScrollView
-        style={styles.campLayerMenuScroll}
-        contentContainerStyle={styles.campLayerMenuScrollContent}
-        nestedScrollEnabled
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-        testID="navigate-camp-layer-menu-panel"
-      >
+  const campLayerMenuContent = campLayerMenuOpen ? (
+    <ScrollView
+      style={styles.campLayerMenuScroll}
+      contentContainerStyle={styles.campLayerMenuScrollContent}
+      nestedScrollEnabled
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+      testID="navigate-camp-layer-menu-panel"
+    >
+        <Text style={styles.mapLayerMenuSectionLabel}>ROUTE + TERRAIN</Text>
+
+        <TouchableOpacity
+          style={[
+            styles.dispersedCampingToggle,
+            styles.campLayerMenuToggle,
+            mvumOverlayEnabled && styles.dispersedCampingToggleActive,
+          ]}
+          onPress={toggleMvumOverlay}
+          activeOpacity={0.86}
+          testID="navigate-map-layer-mvum-toggle"
+          accessibilityRole="switch"
+          accessibilityState={{ checked: mvumOverlayEnabled }}
+          accessibilityLabel="MVUM Trail Segments"
+          accessibilityHint="Shows selectable MVUM trail segments for custom route building and turns off ECS Route Geometry when enabled."
+        >
+          <View
+            style={[
+              styles.dispersedCampingCheckbox,
+              mvumOverlayEnabled && styles.dispersedCampingCheckboxActive,
+            ]}
+          >
+            {mvumOverlayEnabled ? <Ionicons name="checkmark" size={13} color="#091014" /> : null}
+          </View>
+          <View style={styles.dispersedCampingToggleCopy}>
+            <Text style={styles.dispersedCampingToggleTitle}>MVUM Trail Segments</Text>
+            <Text style={styles.dispersedCampingToggleSubtitle}>
+              Select adjoining forest-road segments to build a custom route. Zoom to{' '}
+              {MVUM_OVERLAY_MIN_ZOOM}+ for detail.
+            </Text>
+          </View>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.dispersedCampingToggle,
+            styles.campLayerMenuToggle,
+            routeGeometryOverlayEnabled && styles.dispersedCampingToggleActive,
+            !routeGeometryViewportOverlayEnabled && styles.mapLayerMenuToggleDisabled,
+          ]}
+          onPress={toggleRouteGeometryOverlay}
+          activeOpacity={0.86}
+          disabled={!routeGeometryViewportOverlayEnabled}
+          testID="navigate-map-layer-route-geometry-toggle"
+          accessibilityRole="switch"
+          accessibilityState={{
+            checked: routeGeometryOverlayEnabled,
+            disabled: !routeGeometryViewportOverlayEnabled,
+          }}
+          accessibilityLabel="ECS Route Geometry"
+          accessibilityHint="Shows suggested ECS routes for selection and turns off MVUM segments when enabled."
+        >
+          <View
+            style={[
+              styles.dispersedCampingCheckbox,
+              routeGeometryOverlayEnabled && styles.dispersedCampingCheckboxActive,
+            ]}
+          >
+            {routeGeometryOverlayEnabled ? <Ionicons name="checkmark" size={13} color="#091014" /> : null}
+          </View>
+          <View style={styles.dispersedCampingToggleCopy}>
+            <Text style={styles.dispersedCampingToggleTitle}>ECS Route Geometry</Text>
+            <Text style={styles.dispersedCampingToggleSubtitle}>
+              {routeGeometryViewportOverlayEnabled
+                ? `Browse suggested ECS routes from zoom ${ROUTE_CATALOG_VIEWPORT_MIN_ZOOM}+ for save or guidance.`
+                : 'Unavailable in this rollout. ECS route geometry remains disabled.'}
+            </Text>
+          </View>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.dispersedCampingToggle,
+            styles.campLayerMenuToggle,
+            showRemotenessOverlay && styles.dispersedCampingToggleActive,
+            !showRemotenessOverlay && !remotenessOverlayAvailable && styles.mapLayerMenuToggleDisabled,
+          ]}
+          onPress={toggleRemotenessOverlay}
+          activeOpacity={0.86}
+          disabled={!showRemotenessOverlay && !remotenessOverlayAvailable}
+          testID="navigate-map-layer-remoteness-toggle"
+          accessibilityRole="switch"
+          accessibilityState={{
+            checked: showRemotenessOverlay,
+            disabled: !showRemotenessOverlay && !remotenessOverlayAvailable,
+          }}
+          accessibilityLabel="Remoteness"
+          accessibilityHint="Shades remoteness and expected signal confidence along the active or selected route."
+        >
+          <View
+            style={[
+              styles.dispersedCampingCheckbox,
+              showRemotenessOverlay && styles.dispersedCampingCheckboxActive,
+            ]}
+          >
+            {showRemotenessOverlay ? <Ionicons name="checkmark" size={13} color="#091014" /> : null}
+          </View>
+          <View style={styles.dispersedCampingToggleCopy}>
+            <Text style={styles.dispersedCampingToggleTitle}>Remoteness</Text>
+            <Text style={styles.dispersedCampingToggleSubtitle}>
+              {remotenessOverlayAvailable || showRemotenessOverlay
+                ? 'Shade the active route corridor by expected signal confidence and isolation.'
+                : 'Requires an active or selected route before the corridor can be shaded.'}
+            </Text>
+          </View>
+        </TouchableOpacity>
+
+        <Text style={styles.mapLayerMenuSectionLabel}>CAMP REFERENCE</Text>
+
         {canUseCommunityCampsiteLayers ? (
           <>
+            <Text style={styles.mapLayerMenuSectionLabel}>OPERATOR CAMPSITES</Text>
             {campLayerMenuCommunityToggles.map((layer) => {
               const isActive = campsiteLayerVisibility[layer.key];
               return (
@@ -23254,73 +23459,85 @@ const stableMapSurface = useMemo(() => {
           </>
         ) : null}
 
-        {establishedCampsitesLayerAvailable ? (
-          <TouchableOpacity
+        <TouchableOpacity
+          style={[
+            styles.dispersedCampingToggle,
+            styles.campLayerMenuToggle,
+            establishedCampsitesEnabled && styles.dispersedCampingToggleActive,
+            !establishedCampsitesLayerAvailable && styles.mapLayerMenuToggleDisabled,
+          ]}
+          onPress={toggleEstablishedCampsites}
+          activeOpacity={0.86}
+          disabled={!establishedCampsitesLayerAvailable}
+          testID="navigate-map-layer-established-campgrounds-toggle"
+          accessibilityRole="checkbox"
+          accessibilityState={{
+            checked: establishedCampsitesEnabled,
+            disabled: !establishedCampsitesLayerAvailable,
+          }}
+          accessibilityLabel="Established Campgrounds"
+        >
+          <View
             style={[
-              styles.dispersedCampingToggle,
-              styles.campLayerMenuToggle,
-              establishedCampsitesEnabled && styles.dispersedCampingToggleActive,
+              styles.dispersedCampingCheckbox,
+              establishedCampsitesEnabled && styles.dispersedCampingCheckboxActive,
             ]}
-            onPress={toggleEstablishedCampsites}
-            activeOpacity={0.86}
-            accessibilityRole="checkbox"
-            accessibilityState={{ checked: establishedCampsitesEnabled }}
-            accessibilityLabel="Established Campgrounds"
           >
-            <View
-              style={[
-                styles.dispersedCampingCheckbox,
-                establishedCampsitesEnabled && styles.dispersedCampingCheckboxActive,
-              ]}
-            >
-              {establishedCampsitesEnabled ? (
-                <Ionicons name="checkmark" size={13} color="#091014" />
-              ) : null}
-            </View>
-            <View style={styles.dispersedCampingToggleCopy}>
-              <Text style={styles.dispersedCampingToggleTitle}>
-                Established Campgrounds
-              </Text>
-              <Text style={styles.dispersedCampingToggleSubtitle}>
-                Shows known fixed campgrounds, RV parks, and pay-per-night camping locations.
-              </Text>
-            </View>
-          </TouchableOpacity>
-        ) : null}
+            {establishedCampsitesEnabled ? (
+              <Ionicons name="checkmark" size={13} color="#091014" />
+            ) : null}
+          </View>
+          <View style={styles.dispersedCampingToggleCopy}>
+            <Text style={styles.dispersedCampingToggleTitle}>
+              Established Campgrounds
+            </Text>
+            <Text style={styles.dispersedCampingToggleSubtitle}>
+              {establishedCampsitesLayerAvailable
+                ? 'Shows known fixed campgrounds, RV parks, and pay-per-night camping locations.'
+                : 'Unavailable in this rollout. Existing provider and offline-cache gates remain enforced.'}
+            </Text>
+          </View>
+        </TouchableOpacity>
 
-        {dispersedCampingEligibilityLayerAvailable ? (
-          <TouchableOpacity
+        <TouchableOpacity
+          style={[
+            styles.dispersedCampingToggle,
+            styles.campLayerMenuToggle,
+            dispersedCampingEligibilityEnabled && styles.dispersedCampingToggleActive,
+            !dispersedCampingEligibilityLayerAvailable && styles.mapLayerMenuToggleDisabled,
+          ]}
+          onPress={toggleDispersedCampingEligibility}
+          activeOpacity={0.86}
+          disabled={!dispersedCampingEligibilityLayerAvailable}
+          testID="navigate-map-layer-dispersed-camping-toggle"
+          accessibilityRole="checkbox"
+          accessibilityState={{
+            checked: dispersedCampingEligibilityEnabled,
+            disabled: !dispersedCampingEligibilityLayerAvailable,
+          }}
+          accessibilityLabel="Dispersed Camping Eligibility"
+        >
+          <View
             style={[
-              styles.dispersedCampingToggle,
-              styles.campLayerMenuToggle,
-              dispersedCampingEligibilityEnabled && styles.dispersedCampingToggleActive,
+              styles.dispersedCampingCheckbox,
+              dispersedCampingEligibilityEnabled && styles.dispersedCampingCheckboxActive,
             ]}
-            onPress={toggleDispersedCampingEligibility}
-            activeOpacity={0.86}
-            accessibilityRole="checkbox"
-            accessibilityState={{ checked: dispersedCampingEligibilityEnabled }}
-            accessibilityLabel="Dispersed Camping Eligibility"
           >
-            <View
-              style={[
-                styles.dispersedCampingCheckbox,
-                dispersedCampingEligibilityEnabled && styles.dispersedCampingCheckboxActive,
-              ]}
-            >
-              {dispersedCampingEligibilityEnabled ? (
-                <Ionicons name="checkmark" size={13} color="#091014" />
-              ) : null}
-            </View>
-            <View style={styles.dispersedCampingToggleCopy}>
-              <Text style={styles.dispersedCampingToggleTitle}>
-                Dispersed Camping Eligibility
-              </Text>
-              <Text style={styles.dispersedCampingToggleSubtitle}>
-                Highlights likely eligible public-land regions. Verify local rules before camping.
-              </Text>
-            </View>
-          </TouchableOpacity>
-        ) : null}
+            {dispersedCampingEligibilityEnabled ? (
+              <Ionicons name="checkmark" size={13} color="#091014" />
+            ) : null}
+          </View>
+          <View style={styles.dispersedCampingToggleCopy}>
+            <Text style={styles.dispersedCampingToggleTitle}>
+              Dispersed Camping Eligibility
+            </Text>
+            <Text style={styles.dispersedCampingToggleSubtitle}>
+              {dispersedCampingEligibilityLayerAvailable
+                ? 'Highlights likely eligible public-land regions. Verify local rules before camping.'
+                : 'Unavailable in this rollout. ECS does not infer access authorization when source gates are closed.'}
+            </Text>
+          </View>
+        </TouchableOpacity>
 
         <View style={styles.campLayerMenuNotes}>
           {establishedCampsitesEnabled ? (
@@ -23400,7 +23617,7 @@ const stableMapSurface = useMemo(() => {
             </View>
           ) : null}
         </View>
-      </ScrollView>
+    </ScrollView>
   ) : null;
 
   const endpointHintScreenCoordinate = activeGuidanceEndpointHint?.screenCoordinate ?? null;
@@ -23985,65 +24202,80 @@ const stableMapSurface = useMemo(() => {
             </View>
 
             <Text style={styles.routeCatalogSelectionDetail} numberOfLines={3}>
-              {geometryStatusDetail(selectedRouteCatalogViewportFeature)}
+              {selectedRouteCatalogViewportBuildUnavailableReason ??
+                geometryStatusDetail(selectedRouteCatalogViewportFeature)}
             </Text>
 
             <View style={styles.routeCatalogSelectionActions}>
               <TouchableOpacity
-                style={styles.routeCatalogSelectionAction}
-                onPress={handleRouteCatalogNavigateToTrailhead}
+                style={[
+                  styles.routeCatalogSelectionAction,
+                  (!selectedRouteCatalogViewportFeature.properties.guidanceReady ||
+                    !!selectedRouteCatalogViewportBuildUnavailableReason ||
+                    ecsRouteActionStatus === 'saving' ||
+                    ecsRouteActionStatus === 'starting') &&
+                    styles.routeCatalogSelectionActionDisabled,
+                ]}
+                onPress={handleSaveRouteCatalogSelection}
                 activeOpacity={0.86}
+                disabled={
+                  !selectedRouteCatalogViewportFeature.properties.guidanceReady ||
+                  !!selectedRouteCatalogViewportBuildUnavailableReason ||
+                  ecsRouteActionStatus === 'saving' ||
+                  ecsRouteActionStatus === 'starting'
+                }
                 accessibilityRole="button"
-                accessibilityLabel="Navigate to trailhead"
+                accessibilityLabel="Save selected ECS route"
+                accessibilityState={{
+                  disabled:
+                    !selectedRouteCatalogViewportFeature.properties.guidanceReady ||
+                    !!selectedRouteCatalogViewportBuildUnavailableReason ||
+                    ecsRouteActionStatus === 'saving' ||
+                    ecsRouteActionStatus === 'starting',
+                  busy: ecsRouteActionStatus === 'saving',
+                }}
+                testID="navigate-ecs-route-save"
               >
-                <Ionicons name="navigate-outline" size={15} color={TACTICAL.amber} />
+                <Ionicons name="bookmark-outline" size={15} color={TACTICAL.amber} />
                 <Text style={styles.routeCatalogSelectionActionText} numberOfLines={2}>
-                  NAVIGATE TO TRAILHEAD
+                  {ecsRouteActionStatus === 'saving' ? 'SAVING ROUTE' : 'SAVE ROUTE'}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
                   styles.routeCatalogSelectionAction,
                   (!selectedRouteCatalogViewportFeature.properties.guidanceReady ||
-                    !!selectedRouteCatalogViewportBuildUnavailableReason) &&
+                    !!selectedRouteCatalogViewportBuildUnavailableReason ||
+                    !safeUserLocation ||
+                    ecsRouteActionStatus === 'saving' ||
+                    ecsRouteActionStatus === 'starting') &&
                     styles.routeCatalogSelectionActionDisabled,
                 ]}
                 onPress={handleRouteCatalogStartHybridGuidance}
                 activeOpacity={0.86}
                 disabled={
                   !selectedRouteCatalogViewportFeature.properties.guidanceReady ||
-                  !!selectedRouteCatalogViewportBuildUnavailableReason
+                  !!selectedRouteCatalogViewportBuildUnavailableReason ||
+                  !safeUserLocation ||
+                  ecsRouteActionStatus === 'saving' ||
+                  ecsRouteActionStatus === 'starting'
                 }
                 accessibilityRole="button"
-                accessibilityLabel="Start hybrid guidance"
+                accessibilityLabel="Navigate from GPS to selected ECS route"
+                accessibilityState={{
+                  disabled:
+                    !selectedRouteCatalogViewportFeature.properties.guidanceReady ||
+                    !!selectedRouteCatalogViewportBuildUnavailableReason ||
+                    !safeUserLocation ||
+                    ecsRouteActionStatus === 'saving' ||
+                    ecsRouteActionStatus === 'starting',
+                  busy: ecsRouteActionStatus === 'starting',
+                }}
+                testID="navigate-ecs-route-start-guidance"
               >
-                <Ionicons name="compass-outline" size={15} color={TACTICAL.amber} />
+                <Ionicons name="navigate-outline" size={15} color={TACTICAL.amber} />
                 <Text style={styles.routeCatalogSelectionActionText} numberOfLines={2}>
-                  START HYBRID GUIDANCE
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.routeCatalogSelectionAction}
-                onPress={handleRouteCatalogBuildRouteFromTrail}
-                activeOpacity={0.86}
-                accessibilityRole="button"
-                accessibilityLabel="Build route from trail"
-              >
-                <Ionicons name="map-outline" size={15} color={TACTICAL.amber} />
-                <Text style={styles.routeCatalogSelectionActionText} numberOfLines={2}>
-                  BUILD ROUTE FROM TRAIL
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.routeCatalogSelectionAction}
-                onPress={handleRouteCatalogAddOrStitchSegment}
-                activeOpacity={0.86}
-                accessibilityRole="button"
-                accessibilityLabel="Add or stitch segment"
-              >
-                <Ionicons name="git-merge-outline" size={15} color={TACTICAL.amber} />
-                <Text style={styles.routeCatalogSelectionActionText} numberOfLines={2}>
-                  ADD/STITCH SEGMENT
+                  {ecsRouteActionStatus === 'starting' ? 'STARTING GUIDANCE' : 'NAVIGATE TO ROUTE'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -24149,128 +24381,32 @@ const stableMapSurface = useMemo(() => {
               </View>
             ) : null}
 
-            <View style={styles.utilityPrimaryRow} pointerEvents="box-none">
-              <TouchableOpacity
-                style={[
-                  styles.quickActionsTrigger,
-                  { width: TOOLS_TRIGGER_SIZE, height: TOOLS_TRIGGER_SIZE },
-                  mvumOverlayEnabled && styles.quickActionsTriggerActive,
-                ]}
-                onPress={toggleMvumOverlay}
-                activeOpacity={0.85}
-                hitSlop={EDGE_CONTROL_HIT_SLOP}
-                accessibilityRole="switch"
-                accessibilityState={{
-                  checked: mvumOverlayEnabled,
-                }}
-                accessibilityLabel="MVUM trail segments overlay"
-                accessibilityHint="Toggles selectable MVUM trail segments without loading Explore route catalogs."
-              >
-                <Ionicons
-                  name="trail-sign-outline"
-                  size={17}
-                  color={mvumOverlayEnabled ? '#091014' : TACTICAL.amber}
-                />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.utilityPrimaryRow} pointerEvents="box-none">
-              <TouchableOpacity
-                style={[
-                  styles.quickActionsTrigger,
-                  { width: TOOLS_TRIGGER_SIZE, height: TOOLS_TRIGGER_SIZE },
-                  routeGeometryOverlayEnabled && styles.quickActionsTriggerActive,
-                ]}
-                onPress={toggleRouteGeometryOverlay}
-                activeOpacity={0.85}
-                hitSlop={EDGE_CONTROL_HIT_SLOP}
-                testID="navigate-route-geometry-overlay-toggle"
-                accessibilityRole="switch"
-                accessibilityState={{
-                  checked: routeGeometryOverlayEnabled,
-                }}
-                accessibilityValue={{ text: routeGeometryOverlayEnabled ? 'on' : 'off' }}
-                accessibilityLabel="Route geometry overlay"
-                accessibilityHint="Toggles ECS-owned route, trail, leg, and segment geometry for Build Route selection."
-              >
-                <Ionicons
-                  name="git-branch-outline"
-                  size={17}
-                  color={routeGeometryOverlayEnabled ? '#091014' : TACTICAL.amber}
-                />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.utilityPrimaryRow} pointerEvents="box-none">
-              <TouchableOpacity
-                style={[
-                  styles.quickActionsTrigger,
-                  { width: TOOLS_TRIGGER_SIZE, height: TOOLS_TRIGGER_SIZE },
-                  showRemotenessOverlay && styles.quickActionsTriggerActive,
-                  !showRemotenessOverlay &&
-                    !remotenessOverlayAvailable &&
-                    styles.quickActionsTriggerDisabled,
-                  !showRemotenessOverlay &&
-                    !remotenessOverlayAvailable &&
-                    styles.quickActionsTriggerUnavailable,
-                ]}
-                onPress={toggleRemotenessOverlay}
-                activeOpacity={0.85}
-                hitSlop={EDGE_CONTROL_HIT_SLOP}
-                testID="navigate-remoteness-overlay-toggle"
-                accessibilityRole="switch"
-                accessibilityState={{
-                  checked: showRemotenessOverlay,
-                  disabled: !showRemotenessOverlay && !remotenessOverlayAvailable,
-                }}
-                accessibilityValue={{ text: !remotenessOverlayAvailable && !showRemotenessOverlay ? 'unavailable' : showRemotenessOverlay ? 'on' : 'off' }}
-                accessibilityLabel="Remoteness map overlay"
-                accessibilityHint="Toggles cell service and remoteness guidance over the active route corridor."
-              >
-                <Ionicons
-                  name="radio-outline"
-                  size={17}
-                  color={
-                    showRemotenessOverlay
-                      ? '#091014'
-                      : remotenessOverlayAvailable
-                        ? TACTICAL.amber
-                        : TACTICAL.textMuted
-                  }
-                />
-                {!showRemotenessOverlay && !remotenessOverlayAvailable ? (
-                  <View pointerEvents="none" style={styles.quickActionsUnavailableSlash} />
-                ) : null}
-              </TouchableOpacity>
-            </View>
-
-            {campLayerControlsAvailable ? (
-              <View style={styles.campLayerMenuAnchorSlot} pointerEvents="box-none">
-                <View style={styles.utilityPrimaryRow} pointerEvents="box-none">
-                  <TouchableOpacity
-                    style={[
-                      styles.quickActionsTrigger,
-                      { width: TOOLS_TRIGGER_SIZE, height: TOOLS_TRIGGER_SIZE },
-                      campLayerControlActive && styles.quickActionsTriggerActive,
-                    ]}
-                    onPress={toggleCampLayerMenu}
-                    activeOpacity={0.85}
-                    hitSlop={EDGE_CONTROL_HIT_SLOP}
-                    testID="navigate-camp-layer-menu-toggle"
-                    accessibilityRole="button"
-                    accessibilityLabel="Camp map layers"
-                    accessibilityState={{ expanded: campLayerMenuOpen }}
-                    accessibilityValue={{ text: campLayerMenuOpen ? 'open' : 'closed' }}
-                  >
-                    <Ionicons
-                      name="bonfire-outline"
-                      size={17}
-                      color={campLayerControlActive ? '#091014' : TACTICAL.amber}
-                    />
-                  </TouchableOpacity>
-                </View>
+            <View style={styles.campLayerMenuAnchorSlot} pointerEvents="box-none">
+              <View style={styles.utilityPrimaryRow} pointerEvents="box-none">
+                <TouchableOpacity
+                  style={[
+                    styles.quickActionsTrigger,
+                    { width: TOOLS_TRIGGER_SIZE, height: TOOLS_TRIGGER_SIZE },
+                    mapLayerControlActive && styles.quickActionsTriggerActive,
+                  ]}
+                  onPress={toggleCampLayerMenu}
+                  activeOpacity={0.85}
+                  hitSlop={EDGE_CONTROL_HIT_SLOP}
+                  testID="navigate-map-layer-menu-toggle"
+                  accessibilityRole="button"
+                  accessibilityLabel="Map layers"
+                  accessibilityHint="Opens route, terrain, and camping map overlays."
+                  accessibilityState={{ expanded: campLayerMenuOpen }}
+                  accessibilityValue={{ text: campLayerMenuOpen ? 'open' : 'closed' }}
+                >
+                  <Ionicons
+                    name="layers-outline"
+                    size={17}
+                    color={mapLayerControlActive ? '#091014' : TACTICAL.amber}
+                  />
+                </TouchableOpacity>
               </View>
-            ) : null}
+            </View>
 
             <View style={styles.utilityPrimaryRow} pointerEvents="box-none">
               <TouchableOpacity
@@ -24282,6 +24418,10 @@ const stableMapSurface = useMemo(() => {
                 onPress={toggleToolsPopup}
                 activeOpacity={0.85}
                 hitSlop={EDGE_CONTROL_HIT_SLOP}
+                testID="navigate-tools-menu-toggle"
+                accessibilityRole="button"
+                accessibilityLabel="Navigate tools"
+                accessibilityState={{ expanded: toolsMenuOpen }}
               >
                 <Ionicons
                   name={toolsMenuOpen ? 'close' : 'options-outline'}
@@ -24562,9 +24702,9 @@ const stableMapSurface = useMemo(() => {
         ) : null}
 
         {renderMapPopup(
-          campLayerControlsAvailable && campLayerMenuOpen,
-          'CAMP LAYERS',
-          'bonfire-outline',
+          campLayerMenuOpen,
+          'MAP LAYERS',
+          'layers-outline',
           () => setCampLayerMenuOpen(false),
           <View style={styles.campLayerMenuPopupContent}>
             {campLayerMenuContent}
@@ -24723,10 +24863,10 @@ const stableMapSurface = useMemo(() => {
   selectedRouteCatalogViewportFeature,
   selectedRouteCatalogViewportBuildUnavailableReason,
   closeRouteCatalogViewportSelection,
-  handleRouteCatalogNavigateToTrailhead,
+  ecsRouteActionStatus,
+  safeUserLocation,
+  handleSaveRouteCatalogSelection,
   handleRouteCatalogStartHybridGuidance,
-  handleRouteCatalogBuildRouteFromTrail,
-  handleRouteCatalogAddOrStitchSegment,
     selectedCampIntelComparison,
   weatherAlerts,
   routeCorridorWeather,
@@ -24775,14 +24915,14 @@ const stableMapSurface = useMemo(() => {
   cancelRouteBuilder,
   toolsMenuOpen,
   routeGeometryOverlayEnabled,
+  routeGeometryViewportOverlayEnabled,
   toggleRouteGeometryOverlay,
   showRemotenessOverlay,
   remotenessOverlayAvailable,
   toggleRemotenessOverlay,
   campLayerMenuOpen,
   campLayersLayerZIndex,
-  campLayerControlsAvailable,
-  campLayerControlActive,
+  mapLayerControlActive,
   campsiteLayerVisibility,
   campLayerFetchOnline,
   mapOverlayStartupReady,
@@ -25858,6 +25998,32 @@ const stableMapSurface = useMemo(() => {
         <TouchableOpacity
           style={[
             styles.routeBuilderStatusAction,
+            mvumSaveStitchedRouteDisabled && styles.routeBuilderStatusActionDisabled,
+          ]}
+          onPress={handleSaveMvumStitchedRoute}
+          disabled={mvumSaveStitchedRouteDisabled}
+          activeOpacity={0.84}
+          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+          accessibilityRole="button"
+          accessibilityLabel="Save Route from selected MVUM segments"
+          accessibilityHint="Saves the connected selected segments without starting guidance."
+          accessibilityState={{
+            disabled: mvumSaveStitchedRouteDisabled,
+            busy: mvumRouteActionStatus === 'saving',
+          }}
+        >
+          <Text
+            style={[
+              styles.routeBuilderStatusActionText,
+              mvumSaveStitchedRouteDisabled && styles.routeBuilderStatusActionTextDisabled,
+            ]}
+          >
+            {mvumRouteActionStatus === 'saving' ? 'SAVING' : 'SAVE ROUTE'}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[
+            styles.routeBuilderStatusAction,
             mvumStartStitchedGuidanceDisabled && styles.routeBuilderStatusActionDisabled,
           ]}
           onPress={handleStartMvumStitchedGuidance}
@@ -25866,7 +26032,11 @@ const stableMapSurface = useMemo(() => {
           hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
           accessibilityRole="button"
           accessibilityLabel="Start stitched MVUM guidance"
-          accessibilityState={{ disabled: mvumStartStitchedGuidanceDisabled }}
+          accessibilityHint="Starts at the current GPS position and routes to the nearest canonical point before trail guidance."
+          accessibilityState={{
+            disabled: mvumStartStitchedGuidanceDisabled,
+            busy: mvumRouteActionStatus === 'starting',
+          }}
         >
           <Text
             style={[
@@ -25874,7 +26044,7 @@ const stableMapSurface = useMemo(() => {
               mvumStartStitchedGuidanceDisabled && styles.routeBuilderStatusActionTextDisabled,
             ]}
           >
-            START
+            {mvumRouteActionStatus === 'starting' ? 'STARTING' : 'START'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -28915,6 +29085,19 @@ campLayerMenuToggle: {
   minHeight: 56,
   paddingHorizontal: 8,
   paddingVertical: 7,
+},
+
+mapLayerMenuToggleDisabled: {
+  opacity: 0.52,
+},
+
+mapLayerMenuSectionLabel: {
+  ...TYPO.U2,
+  color: TACTICAL.textMuted,
+  fontSize: 9,
+  letterSpacing: 1.1,
+  paddingHorizontal: 2,
+  paddingTop: 4,
 },
 
 campLayerMenuScroll: {

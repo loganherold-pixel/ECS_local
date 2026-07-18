@@ -5,7 +5,7 @@
  *   - Recalibration indicator when heading accuracy drops
  *   - Accuracy-based source badge coloring (green/amber/red)
  *   - Tap to re-center map on current GPS location
- *   - Stationary lock indicator (heading frozen when not moving)
+ *   - Stationary heading freeze when not moving
  *   - True north always reflected correctly
  *   - Improved heading display with degree symbol
  *
@@ -13,7 +13,7 @@
  *   - Supports lifting above custom dock/system nav via containerStyle
  *   - Preserves existing ECS compass visuals and behavior
  */
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -34,9 +34,6 @@ const DIAL_SIZE = 62;
 const INNER_SIZE = 34;
 const TICK_COUNT = 36; // every 10°
 const CARDINAL_DIRECTIONS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const;
-const RECENTER_HINT_VISIBLE_MS = 3400;
-const RECENTER_HINT_FADE_MS = ECS_MOTION.intelBarFadeOut;
-let recenterHintSeenThisSession = false;
 
 function getCardinal(degrees: number): string {
   const idx = Math.round((((degrees % 360) + 360) % 360) / 45) % 8;
@@ -86,11 +83,9 @@ const CompassRose = React.memo(function CompassRose({
   paused = false,
 }: CompassRoseProps) {
   const [internalHeading, setInternalHeading] = useState<number | null>(null);
-  const [tapHintVisible, setTapHintVisible] = useState(() => !recenterHintSeenThisSession);
 
   const rotateAnim = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const hintFadeAnim = useRef(new Animated.Value(recenterHintSeenThisSession ? 0 : 1)).current;
   const recalPulseAnim = useRef(new Animated.Value(0)).current;
   const prevHeadingRef = useRef<number>(0);
   const mountedRef = useRef(true);
@@ -101,18 +96,6 @@ const CompassRose = React.memo(function CompassRose({
     };
   }, []);
 
-  const dismissTapHint = useCallback(() => {
-    recenterHintSeenThisSession = true;
-    Animated.timing(hintFadeAnim, {
-      toValue: 0,
-      duration: RECENTER_HINT_FADE_MS,
-      easing: ECS_EASE.accelerate,
-      useNativeDriver: true,
-    }).start(({ finished }) => {
-      if (finished && mountedRef.current) setTapHintVisible(false);
-    });
-  }, [hintFadeAnim]);
-
   // ── Fade in/out ────────────────────────────────────────────
   useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -121,24 +104,6 @@ const CompassRose = React.memo(function CompassRose({
       useNativeDriver: true,
     }).start();
   }, [visible, fadeAnim]);
-
-  useEffect(() => {
-    if (paused || isStationaryLocked) {
-      hintFadeAnim.setValue(1);
-      return undefined;
-    }
-
-    if (recenterHintSeenThisSession || !tapHintVisible) {
-      hintFadeAnim.setValue(0);
-      return undefined;
-    }
-
-    const timer = setTimeout(() => {
-      dismissTapHint();
-    }, RECENTER_HINT_VISIBLE_MS);
-
-    return () => clearTimeout(timer);
-  }, [dismissTapHint, hintFadeAnim, isStationaryLocked, paused, tapHintVisible]);
 
   // ── Recalibration pulse animation ─────────────────────────
   useEffect(() => {
@@ -268,17 +233,11 @@ const CompassRose = React.memo(function CompassRose({
   const displayDeg = hasHeading ? effectiveHeading : null;
   const displayCardinal = hasHeading ? getCardinal(effectiveHeading!) : '—';
   const displaySource = source === 'gps' ? 'GPS' : source === 'compass' ? 'MAG' : 'NO FIX';
-  const recenterHintLabel = isStationaryLocked ? 'LOCKED' : 'TAP TO CENTER';
-  const showRecenterHint = !paused && (isStationaryLocked || tapHintVisible);
-  const persistentRecenterHint = isStationaryLocked;
 
   const accuracyColor = getAccuracyColor(accuracy);
 
   const Wrapper = onPress ? TouchableOpacity : View;
   const handlePress = () => {
-    if (tapHintVisible) {
-      dismissTapHint();
-    }
     onPress?.();
   };
   const wrapperProps = onPress
@@ -383,27 +342,6 @@ const CompassRose = React.memo(function CompassRose({
         ) : null}
       </Wrapper>
 
-      {showRecenterHint ? (
-        persistentRecenterHint ? (
-          <View
-            pointerEvents="none"
-            accessible={false}
-            importantForAccessibility="no"
-            style={styles.recenterHint}
-          >
-            <Text style={styles.recenterHintText}>{recenterHintLabel}</Text>
-          </View>
-        ) : (
-          <Animated.View
-            pointerEvents="none"
-            accessible={false}
-            importantForAccessibility="no"
-            style={[styles.recenterHint, { opacity: hintFadeAnim }]}
-          >
-            <Text style={styles.recenterHintText}>{recenterHintLabel}</Text>
-          </Animated.View>
-        )
-      ) : null}
     </Animated.View>
   );
 });
@@ -628,34 +566,6 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: TACTICAL.amber,
     marginTop: -1,
-  },
-
-  recenterHint: {
-    position: 'absolute',
-    bottom: COMPASS_SIZE + 6,
-    left: -14,
-    right: -14,
-    minWidth: 64,
-    minHeight: 20,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderRadius: 7,
-    backgroundColor: 'rgba(11,15,18,0.72)',
-    borderWidth: 1,
-    borderColor: 'rgba(196,138,44,0.10)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 9,
-    elevation: 9,
-  },
-
-  recenterHintText: {
-    fontSize: 8,
-    lineHeight: 12,
-    fontWeight: '800',
-    color: 'rgba(214,208,190,0.76)',
-    letterSpacing: 0.7,
-    textAlign: 'center',
   },
 
   headingQualityAccent: {

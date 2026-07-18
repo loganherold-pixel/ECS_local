@@ -20,8 +20,7 @@ export default function LoadingTransitionVideo() {
   const handleFailed = useCallback(() => {
     setVideoFailed((current) => current || true);
   }, []);
-  const animatedFallbackVisible = STARTUP_LOADING_VIDEO_ENABLED && (!videoReady || videoFailed);
-  const staticFallbackVisible = !STARTUP_LOADING_VIDEO_ENABLED && (!videoReady || videoFailed);
+  const loadingIndicatorVisible = !videoReady || videoFailed;
 
   return (
     <View style={styles.screen}>
@@ -38,14 +37,24 @@ export default function LoadingTransitionVideo() {
         />
       ) : null}
       <View style={[styles.tint, { pointerEvents: 'none' }]} />
-      {animatedFallbackVisible ? (
-        <View style={[styles.loadingFallback, { pointerEvents: 'none' }]}>
-          <ActivityIndicator size="small" color={TACTICAL.amber} />
-        </View>
-      ) : null}
-      {staticFallbackVisible ? (
-        <View style={[styles.staticLoadingFallback, { pointerEvents: 'none' }]}>
-          <View style={styles.staticLoadingGlyph} />
+      {loadingIndicatorVisible ? (
+        <View
+          style={styles.loadingFallback}
+          pointerEvents="none"
+          accessible
+          accessibilityRole="progressbar"
+          accessibilityLabel="Loading Expedition Command System"
+          accessibilityState={{ busy: true }}
+          accessibilityLiveRegion="polite"
+          testID="ecs-startup-loading-indicator"
+        >
+          <ActivityIndicator
+            accessible={false}
+            animating={true}
+            size="large"
+            color={TACTICAL.amber}
+            testID="ecs-startup-loading-spinner"
+          />
         </View>
       ) : null}
       <View style={[styles.legalOverlay, { pointerEvents: 'none' }]}>
@@ -186,19 +195,6 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  staticLoadingFallback: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  staticLoadingGlyph: {
-    width: 16,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: TACTICAL.amber,
-    opacity: 0.9,
-    transform: [{ rotate: '-28deg' }],
   },
   legalOverlay: {
     position: 'absolute',

@@ -838,10 +838,16 @@ function verifyGuidanceSnappingScenario() {
   assert.deepStrictEqual(outside.remainingGeometry, route);
 }
 
-function beginSurface(asyncState, state, fingerprint, now) {
+function beginSurface(
+  asyncState,
+  state,
+  fingerprint,
+  now,
+  provider = 'route-geometry-segments',
+) {
   return asyncState.beginECSAsyncSurfaceRequest(state, {
     requestFingerprint: fingerprint,
-    provider: 'route-geometry-segments',
+    provider,
     now,
   });
 }
@@ -894,6 +900,7 @@ async function verifyMvumAndRouteGeometryScenario() {
   );
   const mvum = loader.load(path.join(ROOT, 'src', 'features', 'navigate', 'mvum', 'index.ts'));
   const viewport = loader.load(path.join(ROOT, 'lib', 'routeGeometryViewport.ts'));
+  const routeCatalog = loader.load(path.join(ROOT, 'lib', 'routeCatalogViewport.ts'));
   const bounds = { west: -121, south: 38, east: -120, north: 39 };
   const bbox = {
     minLatitude: bounds.south,
@@ -915,6 +922,22 @@ async function verifyMvumAndRouteGeometryScenario() {
     online: true,
   });
   assert.strictEqual(plan.status, 'fetch_viewport');
+  assert.strictEqual(
+    mvum.planNavigateMvumViewportFetch({ enabled: true, bbox, zoom: 8, online: true }).status,
+    'zoom_deferred',
+    'MVUM should remain deferred at the wider ECS route-catalog zoom.',
+  );
+
+  const routeCatalogQuery = routeCatalog.buildRouteCatalogViewportQuery({
+    bbox: clientBbox,
+    zoom: 8,
+    limit: 100,
+  });
+  assert.strictEqual(
+    routeCatalog.isRouteCatalogViewportZoomEligible(routeCatalogQuery.zoom),
+    true,
+    'Suggested ECS routes should be eligible farther out than close-detail MVUM segments.',
+  );
 
   const rawViewportResponse = {
     ok: true,
@@ -945,6 +968,45 @@ async function verifyMvumAndRouteGeometryScenario() {
   const normalized = viewport.normalizeRouteGeometryViewportResponse(rawViewportResponse);
   assert.strictEqual(normalized.segments.length, 1);
 
+  const rawRouteCatalogResponse = {
+    ok: true,
+    records: [{
+      id: 'runtime-catalog-route',
+      public_id: 'runtime-catalog-route',
+      name: 'Runtime Suggested Route',
+      route_type: 'point_to_point',
+      center_latitude: 38.5,
+      center_longitude: -120.5,
+      distance_miles: 14.2,
+      official_access_coverage_pct: 100,
+      unknown_access_coverage_pct: 0,
+      restricted_access_coverage_pct: 0,
+      active_closure_count: 0,
+      seasonal_restriction_count: 0,
+      vehicle_mismatch: false,
+      geometry_quality: 'full',
+      verification_status: 'official_verified',
+      recommendation_status: 'recommendable',
+      review_status: 'approved',
+      confidence_score: 92,
+      tags: ['runtime', 'route_catalog'],
+      source_records: [{
+        provider_id: 'usfs_mvum',
+        label: 'USFS MVUM',
+        source_type: 'federal_agency',
+        authority: 'USFS MVUM official agency source',
+        last_verified_at: '2026-07-15T12:00:00.000Z',
+      }],
+      route_geometry_mode: 'full',
+      route_geometry: {
+        type: 'LineString',
+        coordinates: [[-120.8, 38.2], [-120.5, 38.5], [-120.2, 38.8]],
+      },
+      updated_at: '2026-07-15T12:00:00.000Z',
+      created_at: '2026-07-15T12:00:00.000Z',
+    }],
+  };
+
   let mvumClientRequest = null;
   const mvumClient = createTypeScriptLoader({
     '../../../../lib/routeGeometryViewportClient': {
@@ -969,6 +1031,7 @@ async function verifyMvumAndRouteGeometryScenario() {
   assert.strictEqual(mvumClientRequest.includeReferenceGeometry, true);
   assert.strictEqual(mvumClientRequest.signal, mvumAbortController.signal);
 
+  let mvumProviderFunction = null;
   const successfulViewportClient = createTypeScriptLoader({
     './supabase': {
       EDGE_FUNCTION_UNAVAILABLE_CODE: 'EDGE_FUNCTION_UNAVAILABLE',
@@ -977,7 +1040,10 @@ async function verifyMvumAndRouteGeometryScenario() {
       isSupabaseConfigured: true,
       supabase: {
         functions: {
-          invoke: async () => ({ data: rawViewportResponse, error: null }),
+          invoke: async (name) => {
+            mvumProviderFunction = name;
+            return { data: rawViewportResponse, error: null };
+          },
         },
       },
     },
@@ -990,7 +1056,50 @@ async function verifyMvumAndRouteGeometryScenario() {
   assert.strictEqual(
     fetchedRouteGeometry.segments.length,
     1,
-    'The mounted Route Geometry provider client must normalize a successful fixture.',
+    'The MVUM provider client must normalize a successful segment fixture.',
+  );
+  assert.strictEqual(
+    mvumProviderFunction,
+    'route-geometry-segments',
+    'MVUM must continue to use the canonical segment endpoint.',
+  );
+
+  let routeCatalogProviderFunction = null;
+  let routeCatalogProviderBody = null;
+  const successfulRouteCatalogClient = createTypeScriptLoader({
+    './ecsLogger': { ecsLog: noOpLogger },
+    './supabase': {
+      EDGE_FUNCTION_UNAVAILABLE_CODE: 'EDGE_FUNCTION_UNAVAILABLE',
+      SUPABASE_CONFIG_UNAVAILABLE_CODE: 'SUPABASE_CONFIG_UNAVAILABLE',
+      isDeployedEdgeFunction: name => name === 'route-catalog-search',
+      isSupabaseConfigured: true,
+      supabase: {
+        functions: {
+          invoke: async (name, options) => {
+            routeCatalogProviderFunction = name;
+            routeCatalogProviderBody = options.body;
+            return { data: rawRouteCatalogResponse, error: null };
+          },
+        },
+      },
+    },
+  }).load(path.join(ROOT, 'lib', 'routeCatalogViewportClient.ts'));
+  const fetchedRouteCatalog = await successfulRouteCatalogClient.fetchRouteCatalogViewportFeatures(
+    routeCatalogQuery,
+    { timeoutMs: 250 },
+  );
+  assert.strictEqual(routeCatalogProviderFunction, 'route-catalog-search');
+  assert.strictEqual(routeCatalogProviderBody.locationSource, 'navigate_ecs_route_geometry_viewport');
+  assert.strictEqual(fetchedRouteCatalog.returnedCount, 1);
+  assert.strictEqual(fetchedRouteCatalog.guidanceReadyCount, 1);
+  assert.strictEqual(
+    fetchedRouteCatalog.featureCollection.features[0].properties.routeId,
+    'runtime-catalog-route',
+  );
+  assert.notStrictEqual(
+    routeCatalogProviderFunction,
+    mvumProviderFunction,
+    'ECS Route Geometry and MVUM must retain independent provider paths.',
   );
 
   let mvumState = asyncState.createECSAsyncSurfaceState({
@@ -1009,17 +1118,50 @@ async function verifyMvumAndRouteGeometryScenario() {
 
   let routeState = asyncState.createECSAsyncSurfaceState({
     surfaceId: 'navigate_route_geometry',
-    provider: 'route-geometry-segments',
+    provider: 'route-catalog-search',
     now: 1_000,
   });
-  routeState = beginSurface(asyncState, routeState, 'route-viewport-a', 1_010);
-  routeState = settleSurface(asyncState, routeState, 'empty', {
-    data: { ...normalized, segments: [] },
-    resultCount: 0,
+  routeState = beginSurface(
+    asyncState,
+    routeState,
+    routeCatalogQuery.cacheKey,
+    1_010,
+    'route-catalog-search',
+  );
+  routeState = settleSurface(asyncState, routeState, 'ready', {
+    data: fetchedRouteCatalog,
+    resultCount: fetchedRouteCatalog.returnedCount,
     now: 1_020,
   });
-  assert.strictEqual(routeState.status, 'empty');
-  assert.strictEqual(routeState.resultCount, 0);
+  assert.strictEqual(routeState.status, 'ready');
+  assert.strictEqual(routeState.resultCount, 1);
+
+  let routeEmpty = asyncState.createECSAsyncSurfaceState({
+    surfaceId: 'navigate_route_geometry',
+    provider: 'route-catalog-search',
+    now: 1_100,
+  });
+  routeEmpty = beginSurface(
+    asyncState,
+    routeEmpty,
+    'route-catalog-empty',
+    1_110,
+    'route-catalog-search',
+  );
+  routeEmpty = settleSurface(asyncState, routeEmpty, 'empty', {
+    data: {
+      ...fetchedRouteCatalog,
+      featureCollection: { type: 'FeatureCollection', features: [] },
+      returnedCount: 0,
+      lineFeatureCount: 0,
+      markerFeatureCount: 0,
+      guidanceReadyCount: 0,
+    },
+    resultCount: 0,
+    now: 1_120,
+  });
+  assert.strictEqual(routeEmpty.status, 'empty');
+  assert.strictEqual(routeEmpty.resultCount, 0);
 
   let mvumFailure = asyncState.createECSAsyncSurfaceState({
     surfaceId: 'navigate_mvum_segments',
@@ -1039,10 +1181,16 @@ async function verifyMvumAndRouteGeometryScenario() {
 
   let routeFailure = asyncState.createECSAsyncSurfaceState({
     surfaceId: 'navigate_route_geometry',
-    provider: 'route-geometry-segments',
+    provider: 'route-catalog-search',
     now: 2_000,
   });
-  routeFailure = beginSurface(asyncState, routeFailure, 'route-provider-error', 2_010);
+  routeFailure = beginSurface(
+    asyncState,
+    routeFailure,
+    'route-provider-error',
+    2_010,
+    'route-catalog-search',
+  );
   routeFailure = settleSurface(asyncState, routeFailure, 'error', {
     resultCount: 0,
     safeErrorCode: 'ROUTE_GEOMETRY_PROVIDER_UNAVAILABLE',
@@ -1055,12 +1203,13 @@ async function verifyMvumAndRouteGeometryScenario() {
   const presentations = [
     asyncPresentation.resolveECSAsyncSurfacePresentation(mvumState, { subject: 'MVUM segments' }),
     asyncPresentation.resolveECSAsyncSurfacePresentation(routeState, { subject: 'ECS route geometry' }),
+    asyncPresentation.resolveECSAsyncSurfacePresentation(routeEmpty, { subject: 'ECS route geometry' }),
     asyncPresentation.resolveECSAsyncSurfacePresentation(mvumFailure, { subject: 'MVUM segments' }),
     asyncPresentation.resolveECSAsyncSurfacePresentation(routeFailure, { subject: 'ECS route geometry' }),
   ];
   assert.deepStrictEqual(
     presentations.map(entry => entry.kind),
-    ['ready', 'empty', 'provider_unavailable', 'provider_unavailable'],
+    ['ready', 'ready', 'empty', 'provider_unavailable', 'provider_unavailable'],
   );
   assert(
     presentations.every(entry => entry.terminal && !entry.showSpinner),
@@ -1069,29 +1218,54 @@ async function verifyMvumAndRouteGeometryScenario() {
 
   const coordinator = new NavigateMapLayerCoordinator();
   const oldRequest = scheduleLayer(coordinator, 'mvum', 'viewport-old', bounds, 3_000);
-  const routeRequest = scheduleLayer(coordinator, 'route_geometry', 'viewport-route', bounds, 3_000);
+  const oldRouteRequest = scheduleLayer(coordinator, 'route_geometry', 'route-catalog-old', bounds, 3_000);
   assert.strictEqual(coordinator.activeRequestCount, 2, 'The layer requests must remain independent.');
   const replacement = scheduleLayer(coordinator, 'mvum', 'viewport-new', bounds, 3_001);
+  const routeReplacement = scheduleLayer(
+    coordinator,
+    'route_geometry',
+    routeCatalogQuery.cacheKey,
+    bounds,
+    3_001,
+  );
   assert.strictEqual(oldRequest.signal.aborted, true, 'A new viewport must abort stale MVUM work.');
+  assert.strictEqual(
+    oldRouteRequest.signal.aborted,
+    true,
+    'A new route-catalog viewport must abort only stale ECS Route Geometry work.',
+  );
   assert.strictEqual(
     coordinator.complete(oldRequest, { itemCount: 99, sourceState: 'live', updatedAt: 3_002 }),
     false,
     'A stale viewport result must be rejected.',
   );
+  assert.strictEqual(
+    coordinator.complete(oldRouteRequest, { itemCount: 99, sourceState: 'live', updatedAt: 3_002 }),
+    false,
+    'A stale route-catalog response must be rejected independently.',
+  );
   assert.strictEqual(coordinator.complete(replacement, { itemCount: 1, sourceState: 'live', updatedAt: 3_003 }), true);
-  assert.strictEqual(coordinator.complete(routeRequest, { itemCount: 0, sourceState: 'live', updatedAt: 3_003 }), true);
+  assert.strictEqual(
+    coordinator.complete(routeReplacement, {
+      itemCount: fetchedRouteCatalog.returnedCount,
+      sourceState: 'live',
+      updatedAt: 3_003,
+    }),
+    true,
+  );
   assert.strictEqual(coordinator.getState('mvum').loading, false);
   assert.strictEqual(coordinator.getState('mvum').itemCount, 1);
   assert.strictEqual(coordinator.getState('route_geometry').loading, false);
-  assert.strictEqual(coordinator.getState('route_geometry').itemCount, 0);
-  assert.strictEqual(coordinator.getDiagnostics().staleResponseCount, 1);
+  assert.strictEqual(coordinator.getState('route_geometry').itemCount, 1);
+  assert.strictEqual(coordinator.getDiagnostics().staleResponseCount, 2);
 
   let providerSignal = null;
   const providerLoader = createTypeScriptLoader({
+    './ecsLogger': { ecsLog: noOpLogger },
     './supabase': {
       EDGE_FUNCTION_UNAVAILABLE_CODE: 'EDGE_FUNCTION_UNAVAILABLE',
       SUPABASE_CONFIG_UNAVAILABLE_CODE: 'SUPABASE_CONFIG_UNAVAILABLE',
-      isDeployedEdgeFunction: () => true,
+      isDeployedEdgeFunction: name => name === 'route-catalog-search',
       isSupabaseConfigured: true,
       supabase: {
         functions: {
@@ -1104,7 +1278,7 @@ async function verifyMvumAndRouteGeometryScenario() {
     },
   });
   const viewportClient = providerLoader.load(
-    path.join(ROOT, 'lib', 'routeGeometryViewportClient.ts'),
+    path.join(ROOT, 'lib', 'routeCatalogViewportClient.ts'),
   );
   const timeoutRequest = scheduleLayer(
     coordinator,
@@ -1115,9 +1289,7 @@ async function verifyMvumAndRouteGeometryScenario() {
   );
   let timeoutError = null;
   try {
-    await viewportClient.fetchRouteGeometryViewportSegments({
-      bbox: { minLng: -121, minLat: 38, maxLng: -120, maxLat: 39 },
-      zoom: 12,
+    await viewportClient.fetchRouteCatalogViewportFeatures(routeCatalogQuery, {
       timeoutMs: 15,
     });
   } catch (error) {
@@ -1125,8 +1297,8 @@ async function verifyMvumAndRouteGeometryScenario() {
   }
   assert.strictEqual(
     timeoutError?.name,
-    'RouteGeometryViewportTimeoutError',
-    'A non-settling layer provider must fail through the bounded timeout path.',
+    'RouteCatalogViewportTimeoutError',
+    'A non-settling route-catalog provider must fail through the bounded timeout path.',
   );
   assert.strictEqual(
     coordinator.fail(timeoutRequest, timeoutError, {
@@ -1137,7 +1309,12 @@ async function verifyMvumAndRouteGeometryScenario() {
   );
   assert.strictEqual(coordinator.getState('route_geometry').loading, false);
   assert.strictEqual(coordinator.getState('route_geometry').sourceState, 'unavailable');
-  assert.strictEqual(providerSignal?.aborted, true, 'Provider timeout must abort its transport signal.');
+  assert.strictEqual(providerSignal?.aborted, true, 'Route-catalog timeout must abort its transport signal.');
+  assert.strictEqual(
+    coordinator.getState('mvum').itemCount,
+    1,
+    'A route-catalog timeout must not contaminate the completed MVUM layer state.',
+  );
 }
 
 const SCENARIOS = Object.freeze([
@@ -1188,7 +1365,7 @@ const SCENARIOS = Object.freeze([
   {
     scenario: 'mvum_and_route_geometry',
     qualifiedTestIdentity: 'ecs.runtime.fast.navigate_layers.independent_terminals_and_stale_viewport',
-    sourceFixtureProvider: 'fixture:route_geometry_segments_normalized',
+    sourceFixtureProvider: 'fixture:mvum_segments_ecs_route_catalog',
     failureSafeCode: 'navigate_layers_behavior_failed',
     deviceEvidenceStillRequired: [
       'mapbox_source_layer_rendering_evidence',

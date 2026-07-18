@@ -35,8 +35,9 @@ assert.ok(
   'A rejected full spine may fall back only to the separately validated canonical trail, not older raw preview geometry.',
 );
 assert.ok(
-  (screen.match(/routePreviewPoints=\{selectedPreparedRoutePoints\}/g) ?? []).length >= 3,
-  'Generated Trip Map, Camp Plan, and Bailout Plan should consume the same prepared primary spine.',
+  screen.includes('routePreviewPoints={selectedTripPlanOutputPoints}') &&
+    (screen.match(/routePreviewPoints=\{selectedPreparedRoutePoints\}/g) ?? []).length === 2,
+  'The generated Trip Map should use the full output spine while the pre-build Camp and Bailout pickers share the prepared trail reference.',
 );
 assert.ok(
   !screen.includes('const fallbackPoints = markers'),
@@ -95,10 +96,31 @@ assert.ok(
   'Camp and bailout pickers should retain the lightweight route line only as a truthful offline/token fallback.',
 );
 assert.ok(
-  !screen.includes('TripBuilderPickerMapStyleSwitch') &&
-    !screen.includes('TRIP_BUILDER_PICKER_MAP_STYLES') &&
-    !screen.includes('pickerMapStyle'),
-  'Reference pickers should not expose stale Mapbox Day/Satellite controls when using the non-WebView surface.',
+  screen.includes("const TRIP_BUILDER_PLANNING_MAP_STYLE_KEYS = ['ecs', 'satellite'] as const") &&
+    screen.includes('label: MAP_STYLES.find((style) => style.key === key)?.label ?? key'),
+  'Camp and bailout planning maps should expose only the canonical Default Day and Satellite styles.',
+);
+assert.ok(
+  (screen.match(/const \[planningMapStyle, setPlanningMapStyle\] = useState/g) ?? []).length === 1 &&
+    (screen.match(/mapStyle=\{planningMapStyle\}/g) ?? []).length === 2 &&
+    (screen.match(/onMapStyleChange=\{setPlanningMapStyle\}/g) ?? []).length === 2,
+  'Camp and bailout pickers should share one screen-owned map-style preference.',
+);
+assert.ok(
+  (screen.match(/<TripBuilderPlanningMapStyleSelector/g) ?? []).length === 2 &&
+    (screen.match(/mapStyle=\{mapStyle\}/g) ?? []).length === 2,
+  'Both picker maps should render the shared style selector and pass the selected style to MapRenderer.',
+);
+assert.ok(
+  screen.includes('accessibilityState={{ selected, disabled: !available }}') &&
+    screen.includes('minHeight: 44') &&
+    screen.includes('testID={`trip-builder-planning-map-style-${style.key}`}'),
+  'Planning map style actions should expose selected/disabled state and retain valid touch targets.',
+);
+assert.ok(
+  (screen.match(/available=\{!!mapboxToken && pickerRoutePoints.length > 0\}/g) ?? []).length === 2 &&
+    screen.includes('ECS is showing the offline route reference.'),
+  'Style actions should disable truthfully when only the offline/token fallback can render.',
 );
 
 console.log('Trip Builder map route spine checks passed.');

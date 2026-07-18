@@ -11,20 +11,19 @@ function assert(condition, message) {
 }
 
 assert(
-  source.includes('const RECENTER_HINT_VISIBLE_MS = 3400;') &&
-    source.includes('const RECENTER_HINT_FADE_MS = ECS_MOTION.intelBarFadeOut;') &&
-    source.includes('let recenterHintSeenThisSession = false;'),
-  'Compass recenter hint should use a short first-session display window and ECS motion timing.',
+  !source.includes("'LOCKED'") &&
+    !source.includes("'TAP TO CENTER'") &&
+    !source.includes('styles.recenterHint') &&
+    !source.includes('styles.recenterHintText') &&
+    !source.includes('recenterHintSeenThisSession') &&
+    !source.includes('tapHintVisible'),
+  'Compass must not render an external lock or recenter-helper container above the dial.',
 );
 
 assert(
-  source.includes('const dismissTapHint = useCallback(() => {') &&
-    source.includes('ECS_EASE.accelerate') &&
-    source.includes('recenterHintSeenThisSession = true;') &&
-    source.includes('const handlePress = () => {') &&
-    source.includes('dismissTapHint();') &&
+  source.includes('const handlePress = () => {') &&
     source.includes('onPress?.();'),
-  'Compass press should still call the recenter handler and fade the hint as seen.',
+  'Removing the helper container must preserve the compass recenter action.',
 );
 
 assert(
@@ -35,37 +34,18 @@ assert(
 );
 
 assert(
-  source.includes('pointerEvents="none"') &&
-    source.includes('accessible={false}') &&
-    source.includes('importantForAccessibility="no"') &&
-    source.includes('const showRecenterHint = !paused && (isStationaryLocked || tapHintVisible);') &&
-    source.includes('const persistentRecenterHint = isStationaryLocked;') &&
-    source.includes('style={styles.recenterHint}') &&
-    source.includes('style={[styles.recenterHint, { opacity: hintFadeAnim }]}') &&
-    !source.includes('POWER SAVE') &&
-    !source.includes("'PAUSED'"),
-  'Recenter helper label must not intercept compass touch events, and paused power-save state should not render a space-taking visual pill.',
+  source.includes('if (!visible || paused || isStationaryLocked) return;') &&
+    source.includes('if (!visible || paused || isStationaryLocked) {') &&
+    source.includes('rotateAnim.stopAnimation();'),
+  'Stationary lock must remain an internal heading-freeze state rather than an external visual badge.',
 );
 
 assert(
-    source.includes('bottom: COMPASS_SIZE + 6') &&
-    source.includes("overflow: 'visible'") &&
+  source.includes("overflow: 'visible'") &&
     source.includes('height: COMPASS_SIZE') &&
     source.includes('position: \'absolute\',\n    bottom: 0,\n    left: 0,\n    width: COMPASS_SIZE') &&
-    source.includes('left: -14') &&
-    source.includes('right: -14') &&
-    source.includes('minHeight: 20') &&
-    source.includes('lineHeight: 12') &&
-    source.includes('zIndex: 9') &&
-    source.includes('elevation: 9') &&
-    !source.includes('top: COMPASS_SIZE + 6'),
-  'Recenter helper label should sit above the compass when shown while the compass itself keeps compact Android bounds.',
-);
-
-assert(
-  source.includes("backgroundColor: 'rgba(11,15,18,0.72)'") &&
-    source.includes("color: 'rgba(214,208,190,0.76)'"),
-  'Recenter helper label should be visually subtle.',
+    !source.includes('bottom: COMPASS_SIZE + 6'),
+  'Compass layout must be limited to the dial instead of reserving space for an external status pill.',
 );
 
 assert(
@@ -76,4 +56,4 @@ assert(
   'Compass should surface whether the live heading is coming from GPS, device compass, or no fix.',
 );
 
-console.log('navigate compass recenter hint regression passed');
+console.log('navigate compass presentation regression passed');

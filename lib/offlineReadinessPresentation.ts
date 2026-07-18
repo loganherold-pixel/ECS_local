@@ -193,6 +193,26 @@ function routeIntentLayerSet(route: OfflineCachedRoute, region?: OfflineReadines
   return layers;
 }
 
+function offlineRouteRegionIds(route: OfflineCachedRoute | null | undefined): string[] {
+  return Array.from(new Set([
+    ...(route?.offlineTileRegionIds ?? []),
+    ...(route?.offlineTileRegionId ? [route.offlineTileRegionId] : []),
+  ]));
+}
+
+function requiredRegionsComplete(
+  regionIds: string[],
+  regions: OfflineReadinessTileRegion[],
+): boolean {
+  if (regionIds.length === 0) return false;
+  return regionIds.every((regionId) => {
+    const region = regions.find((candidate) => candidate.id === regionId);
+    return !!region &&
+      region.status === 'complete' &&
+      (region.tileCount == null || region.downloadedTiles == null || region.downloadedTiles >= region.tileCount);
+  });
+}
+
 function routeIntentStyleKey(intent: unknown): string | null {
   return getString(getRecord(getRecord(intent)?.mapContext)?.styleKey);
 }
@@ -210,8 +230,9 @@ function findRegionForRoute(
   regions: OfflineReadinessTileRegion[],
 ): OfflineReadinessTileRegion | null {
   if (!route) return null;
-  const explicit = route.offlineTileRegionId
-    ? regions.find((region) => region.id === route.offlineTileRegionId)
+  const explicitRegionIds = offlineRouteRegionIds(route);
+  const explicit = explicitRegionIds.length > 0
+    ? regions.find((region) => explicitRegionIds.includes(region.id))
     : null;
   if (explicit) return explicit;
   return regions.find((region) => {
@@ -233,7 +254,11 @@ function findMatchingRoute(
   current: OfflineReadinessRouteContext | null | undefined,
   routes: OfflineCachedRoute[],
 ): OfflineCachedRoute | null {
-  const routeSyncs = routes.filter((route) => route.routeIntent?.syncType === 'route' || route.offlineTileRegionId);
+  const routeSyncs = routes.filter((route) => (
+    route.routeIntent?.syncType === 'route' ||
+    route.offlineTileRegionId ||
+    (route.offlineTileRegionIds?.length ?? 0) > 0
+  ));
   return routeSyncs.find((route) => routeContextMatchesRoute(current, route)) ?? null;
 }
 
@@ -242,8 +267,12 @@ function findMatchingJob(
   route: OfflineCachedRoute | null,
   jobs: OfflineReadinessTileSyncJob[],
 ): OfflineReadinessTileSyncJob | null {
+  const explicitRegionIds = new Set([
+    ...(route?.offlineTileRegionIds ?? []),
+    ...(route?.offlineTileRegionId ? [route.offlineTileRegionId] : []),
+  ]);
   return jobs.find((job) => {
-    if (route?.offlineTileRegionId && job.regionId === route.offlineTileRegionId) return true;
+    if (explicitRegionIds.has(job.regionId)) return true;
     if (job.syncType !== 'route' && job.source !== 'route-corridor') return false;
     return routeContextMatchesIntent(current, job.routeIntent);
   }) ?? null;
@@ -386,13 +415,17 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
   const manifestDestination = getCoordinate(input.runCacheManifest?.gpx_metadata?.final_destination);
   const manifestMatches =
     routeContextMatchesIntent(current, manifestIntent) || destinationMatches(current, manifestDestination);
-  const manifestRegion = input.runCacheManifest?.tile_region_id
-    ? regions.find((region) => region.id === input.runCacheManifest?.tile_region_id) ?? null
+  const manifestRegionIds = dedupe([
+    ...(input.runCacheManifest?.tile_region_ids ?? []),
+    input.runCacheManifest?.tile_region_id ?? null,
+  ]);
+  const manifestRegion = manifestRegionIds.length > 0
+    ? regions.find((region) => manifestRegionIds.includes(region.id)) ?? null
     : null;
 
   if (!matchingRoute && manifestMatches) {
-    const manifestTilesComplete =
-      input.runCacheManifest?.tile_cache_status === 'complete' || manifestRegion?.status === 'complete';
+    const manifestTilesComplete = input.runCacheManifest?.tile_cache_status === 'complete' &&
+      requiredRegionsComplete(manifestRegionIds, regions);
     const manifestProgress = resolveProgressPercent(null, manifestRegion);
     if (!manifestTilesComplete) {
       return {
@@ -429,8 +462,11 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
     );
   }
 
-  const regionComplete = matchingRegion?.status === 'complete';
-  const routeTilesComplete = matchingRoute?.tileCacheStatus === 'complete' || regionComplete;
+  const matchingRouteRegionIds = offlineRouteRegionIds(matchingRoute);
+  const regionComplete = matchingRouteRegionIds.length > 0
+    ? requiredRegionsComplete(matchingRouteRegionIds, regions)
+    : matchingRegion?.status === 'complete';
+  const routeTilesComplete = matchingRoute?.tileCacheStatus === 'complete' && regionComplete;
   if (matchingRoute && routeTilesComplete) {
     const cachedStyle = matchingRoute.routeIntent?.mapContext?.styleKey ?? matchingRegion?.styleKey ?? null;
     if (current.mapStyle && cachedStyle && current.mapStyle !== cachedStyle) {
@@ -501,7 +537,11 @@ function routeContextResult(input: OfflineReadinessInput): OfflineReadinessResul
 
   if (!matchingRoute) {
     const hasOtherRouteSync =
-      routes.some((route) => route.routeIntent?.syncType === 'route' || !!route.offlineTileRegionId) ||
+      routes.some((route) => (
+        route.routeIntent?.syncType === 'route' ||
+        !!route.offlineTileRegionId ||
+        (route.offlineTileRegionIds?.length ?? 0) > 0
+      )) ||
       regions.some((region) => region.syncType === 'route' || region.sourceType === 'route-corridor');
     return {
       level: 'not_ready',
@@ -633,12 +673,34 @@ function hasBaseMap(input: OfflineReadinessInput): boolean | null {
 }
 
 function hasGuidanceInstructions(input: OfflineReadinessInput): boolean | null {
+  if (input.offlineRoute?.roadGuidanceStatus != null) {
+    return (
+      input.offlineRoute.roadGuidanceStatus === 'cached_turn_by_turn' &&
+      Array.isArray(input.offlineRoute.preparedRoadRoute?.steps) &&
+      input.offlineRoute.preparedRoadRoute.steps.length > 0 &&
+      Array.isArray(input.offlineRoute.preparedRoadRoute?.legs) &&
+      input.offlineRoute.preparedRoadRoute.legs.length > 0
+    );
+  }
+
   const cues = input.offlineRoute?.turnCues;
   if (Array.isArray(cues)) return cues.length > 0;
 
   const manifest = input.runCacheManifest;
   if (manifest) {
-    return manifest.cache_status === 'cached' && Array.isArray(manifest.route_geometry) && manifest.route_geometry.length >= 2;
+    if (manifest.road_guidance_status != null) {
+      return (
+        manifest.road_guidance_status === 'cached_turn_by_turn' &&
+        Array.isArray(manifest.prepared_road_route?.steps) &&
+        manifest.prepared_road_route.steps.length > 0 &&
+        Array.isArray(manifest.prepared_road_route?.legs) &&
+        manifest.prepared_road_route.legs.length > 0
+      );
+    }
+    // Legacy geometry-only manifests do not prove that maneuver instructions
+    // were cached. Keep guidance unknown instead of promoting a route line to
+    // full offline turn-by-turn readiness.
+    return null;
   }
 
   return null;

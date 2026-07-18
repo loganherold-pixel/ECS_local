@@ -56,6 +56,7 @@ const REGISTERED_SOURCE_IDS = new Set([
   'fixture:route_builder_anchor_trace',
   'fixture:canonical_route_projection',
   'fixture:route_geometry_segments_normalized',
+  'fixture:mvum_segments_ecs_route_catalog',
   'isolated_dispatch_persistence_fixture',
   'deterministic_route_catalog_fixture',
   'controlled_route_provider_failure_fixture',

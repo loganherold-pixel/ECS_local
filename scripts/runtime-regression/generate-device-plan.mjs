@@ -52,7 +52,7 @@ export const DEVICE_PLAN_CHECKLIST = Object.freeze([
     qualifiedTestIdentity: 'runtime-regression.device-plan.navigate-layers-real-map-provider',
     deviceEvidenceStillRequired: ['mapbox_native_render', 'supabase_edge_configured', 'rapid_pan_zoom', 'offline_layer_cache'],
     platforms: ['android', 'ios'],
-    steps: ['Toggle MVUM and ECS Route Geometry independently.', 'Pan and zoom rapidly and record bounded request and cancellation diagnostics.', 'Verify features or explicit empty/error/deferred state, then repeat offline for cache hit and miss.'],
+    steps: ['Enable MVUM, then select ECS Route Geometry and verify MVUM turns off; reverse the switch and verify ECS Route Geometry turns off.', 'Pan and zoom rapidly and record bounded request and cancellation diagnostics.', 'Verify features or explicit empty/error/deferred state for each selection, then repeat offline for cache hit and miss.'],
   },
   {
     scenario: 'dispatch_canonical_native_route',

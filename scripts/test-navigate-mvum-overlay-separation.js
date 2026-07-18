@@ -215,7 +215,9 @@ assert(
   'MVUM_OVERLAY_SOURCE_ID',
   'ensureMvumOverlayLayers',
   'updateMvumOverlay(payload.mvumOverlay || null)',
-  "map.queryRenderedFeatures(e.point, { layers: [MVUM_OVERLAY_SELECTED_LAYER_ID, MVUM_OVERLAY_LAYER_ID] })",
+  'map.queryRenderedFeatures(e.point, { layers: mvumQueryLayers })',
+  'MVUM_OVERLAY_HALO_LAYER_ID',
+  'var mvumTapRadius = 9',
 ].forEach((needle) => {
   assert(mapRendererSource.includes(needle), `MapRenderer should use dedicated MVUM source/layer wiring: ${needle}`);
 });
@@ -227,6 +229,11 @@ assert(
 assert(
   !mapRendererSource.includes("setGeoJson('navigate-mvum-source', selected"),
   'Selecting MVUM segments should not replace the full MVUM dataset.',
+);
+assert(
+  mapRendererSource.includes('dataSignature === mvumOverlayDataSignature') &&
+    mapRendererSource.includes('selectionSignature !== mvumOverlaySelectionSignature'),
+  'A selection-only update should update the yellow filter without rebuilding the MVUM source.',
 );
 
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));

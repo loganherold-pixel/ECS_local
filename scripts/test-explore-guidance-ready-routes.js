@@ -83,7 +83,7 @@ assert(
     discover.includes('canonicalExplorePlanningRoutes') &&
     discover.includes('const mapInventory = buildExploreGuidanceReadyInventory') &&
     readyInventory.includes('MIN_DISCOVERY_ROUTE_MILES'),
-  'Explore should expose a Guidance Ready route set while preserving the 5+ mile minimum.',
+  'Explore should expose a Guidance Ready route set while retaining the 5+ mile guidance policy.',
 );
 assert(
   readyInventory.includes('hasExploreGuidanceReadyGeometry') &&
@@ -134,8 +134,9 @@ assert(
 assert(
   (discover.match(/requireFullCatalogDetail: true/g) ?? []).length >= 3 &&
     discover.includes('saveExploreRouteForPlanning(hydratedCandidate)') &&
-    discover.includes("if (candidate.detailState === 'deferred')") &&
-    discover.includes("guardGuidanceReadyRouteHandoff(candidate.route, 'trip_builder_candidate')") &&
+    discover.includes('const handleOpenRouteCatalogSummaryTripBuilder') &&
+    discover.includes('classifyExploreRouteAvailability(routeForHandoff)') &&
+    discover.includes('stageTripBuilderItineraryHandoff(routeForHandoff)') &&
     discover.includes("pathname: '/explore-trip-builder'") &&
     discover.includes('Verified route detail could not be loaded. Retry when the route provider is available.'),
   'Deferred summaries should hand off directly while geometry-ready non-summary routes retain canonical hydrate/save normalization.',
@@ -243,6 +244,24 @@ const activeGuidanceReadySearchPreviewRoute = makeRoute('active-ready-search-pre
   },
 });
 const shortRoute = makeRoute('too-short', { distanceMiles: 3 });
+const shortRouteAvailability = classifyExploreRouteAvailability(shortRoute);
+assert.strictEqual(
+  shortRouteAvailability.discoverability.eligible,
+  true,
+  'A short approved summary should remain visible for selection and Trip Builder.',
+);
+assert.strictEqual(shortRouteAvailability.tripBuilder.eligible, true);
+assert.strictEqual(shortRouteAvailability.guidance.eligible, false);
+assert(
+  shortRouteAvailability.guidance.exclusionCodes.includes('too_short'),
+  'The minimum-length policy must remain a guidance-readiness exclusion.',
+);
+const shortRouteInventory = buildExploreGuidanceReadyInventory({
+  trailPacks: [shortRoute],
+  selectedRefinement: null,
+});
+assert.strictEqual(shortRouteInventory.totalDiscoverableCount, 1);
+assert.strictEqual(shortRouteInventory.totalReadyCount, 0);
 const privateRoute = makeRoute('private-route', {
   routeMetadata: { routeTypeStatus: 'private', routeGeometryMode: 'full' },
 });

@@ -141,7 +141,7 @@ assert.ok(
 
 assert.ok(
   toggleDispersedBlock.includes('setDispersedCampingUiState((current) => setCampLayerEnabled(current, next));') &&
-    toggleDispersedBlock.includes('dispersedCampingFetchCoordinatorRef.current.cancel();') &&
+    toggleDispersedBlock.includes("navigateMapLayerCoordinatorRef.current.cancel('dispersed_camping', 'operator_disabled');") &&
     !toggleDispersedBlock.includes('setDispersedCampingRegions([]);') &&
     toggleDispersedBlock.includes('setSelectedDispersedCampingRegion(null);') &&
     navigateSource.includes('renderKey: dispersedCampingEligibilityRenderKey'),
@@ -399,7 +399,7 @@ assert.ok(
     mapRendererSource.includes("map.moveLayer(layerId)") &&
     mapRendererSource.includes('ESTABLISHED_CAMPSITES_BACKPLATE_LAYER_ID') &&
     mapRendererSource.includes('ESTABLISHED_CAMPSITES_SYMBOL_LAYER_ID') &&
-    mapRendererSource.includes("'route-layer'") &&
+    mapRendererSource.includes('ACTIVE_GUIDANCE_ROUTE_LAYER_ID') &&
     mapRendererSource.includes('CAMP_SCOUT_LAYER_ID'),
   'Eligibility layer should be inserted beneath camp/search layers and active guidance should be promoted after camp layer updates.',
 );

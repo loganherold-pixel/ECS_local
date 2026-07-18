@@ -68,6 +68,7 @@ export type ApproachResupplyExclusionReason =
   | 'behind_origin'
   | 'after_remote_entry'
   | 'after_trailhead'
+  | 'excessive_corridor_offset'
   | 'excessive_detour';
 
 export type ApproachResupplyCandidate = {
@@ -175,13 +176,20 @@ export type RankApproachResupplyOptionsArgs = {
   candidates: ApproachResupplyCandidate[];
   limit?: number | null;
   maxRouteDeviationMiles?: number | null;
+  maxCorridorOffsetMiles?: number | null;
   preferredRouteBufferMiles?: number | null;
+  preferredRoutedDetourMiles?: number | null;
+  preferredCorridorOffsetMiles?: number | null;
   remoteEntry?: ApproachResupplyRemoteEntry | null;
   remoteEntryProgressRatio?: number | null;
   remoteEntryBufferMiles?: number | null;
 };
 
 export const APPROACH_RESUPPLY_POLICY = Object.freeze({
+  preferredCorridorOffsetMiles: 0.2,
+  preferredRoutedDetourMiles: 10,
+  maximumCorridorOffsetMiles: 20,
+  // Backward-compatible name for callers that still supply the routed-detour preference.
   preferredRouteBufferMiles: 10,
   maximumRouteDetourMiles: 20,
   maximumRemoteEntryProjectionOffsetMiles: 5,
@@ -640,14 +648,29 @@ function routeDetourScore(distanceMiles: number | null, maximumDetourMiles: numb
   return clamp01(1 - distanceMiles / maximumDetourMiles);
 }
 
-function operationalDetourBand(
-  distanceMiles: number | null,
-  preferredBufferMiles: number,
-  maximumDetourMiles: number,
+function operationalRouteFitBand(
+  routeEvidenceState: ApproachResupplyRouteEvidenceState,
+  routedDetourMiles: number | null,
+  corridorOffsetMiles: number | null,
+  preferredRoutedDetourMiles: number,
+  maximumRoutedDetourMiles: number,
+  preferredCorridorOffsetMiles: number,
+  maximumCorridorOffsetMiles: number,
 ): number {
+  const distanceMiles = routeEvidenceState === 'provider_route'
+    ? routedDetourMiles
+    : routeEvidenceState === 'corridor_offset_estimate'
+      ? corridorOffsetMiles
+      : null;
+  const preferredMiles = routeEvidenceState === 'provider_route'
+    ? preferredRoutedDetourMiles
+    : preferredCorridorOffsetMiles;
+  const maximumMiles = routeEvidenceState === 'provider_route'
+    ? maximumRoutedDetourMiles
+    : maximumCorridorOffsetMiles;
   if (distanceMiles == null) return 2;
-  if (distanceMiles <= preferredBufferMiles) return 0;
-  if (distanceMiles <= maximumDetourMiles) return 1;
+  if (distanceMiles <= preferredMiles) return 0;
+  if (distanceMiles <= maximumMiles) return 1;
   return 3;
 }
 
@@ -783,7 +806,10 @@ export function evaluateApproachResupplyOptions({
   candidates,
   limit = 5,
   maxRouteDeviationMiles = APPROACH_RESUPPLY_POLICY.maximumRouteDetourMiles,
-  preferredRouteBufferMiles = APPROACH_RESUPPLY_POLICY.preferredRouteBufferMiles,
+  maxCorridorOffsetMiles = APPROACH_RESUPPLY_POLICY.maximumCorridorOffsetMiles,
+  preferredRouteBufferMiles = null,
+  preferredRoutedDetourMiles = null,
+  preferredCorridorOffsetMiles = APPROACH_RESUPPLY_POLICY.preferredCorridorOffsetMiles,
   remoteEntry = null,
   remoteEntryProgressRatio = null,
 }: RankApproachResupplyOptionsArgs): ApproachResupplyInventory {
@@ -796,11 +822,19 @@ export function evaluateApproachResupplyOptions({
   const remoteEntryMeters = totalMeters > 0 && resolvedRemoteEntry.progressRatio != null
     ? totalMeters * resolvedRemoteEntry.progressRatio
     : null;
-  const maximumDetour = finiteNonNegative(maxRouteDeviationMiles) ??
+  const maximumRoutedDetour = finiteNonNegative(maxRouteDeviationMiles) ??
     APPROACH_RESUPPLY_POLICY.maximumRouteDetourMiles;
-  const preferredBuffer = Math.min(
-    maximumDetour,
-    finiteNonNegative(preferredRouteBufferMiles) ?? APPROACH_RESUPPLY_POLICY.preferredRouteBufferMiles,
+  const maximumCorridorOffset = finiteNonNegative(maxCorridorOffsetMiles) ??
+    APPROACH_RESUPPLY_POLICY.maximumCorridorOffsetMiles;
+  const preferredRoutedDetour = Math.min(
+    maximumRoutedDetour,
+    finiteNonNegative(preferredRoutedDetourMiles) ??
+      finiteNonNegative(preferredRouteBufferMiles) ??
+      APPROACH_RESUPPLY_POLICY.preferredRoutedDetourMiles,
+  );
+  const preferredCorridorOffset = Math.min(
+    maximumCorridorOffset,
+    finiteNonNegative(preferredCorridorOffsetMiles) ?? APPROACH_RESUPPLY_POLICY.preferredCorridorOffsetMiles,
   );
   const excluded: ApproachResupplyExcludedOption[] = [];
   const evaluated: ApproachResupplyRankedOption[] = [];
@@ -877,7 +911,15 @@ export function evaluateApproachResupplyOptions({
     if (routePosition === 'behind_origin') exclusionReasons.push('behind_origin');
     if (routePosition === 'after_remote_entry') exclusionReasons.push('after_remote_entry');
     if (routePosition === 'after_trailhead') exclusionReasons.push('after_trailhead');
-    if (routeDeviationMiles != null && routeDeviationMiles > maximumDetour) exclusionReasons.push('excessive_detour');
+    if (providerDetour != null && providerDetour > maximumRoutedDetour) {
+      exclusionReasons.push('excessive_detour');
+    } else if (
+      providerDetour == null &&
+      distanceFromApproachRouteMiles != null &&
+      distanceFromApproachRouteMiles > maximumCorridorOffset
+    ) {
+      exclusionReasons.push('excessive_corridor_offset');
+    }
 
     if (fallbackState === 'trailhead_only') {
       warnings.push('Approach route unavailable; ECS used trailhead proximity only. Route order, accessibility, and detour remain unknown.');
@@ -888,9 +930,25 @@ export function evaluateApproachResupplyOptions({
       }
       if (routeEvidenceState === 'corridor_offset_estimate') {
         warnings.push('Approach offset is geometric only; routed detour time and road access remain unverified.');
+        if (
+          distanceFromApproachRouteMiles != null &&
+          distanceFromApproachRouteMiles > preferredCorridorOffset &&
+          distanceFromApproachRouteMiles <= maximumCorridorOffset
+        ) {
+          warnings.push(
+            `Candidate is outside the preferred ${preferredCorridorOffset}-mile geometric approach corridor; keep it as a broader fallback and verify road access.`,
+          );
+        }
       }
-      if (routeDeviationMiles != null && routeDeviationMiles > preferredBuffer && routeDeviationMiles <= maximumDetour) {
-        warnings.push(`Candidate is outside the preferred ${preferredBuffer}-mile approach corridor; verify the routed detour.`);
+      if (
+        routeEvidenceState === 'provider_route' &&
+        providerDetour != null &&
+        providerDetour > preferredRoutedDetour &&
+        providerDetour <= maximumRoutedDetour
+      ) {
+        warnings.push(
+          `Provider-routed detour exceeds the preferred ${preferredRoutedDetour}-mile approach detour; keep it as a broader fallback and verify before selecting.`,
+        );
       }
     }
     if (operatingStatus === 'unknown') warnings.push('Hours and current operating availability are unknown; verify before departure.');
@@ -908,7 +966,10 @@ export function evaluateApproachResupplyOptions({
     const weights = APPROACH_RESUPPLY_POLICY.scoreWeights;
     const score =
       progressTowardRemoteEntry * weights.progressTowardRemoteEntry +
-      routeDetourScore(routeDeviationMiles, maximumDetour) *
+      routeDetourScore(
+        routeEvidenceState === 'provider_route' ? providerDetour : distanceFromApproachRouteMiles,
+        routeEvidenceState === 'provider_route' ? maximumRoutedDetour : maximumCorridorOffset,
+      ) *
         APPROACH_RESUPPLY_POLICY.routeEvidenceScoreMultiplier[routeEvidenceState] *
         weights.routeDetour +
       clamp01(coverage.length / 2) * weights.categoryCoverage +
@@ -949,8 +1010,23 @@ export function evaluateApproachResupplyOptions({
       const fallbackDelta = (left.fallbackState === 'approach_route' ? 0 : 1) -
         (right.fallbackState === 'approach_route' ? 0 : 1);
       if (fallbackDelta !== 0) return fallbackDelta;
-      const bandDelta = operationalDetourBand(left.routeDeviationMiles, preferredBuffer, maximumDetour) -
-        operationalDetourBand(right.routeDeviationMiles, preferredBuffer, maximumDetour);
+      const bandDelta = operationalRouteFitBand(
+        left.routeEvidenceState,
+        left.routeEvidenceState === 'provider_route' ? left.routeDeviationMiles : null,
+        left.distanceFromApproachRouteMiles,
+        preferredRoutedDetour,
+        maximumRoutedDetour,
+        preferredCorridorOffset,
+        maximumCorridorOffset,
+      ) - operationalRouteFitBand(
+        right.routeEvidenceState,
+        right.routeEvidenceState === 'provider_route' ? right.routeDeviationMiles : null,
+        right.distanceFromApproachRouteMiles,
+        preferredRoutedDetour,
+        maximumRoutedDetour,
+        preferredCorridorOffset,
+        maximumCorridorOffset,
+      );
       if (bandDelta !== 0) return bandDelta;
       const evidenceDelta = routeEvidenceBand(left.routeEvidenceState) - routeEvidenceBand(right.routeEvidenceState);
       if (evidenceDelta !== 0) return evidenceDelta;

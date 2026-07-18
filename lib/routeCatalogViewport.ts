@@ -13,8 +13,18 @@ import {
   type RouteGeometryOverlaySourceKind,
 } from './navigateRouteGeometryOverlay';
 import type { RouteSegmentSourceMetadata } from './map/dispersedCampingSegmentBuild';
+import type { RoadNavCoordinate } from './mapboxRoadNavigation';
+import { normalizeNavigationGuidanceGeometry } from './navigationCatalogGuidanceGeometry';
+import {
+  buildGuidanceRouteDistanceIndex,
+  findNearestPlausibleRouteProjection,
+  resolveGuidanceSnapToleranceMeters,
+  splitGuidanceRouteAtProjection,
+} from './navigation/guidanceRouteProjection';
+import { buildGeometryFingerprint } from './lifecycle/routeTripExpeditionLifecycle';
 
 export const ROUTE_CATALOG_VIEWPORT_DEFAULT_LIMIT = 500;
+export const ROUTE_CATALOG_VIEWPORT_MIN_ZOOM = 8;
 const ROUTE_CATALOG_VIEWPORT_MAX_LIMIT = 1000;
 const ROUTE_CATALOG_VIEWPORT_MIN_RADIUS_MILES = 15;
 const ROUTE_CATALOG_VIEWPORT_RADIUS_PADDING_MILES = 10;
@@ -101,6 +111,36 @@ export type RouteCatalogViewportResult = {
   skippedOutsideViewportCount: number;
   bboxFilterApplied: boolean;
   source: 'route_catalog';
+};
+
+export type RouteCatalogViewportSelection = {
+  routeId: string;
+  featureId: string;
+  overlaySegmentIds: string[];
+};
+
+export type RouteCatalogViewportGuidancePlan = {
+  status: 'ready' | 'unavailable';
+  reason: string | null;
+  canonicalGeometry: RoadNavCoordinate[];
+  remainingGeometry: RoadNavCoordinate[];
+  entryCoordinate: RoadNavCoordinate | null;
+  destinationCoordinate: RoadNavCoordinate | null;
+  entryDistanceFromRouteStartM: number;
+  entryDistanceFromOriginM: number | null;
+  requiresApproach: boolean;
+  snapToleranceM: number;
+  sourceSegmentCount: number;
+  joinedSegmentGapCount: number;
+};
+
+export type RouteCatalogViewportPersistencePlan = {
+  status: 'ready' | 'unavailable';
+  reason: string | null;
+  coordinates: [number, number][];
+  geometryFingerprint: string | null;
+  persistenceKey: string | null;
+  sourceMetadata: RouteSegmentSourceMetadata | null;
 };
 
 type BuildRouteCatalogViewportQueryInput = {
@@ -236,6 +276,11 @@ export function buildRouteCatalogViewportQuery(
     ...withoutCacheKey,
     cacheKey: routeCatalogViewportCacheKey(withoutCacheKey),
   };
+}
+
+export function isRouteCatalogViewportZoomEligible(zoom: unknown): boolean {
+  const parsed = finiteNumber(zoom);
+  return parsed != null && parsed >= ROUTE_CATALOG_VIEWPORT_MIN_ZOOM;
 }
 
 function normalizeCoordinatePair(value: unknown): [number, number] | null {
@@ -445,7 +490,17 @@ function featureForRoute(route: RouteCatalogRecord, query: RouteCatalogViewportQ
 
   const verification = verifyRouteCatalogRecord(route);
   const hasGuidanceGeometry = lines.length > 0 && route.routeGeometryMode !== 'preview_simplified';
-  const guidanceReady = hasGuidanceGeometry && verification.publicRecommendation && verification.blockers.length === 0;
+  const canonicalGeometry = hasGuidanceGeometry
+    ? normalizeNavigationGuidanceGeometry(route.routeGeometry, {
+        allowLoop: route.routeType === 'loop',
+      })
+    : null;
+  const guidanceReady =
+    hasGuidanceGeometry &&
+    canonicalGeometry?.status === 'ready' &&
+    canonicalGeometry.points.length > 1 &&
+    verification.publicRecommendation &&
+    verification.blockers.length === 0;
   const geometryStatus = geometryStatusForRoute(route, lines, guidanceReady);
   const properties = featurePropertiesForRoute(route, geometryStatus, guidanceReady);
   const lineGeometry = geometryFromLines(route, lines);
@@ -558,21 +613,191 @@ function metadataForFeature(feature: RouteCatalogViewportFeature): RouteSegmentS
   };
 }
 
-function lineFeatureToSegments(
-  feature: RouteCatalogViewportFeature,
-  selectedIds: Set<string>,
-): RouteGeometryOverlaySegment[] {
+function normalizedLinesForFeature(feature: RouteCatalogViewportFeature): NormalizedLine[] {
   if (feature.geometry.type === 'Point') return [];
-  const lines = feature.geometry.type === 'MultiLineString'
+  return feature.geometry.type === 'MultiLineString'
     ? (feature.geometry.coordinates as number[][][])
         .map(lineFromCoordinates)
         .filter((line) => line.length > 1)
     : [lineFromCoordinates(feature.geometry.coordinates)].filter((line) => line.length > 1);
+}
+
+function overlaySegmentIdsForFeature(
+  feature: RouteCatalogViewportFeature,
+  lineCount: number,
+): string[] {
+  return Array.from({ length: lineCount }, (_, index) =>
+    lineCount === 1
+      ? `route-catalog:${feature.properties.routeId}`
+      : `route-catalog:${feature.properties.routeId}:${index}`,
+  );
+}
+
+/**
+ * Resolves a tap or retained stable route identity into exactly one whole-route
+ * selection. MultiLineString parts are intentionally selected together; a new
+ * call replaces the prior result rather than accumulating route parts.
+ */
+export function resolveRouteCatalogViewportSelection(
+  featureCollection: RouteCatalogViewportFeatureCollection,
+  selectionIdentity: string | null | undefined,
+): RouteCatalogViewportSelection | null {
+  const identity = cleanText(selectionIdentity);
+  if (!identity) return null;
+
+  for (const feature of featureCollection.features) {
+    const lines = normalizedLinesForFeature(feature);
+    if (lines.length === 0) continue;
+    const overlaySegmentIds = overlaySegmentIdsForFeature(feature, lines.length);
+    const routeId = String(feature.properties.routeId);
+    if (
+      identity !== routeId &&
+      identity !== String(feature.id) &&
+      !overlaySegmentIds.includes(identity)
+    ) {
+      continue;
+    }
+    return {
+      routeId,
+      featureId: String(feature.id),
+      overlaySegmentIds,
+    };
+  }
+
+  return null;
+}
+
+function guidanceUnavailableReason(feature: RouteCatalogViewportFeature): string {
+  if (feature.properties.geometryStatus === 'preview_geometry') {
+    return 'Preview geometry cannot be used for active guidance.';
+  }
+  if (feature.properties.geometryStatus === 'trailhead_only') {
+    return 'This catalog route has a trailhead marker but no canonical route line.';
+  }
+  return 'Canonical guidance-ready route geometry is unavailable.';
+}
+
+export function buildRouteCatalogViewportGuidancePlan(
+  feature: RouteCatalogViewportFeature,
+  options: {
+    origin?: RoadNavCoordinate | null;
+    accuracyM?: number | null;
+  } = {},
+): RouteCatalogViewportGuidancePlan {
+  const canonical = normalizeNavigationGuidanceGeometry(feature.geometry, {
+    allowLoop: feature.properties.tripType === 'loop',
+  });
+  if (
+    !feature.properties.guidanceReady ||
+    canonical.status !== 'ready' ||
+    canonical.points.length < 2
+  ) {
+    return {
+      status: 'unavailable',
+      reason: canonical.unavailableReason ?? guidanceUnavailableReason(feature),
+      canonicalGeometry: [],
+      remainingGeometry: [],
+      entryCoordinate: null,
+      destinationCoordinate: null,
+      entryDistanceFromRouteStartM: 0,
+      entryDistanceFromOriginM: null,
+      requiresApproach: false,
+      snapToleranceM: resolveGuidanceSnapToleranceMeters({ context: 'trail', accuracyM: options.accuracyM }),
+      sourceSegmentCount: canonical.sourceSegmentCount,
+      joinedSegmentGapCount: canonical.joinedSegmentGapCount,
+    };
+  }
+
+  const routeIndex = buildGuidanceRouteDistanceIndex(canonical.points);
+  const projection =
+    options.origin && routeIndex.geometry.length > 1
+      ? findNearestPlausibleRouteProjection({
+          position: options.origin,
+          routeIndex,
+          accuracyM: options.accuracyM,
+        })
+      : null;
+  const snapToleranceM = resolveGuidanceSnapToleranceMeters({
+    context: 'trail',
+    accuracyM: options.accuracyM,
+  });
+  const requiresApproach = Boolean(
+    options.origin && (!projection || projection.distanceFromPositionM > snapToleranceM),
+  );
+  const split = splitGuidanceRouteAtProjection(routeIndex.geometry, projection);
+  const remainingGeometry = projection ? split.remaining : routeIndex.geometry;
+  const entryCoordinate = projection?.coordinate ?? routeIndex.geometry[0] ?? null;
+
+  return {
+    status: 'ready',
+    reason: null,
+    canonicalGeometry: routeIndex.geometry,
+    remainingGeometry,
+    entryCoordinate,
+    destinationCoordinate: remainingGeometry[remainingGeometry.length - 1] ?? null,
+    entryDistanceFromRouteStartM: projection?.distanceFromRouteStartM ?? 0,
+    entryDistanceFromOriginM: projection?.distanceFromPositionM ?? null,
+    requiresApproach,
+    snapToleranceM,
+    sourceSegmentCount: canonical.sourceSegmentCount,
+    joinedSegmentGapCount: canonical.joinedSegmentGapCount,
+  };
+}
+
+export function buildRouteCatalogViewportPersistencePlan(
+  feature: RouteCatalogViewportFeature,
+): RouteCatalogViewportPersistencePlan {
+  const guidance = buildRouteCatalogViewportGuidancePlan(feature);
+  if (guidance.status !== 'ready') {
+    return {
+      status: 'unavailable',
+      reason: guidance.reason,
+      coordinates: [],
+      geometryFingerprint: null,
+      persistenceKey: null,
+      sourceMetadata: null,
+    };
+  }
+
+  const geometryFingerprint = buildGeometryFingerprint(
+    guidance.canonicalGeometry,
+    `ecs-route-catalog:${feature.properties.routeId}`,
+  );
+  if (!geometryFingerprint) {
+    return {
+      status: 'unavailable',
+      reason: 'ECS route geometry fingerprint is unavailable.',
+      coordinates: [],
+      geometryFingerprint: null,
+      persistenceKey: null,
+      sourceMetadata: null,
+    };
+  }
+
+  return {
+    status: 'ready',
+    reason: null,
+    coordinates: guidance.canonicalGeometry.map(
+      (coordinate) => [coordinate.lng, coordinate.lat] as [number, number],
+    ),
+    geometryFingerprint,
+    persistenceKey: `${feature.properties.routeId}:${geometryFingerprint}`,
+    sourceMetadata: {
+      ...metadataForFeature(feature),
+      guidanceReady: true,
+    },
+  };
+}
+
+function lineFeatureToSegments(
+  feature: RouteCatalogViewportFeature,
+  selectedIds: Set<string>,
+): RouteGeometryOverlaySegment[] {
+  const lines = normalizedLinesForFeature(feature);
+  const overlaySegmentIds = overlaySegmentIdsForFeature(feature, lines.length);
 
   return lines.map((line, index) => {
-    const id = lines.length === 1
-      ? `route-catalog:${feature.properties.routeId}`
-      : `route-catalog:${feature.properties.routeId}:${index}`;
+    const id = overlaySegmentIds[index];
     const warnings = featureWarnings(feature);
     const sourceMetadata = metadataForFeature(feature);
     return {

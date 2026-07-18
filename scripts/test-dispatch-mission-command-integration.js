@@ -125,7 +125,6 @@ async function main() {
   );
   const producerSources = [
     ['ECS Brief', path.join(root, 'components', 'brief', 'CommandBriefScreen.tsx'), 'createDashboardMissionCommandProposal'],
-    ['Fleet', path.join(root, 'app', '(tabs)', 'fleet.tsx'), 'createFleetMissionCommandProposal'],
     ['Navigate', path.join(root, 'app', '(tabs)', 'navigate.tsx'), 'createNavigateMissionCommandProposal'],
     ['Explore', path.join(root, 'app', '(tabs)', 'discover.tsx'), 'createExploreMissionCommandProposal'],
     ['Trip Builder', path.join(root, 'app', 'explore-trip-builder.tsx'), 'createExploreMissionCommandProposal'],

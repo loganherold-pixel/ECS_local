@@ -149,6 +149,65 @@ export type DownloadProgress = {
   eta: number; // seconds remaining
 };
 
+export type TileDownloadTerminalState = {
+  status: 'complete' | 'error' | 'cancelled';
+  success: boolean;
+  percent: number;
+  message: string;
+};
+
+/**
+ * Resolve a route-region download into a truthful terminal state.
+ *
+ * Every enumerated tile is part of the requested offline region. Retaining
+ * successfully downloaded tiles is useful for a later retry, but a region is
+ * not complete while any requested tile failed.
+ */
+export function resolveTileDownloadTerminalState(input: {
+  totalTiles: number;
+  downloadedTiles: number;
+  failedTiles: number;
+  cancelled: boolean;
+}): TileDownloadTerminalState {
+  const totalTiles = Math.max(0, Math.floor(Number(input.totalTiles) || 0));
+  const downloadedTiles = Math.max(0, Math.floor(Number(input.downloadedTiles) || 0));
+  const failedTiles = Math.max(0, Math.floor(Number(input.failedTiles) || 0));
+  const percent = totalTiles > 0
+    ? Math.max(0, Math.min(100, Math.round((downloadedTiles / totalTiles) * 100)))
+    : 0;
+
+  if (input.cancelled) {
+    return {
+      status: 'cancelled',
+      success: false,
+      percent,
+      message: 'Download cancelled',
+    };
+  }
+  if (totalTiles === 0) {
+    return {
+      status: 'error',
+      success: false,
+      percent: 0,
+      message: 'No map tiles were resolved for this route region. Review the route corridor and map configuration before retrying.',
+    };
+  }
+  if (failedTiles > 0) {
+    return {
+      status: 'error',
+      success: false,
+      percent,
+      message: `${failedTiles} required tile${failedTiles === 1 ? '' : 's'} failed; ${downloadedTiles}/${totalTiles} tiles are cached for retry.`,
+    };
+  }
+  return {
+    status: 'complete',
+    success: true,
+    percent: totalTiles > 0 ? 100 : 0,
+    message: 'Download complete',
+  };
+}
+
 export type ProgressCallback = (progress: DownloadProgress) => void;
 
 export type TileCacheProtectionResolver = (region: TileCacheRegion) => string | null;
@@ -852,6 +911,23 @@ function tileKey(regionId: string, x: number, y: number, z: number): string {
 // ── Download Engine ─────────────────────────────────────
 
 const activeDownloads = new Map<string, { cancelled: boolean }>();
+const OFFLINE_TILE_REQUEST_TIMEOUT_MS = 15_000;
+
+/** Bounds native filesystem/network promises that do not expose cancellation. */
+export async function resolveOfflineTileDownloadWithTimeout(
+  download: Promise<number>,
+  timeoutMs: number = OFFLINE_TILE_REQUEST_TIMEOUT_MS,
+): Promise<number> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<number>((resolve) => {
+    timer = setTimeout(() => resolve(-1), Math.max(1, timeoutMs));
+  });
+  try {
+    return await Promise.race([download, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 /**
  * Download all tiles for a region with progress tracking.
@@ -916,8 +992,8 @@ async function downloadRegion(
         }
 
         const url = buildTileUrl(tile.x, tile.y, tile.z, region.styleKey);
-        const sizeBytes = await downloadAndStoreNativeTile(
-          region.id, tile.x, tile.y, tile.z, url
+        const sizeBytes = await resolveOfflineTileDownloadWithTimeout(
+          downloadAndStoreNativeTile(region.id, tile.x, tile.y, tile.z, url),
         );
 
         if (sizeBytes >= 0) {
@@ -985,24 +1061,30 @@ async function downloadRegion(
 
   const sizeMB = Math.round((totalBytes / (1024 * 1024)) * 10) / 10;
 
-  // Final progress
-  onProgress({
-    regionId: region.id,
-    status: controller.cancelled ? 'cancelled' : failedTiles > totalTiles * 0.5 ? 'error' : 'complete',
+  const terminal = resolveTileDownloadTerminalState({
     totalTiles,
     downloadedTiles,
     failedTiles,
-    percent: 100,
+    cancelled: controller.cancelled,
+  });
+
+  // Final progress
+  onProgress({
+    regionId: region.id,
+    status: terminal.status,
+    totalTiles,
+    downloadedTiles,
+    failedTiles,
+    percent: terminal.percent,
     estimatedSizeMB: estimateSizeMB(totalTiles, region.styleKey),
     downloadedSizeMB: sizeMB,
-    message: controller.cancelled ? 'Download cancelled' :
-      failedTiles > 0 ? `Complete with ${failedTiles} failed tiles` : 'Download complete',
+    message: terminal.message,
     currentZoom: region.zoomMax,
     speed: 0,
     eta: 0,
   });
 
-  return { success: !controller.cancelled && failedTiles < totalTiles * 0.5, downloaded: downloadedTiles, failed: failedTiles, sizeMB };
+  return { success: terminal.success, downloaded: downloadedTiles, failed: failedTiles, sizeMB };
 }
 
 function cancelDownload(regionId: string): void {

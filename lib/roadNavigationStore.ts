@@ -1,6 +1,7 @@
 import type {
   RoadNavCoordinate,
   RoadNavDestination,
+  RoadNavWaypointDescriptor,
   RoadNavSourceType,
   RoadNavStatus,
 } from './mapboxRoadNavigation';
@@ -30,6 +31,7 @@ export interface PersistedRoadNavigationSession {
   routeCreatedAt?: string | null;
   routeGeometryCacheKey?: string | null;
   routeGeometryFingerprint?: string | null;
+  routeOrderedWaypoints?: RoadNavWaypointDescriptor[];
   activeGuidance?: ActiveGuidanceState | null;
 }
 

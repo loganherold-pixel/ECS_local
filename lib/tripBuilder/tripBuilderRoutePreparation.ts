@@ -63,6 +63,21 @@ export type TripBuilderTrailheadOption = {
   warnings: string[];
 };
 
+export type TripBuilderPracticalTrailheadSelectionReason =
+  | 'suggested_provider_trailhead'
+  | 'nearest_endpoint_to_origin'
+  | 'imported_route_start_default'
+  | 'endpoint_ambiguity'
+  | 'origin_unavailable'
+  | 'endpoint_unavailable'
+  | 'preparation_not_awaiting_selection';
+
+export type TripBuilderPracticalTrailheadSelection = {
+  trailheadId: string | null;
+  reason: TripBuilderPracticalTrailheadSelectionReason;
+  requiresManualSelection: boolean;
+};
+
 export type TripBuilderRoutePreparationState = {
   status: TripBuilderRoutePreparationStatus;
   generation: number;
@@ -384,11 +399,12 @@ function normalizedRouteGeometry(route: ExpeditionOpportunity): {
       }
     : null;
   if (isValidCoordinate(candidateCoordinate)) {
+    const candidateSource = routeSource(route);
     addTrailheadOption(options, {
-      id: 'suggested_trailhead',
+      id: candidateSource === 'import' ? 'route_start' : 'suggested_trailhead',
       label: resolved.trailheadStartCandidate.name?.trim() || 'Suggested trailhead',
       coordinate: candidateCoordinate,
-      source: routeSource(route) === 'import' ? 'import' : 'provider',
+      source: candidateSource === 'import' ? 'import' : 'provider',
       confidence: resolved.trailheadStartCandidate.confidence,
       suggested: options.length === 0,
       warnings: resolved.trailheadStartCandidate.warnings.slice(),
@@ -571,6 +587,116 @@ export function selectTripBuilderPreparationTrailhead(
     safeErrorCode: null,
     retryEligible: false,
   };
+}
+
+const PRACTICAL_TRAILHEAD_ENDPOINT_AMBIGUITY_METERS = 50;
+
+/**
+ * Resolves the route entry without asking the operator to interpret raw source
+ * direction. Explicit provider trailhead evidence remains authoritative. When
+ * that evidence is absent, the endpoint nearest the supplied trip origin is
+ * the practical entry. Imported routes without an origin retain their source
+ * order and start at route_start, including loop/equidistant GPX imports. A
+ * genuinely ambiguous non-imported source remains an explicit operator
+ * decision because its source direction has no equivalent operator-provided
+ * ordering contract.
+ */
+export function resolvePracticalTripBuilderTrailheadSelection(
+  state: TripBuilderRoutePreparationState,
+  origin: GuidanceRouteCoordinate | null = null,
+): TripBuilderPracticalTrailheadSelection {
+  if (state.status !== 'awaiting_trailhead_selection') {
+    return {
+      trailheadId: null,
+      reason: 'preparation_not_awaiting_selection',
+      requiresManualSelection: false,
+    };
+  }
+
+  const suggestedProviderTrailhead = state.trailheadOptions.find(
+    (option) => option.suggested && option.source === 'provider',
+  );
+  if (suggestedProviderTrailhead) {
+    return {
+      trailheadId: suggestedProviderTrailhead.id,
+      reason: 'suggested_provider_trailhead',
+      requiresManualSelection: false,
+    };
+  }
+
+  const routeStart = state.trailheadOptions.find((option) => option.id === 'route_start') ?? null;
+  const routeEnd = state.trailheadOptions.find((option) => option.id === 'route_end') ?? null;
+  if (!routeStart && !routeEnd) {
+    return {
+      trailheadId: null,
+      reason: 'endpoint_unavailable',
+      requiresManualSelection: true,
+    };
+  }
+
+  if (isValidCoordinate(origin) && routeStart && routeEnd) {
+    const startDistanceM = guidanceRouteDistanceMeters(origin, routeStart.coordinate);
+    const endDistanceM = guidanceRouteDistanceMeters(origin, routeEnd.coordinate);
+    if (Math.abs(startDistanceM - endDistanceM) <= PRACTICAL_TRAILHEAD_ENDPOINT_AMBIGUITY_METERS) {
+      if ((state.source === 'import' || routeStart.source === 'import') && routeStart) {
+        return {
+          trailheadId: routeStart.id,
+          reason: 'imported_route_start_default',
+          requiresManualSelection: false,
+        };
+      }
+      return {
+        trailheadId: null,
+        reason: 'endpoint_ambiguity',
+        requiresManualSelection: true,
+      };
+    }
+    return {
+      trailheadId: startDistanceM < endDistanceM ? routeStart.id : routeEnd.id,
+      reason: 'nearest_endpoint_to_origin',
+      requiresManualSelection: false,
+    };
+  }
+
+  if (isValidCoordinate(origin)) {
+    return {
+      trailheadId: (routeStart ?? routeEnd)?.id ?? null,
+      reason: 'nearest_endpoint_to_origin',
+      requiresManualSelection: false,
+    };
+  }
+
+  if ((state.source === 'import' || routeStart?.source === 'import') && routeStart) {
+    return {
+      trailheadId: routeStart.id,
+      reason: 'imported_route_start_default',
+      requiresManualSelection: false,
+    };
+  }
+
+  return {
+    trailheadId: null,
+    reason: 'origin_unavailable',
+    requiresManualSelection: true,
+  };
+}
+
+export function completeTripBuilderRoutePreparationFromPracticalEntry(
+  state: TripBuilderRoutePreparationState,
+  options: {
+    origin?: GuidanceRouteCoordinate | null;
+    now?: number;
+  } = {},
+): TripBuilderRoutePreparationState {
+  const selection = resolvePracticalTripBuilderTrailheadSelection(
+    state,
+    options.origin ?? null,
+  );
+  if (!selection.trailheadId || selection.requiresManualSelection) return state;
+  const building = selectTripBuilderPreparationTrailhead(state, selection.trailheadId);
+  return building.status === 'building'
+    ? completeTripBuilderRoutePreparation(building, options.now)
+    : state;
 }
 
 function lineString(geometry: TripBuilderGeometryCoordinate[]): {

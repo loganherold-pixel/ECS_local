@@ -60,9 +60,10 @@ assert(
 );
 assert(
   navigate.includes('toggleRemotenessOverlay') &&
-    navigate.includes('accessibilityLabel="Remoteness map overlay"') &&
-    navigate.includes("name=\"radio-outline\""),
-  'Navigate should expose Remoteness as a dedicated floating map toggle.',
+    navigate.includes('testID="navigate-map-layer-remoteness-toggle"') &&
+    navigate.includes('accessibilityLabel="Remoteness"') &&
+    navigate.includes('accessibilityLabel="Map layers"'),
+  'Navigate should expose Remoteness through the consolidated Map Layers control.',
 );
 assert(
   navigate.includes('buildRemoteMapOverlay') && navigate.includes('remoteOverlay={remotenessMapOverlay}'),

@@ -28,6 +28,13 @@ export type OfflinePrepMapQueueState = {
   active: boolean;
   source: 'sync_job' | 'tile_region' | 'manifest';
   updatedAt: string | null;
+  /** Every route-region represented by this package attempt. */
+  regionIds?: string[];
+  /** Every persisted sync job represented by this package attempt. */
+  jobIds?: string[];
+  requiredRegionCount?: number;
+  completedRegionCount?: number;
+  failedRegionCount?: number;
 };
 
 function compactId(value: string): string {
@@ -186,6 +193,239 @@ function stateFromRegion(region: TileCacheRegion): OfflinePrepMapQueueState {
   };
 }
 
+function preparationAttemptTimestamp(routeIntent: unknown): string | null {
+  if (!routeIntent || typeof routeIntent !== 'object') return null;
+  const readinessSnapshot = (routeIntent as Record<string, unknown>).readinessSnapshot;
+  if (!readinessSnapshot || typeof readinessSnapshot !== 'object') return null;
+  const manifest = (readinessSnapshot as Record<string, unknown>).offlinePrepManifest;
+  if (!manifest || typeof manifest !== 'object') return null;
+  const generatedAt = (manifest as Record<string, unknown>).generatedAt;
+  return typeof generatedAt === 'string' && Number.isFinite(Date.parse(generatedAt))
+    ? generatedAt
+    : null;
+}
+
+function latestPreparationAttemptJobs(jobs: OfflineTileSyncJob[]): OfflineTileSyncJob[] {
+  if (jobs.length <= 1) return jobs;
+  const timestamps = jobs
+    .map((job) => preparationAttemptTimestamp(job.routeIntent))
+    .filter((value): value is string => !!value)
+    .sort((a, b) => b.localeCompare(a));
+  const latestTimestamp = timestamps[0] ?? null;
+  if (!latestTimestamp) return jobs;
+  return jobs.filter((job) => preparationAttemptTimestamp(job.routeIntent) === latestTimestamp);
+}
+
+function readinessMapRegionIds(manifest: OfflinePrepPackManifest): string[] {
+  const asset = manifest.readinessManifest?.assets?.find((entry) => entry.kind === 'map_region');
+  return Array.isArray(asset?.storageRefs)
+    ? asset.storageRefs.filter((value): value is string => typeof value === 'string' && value.length > 0)
+    : [];
+}
+
+function latestJobsByRegion(jobs: OfflineTileSyncJob[]): Map<string, OfflineTileSyncJob> {
+  const result = new Map<string, OfflineTileSyncJob>();
+  [...jobs]
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .forEach((job) => {
+      if (!result.has(job.regionId)) result.set(job.regionId, job);
+    });
+  return result;
+}
+
+function regionIsVerifiedComplete(region: TileCacheRegion | null | undefined): boolean {
+  return !!region &&
+    region.status === 'complete' &&
+    region.tileCount > 0 &&
+    region.downloadedTiles >= region.tileCount;
+}
+
+/** Returns every incomplete required region for one bounded retry attempt. */
+export function resolveOfflinePrepRetryRegionIds(
+  state: OfflinePrepMapQueueState | null,
+  regions: TileCacheRegion[],
+): string[] {
+  if (!state?.retryable) return [];
+  const candidates = state.regionIds?.length
+    ? state.regionIds
+    : state.regionId
+      ? [state.regionId]
+      : [];
+  return Array.from(new Set(candidates)).filter((regionId) => {
+    const region = regions.find((candidate) => candidate.id === regionId);
+    if (!region) return true;
+    if (regionIsVerifiedComplete(region)) return false;
+    return region.status !== 'pending' && region.status !== 'downloading';
+  });
+}
+
+function jobIsVerifiedComplete(job: OfflineTileSyncJob | null | undefined): boolean {
+  if (!job || job.status !== 'complete' || !job.progress) return false;
+  return job.progress.totalTiles > 0 &&
+    job.progress.downloadedTiles >= job.progress.totalTiles &&
+    job.progress.failedTiles === 0;
+}
+
+function incompleteCompleteState(
+  job: OfflineTileSyncJob | null,
+  region: TileCacheRegion | null,
+): OfflinePrepMapQueueState {
+  const base = job ? stateFromJob(job) : stateFromRegion(region as TileCacheRegion);
+  const totalTiles = region?.tileCount ?? job?.progress?.totalTiles ?? null;
+  const downloadedTiles = region?.downloadedTiles ?? job?.progress?.downloadedTiles ?? null;
+  const failedTiles = job?.progress?.failedTiles ?? null;
+  const percent = totalTiles && downloadedTiles != null
+    ? clampPercent((downloadedTiles / totalTiles) * 100)
+    : base.percent;
+  return {
+    ...base,
+    status: 'failed',
+    label: 'MAP INCOMPLETE',
+    message: 'The route-region download ended without every required tile. Cached tiles are retained for retry.',
+    percent,
+    totalTiles,
+    downloadedTiles,
+    failedTiles,
+    errorMessage: 'Required offline map coverage is incomplete.',
+    retryable: true,
+    active: false,
+  };
+}
+
+function stateForRequiredRegion(
+  regionId: string,
+  job: OfflineTileSyncJob | null,
+  region: TileCacheRegion | null,
+): OfflinePrepMapQueueState {
+  const jobActive = job?.status === 'pending' || job?.status === 'running';
+  if (jobActive) return stateFromJob(job as OfflineTileSyncJob);
+
+  if (regionIsVerifiedComplete(region)) return stateFromRegion(region as TileCacheRegion);
+
+  if (region?.status === 'error' || region?.status === 'partial') {
+    const state = stateFromRegion(region);
+    return {
+      ...state,
+      status: 'failed',
+      label: region.status === 'partial' ? 'MAP INCOMPLETE' : state.label,
+      retryable: true,
+      active: false,
+      errorMessage: region.errorMessage ?? 'Required offline map coverage is incomplete.',
+    };
+  }
+  if (region?.status === 'cancelled') return stateFromRegion(region);
+  if (region?.status === 'downloading' || region?.status === 'pending') return stateFromRegion(region);
+
+  if (job?.status === 'error' || job?.status === 'cancelled') return stateFromJob(job);
+  if (jobIsVerifiedComplete(job)) return stateFromJob(job as OfflineTileSyncJob);
+  if (job?.status === 'complete' || region?.status === 'complete') {
+    return incompleteCompleteState(job, region);
+  }
+  if (job) return stateFromJob(job);
+  if (region) return stateFromRegion(region);
+  return {
+    status: 'failed',
+    label: 'MAP MISSING',
+    message: 'A required route map region is no longer present in the sync queue or local cache.',
+    regionId,
+    jobId: null,
+    percent: 0,
+    totalTiles: null,
+    downloadedTiles: null,
+    failedTiles: null,
+    estimatedSizeMB: null,
+    downloadedSizeMB: null,
+    errorMessage: 'Required offline map region is missing.',
+    retryable: true,
+    active: false,
+    source: 'tile_region',
+    updatedAt: null,
+  };
+}
+
+function aggregateRequiredRegionStates(states: OfflinePrepMapQueueState[]): OfflinePrepMapQueueState {
+  const failed = states.filter((state) => state.status === 'failed');
+  const cancelled = states.filter((state) => state.status === 'cancelled');
+  const downloading = states.filter((state) => state.status === 'downloading');
+  const queued = states.filter((state) => state.status === 'queued');
+  const complete = states.filter((state) => state.status === 'complete');
+  const status: OfflinePrepMapQueueStatus = downloading.length > 0
+    ? 'downloading'
+    : queued.length > 0
+      ? 'queued'
+      : failed.length > 0
+        ? 'failed'
+        : cancelled.length > 0
+          ? 'cancelled'
+          : complete.length === states.length
+            ? 'complete'
+            : 'failed';
+  const totalTiles = states.every((state) => state.totalTiles != null)
+    ? states.reduce((sum, state) => sum + (state.totalTiles ?? 0), 0)
+    : null;
+  const downloadedTiles = states.every((state) => state.downloadedTiles != null)
+    ? states.reduce((sum, state) => sum + (state.downloadedTiles ?? 0), 0)
+    : null;
+  const failedTiles = states.some((state) => state.failedTiles != null)
+    ? states.reduce((sum, state) => sum + (state.failedTiles ?? 0), 0)
+    : null;
+  const estimatedSizeMB = states.some((state) => state.estimatedSizeMB != null)
+    ? Math.round(states.reduce((sum, state) => sum + (state.estimatedSizeMB ?? 0), 0) * 10) / 10
+    : null;
+  const downloadedSizeMB = states.some((state) => state.downloadedSizeMB != null)
+    ? Math.round(states.reduce((sum, state) => sum + (state.downloadedSizeMB ?? 0), 0) * 10) / 10
+    : null;
+  const percent = totalTiles && downloadedTiles != null
+    ? clampPercent((downloadedTiles / totalTiles) * 100)
+    : clampPercent(states.reduce((sum, state) => sum + state.percent, 0) / states.length);
+  const regionIds = Array.from(new Set(states.flatMap((state) => state.regionId ? [state.regionId] : [])));
+  const jobIds = Array.from(new Set(states.flatMap((state) => state.jobId ? [state.jobId] : [])));
+  const retryTarget = failed[0] ?? cancelled[0] ?? downloading[0] ?? queued[0] ?? states[0];
+  const updatedAt = states
+    .map((state) => state.updatedAt)
+    .filter((value): value is string => !!value)
+    .sort((a, b) => b.localeCompare(a))[0] ?? null;
+  const label = status === 'complete'
+    ? 'MAP READY'
+    : status === 'failed'
+      ? 'MAP INCOMPLETE'
+      : status === 'cancelled'
+        ? 'MAP CANCELLED'
+        : status === 'queued'
+          ? 'MAP QUEUED'
+          : `MAP DOWNLOADING ${percent}%`;
+  const message = status === 'complete'
+    ? `All ${states.length} required route map region${states.length === 1 ? ' is' : 's are'} cached.`
+    : status === 'failed'
+      ? `${failed.length} of ${states.length} required route map region${states.length === 1 ? '' : 's'} failed or is incomplete. Completed regions remain cached.`
+      : status === 'cancelled'
+        ? `${cancelled.length} of ${states.length} required route map region${states.length === 1 ? '' : 's'} was cancelled.`
+        : `${complete.length} of ${states.length} required route map region${states.length === 1 ? ' is' : 's are'} ready${failed.length > 0 ? `; ${failed.length} will be retryable after active downloads settle` : ''}.`;
+  return {
+    status,
+    label,
+    message,
+    regionId: retryTarget?.regionId ?? null,
+    jobId: retryTarget?.jobId ?? null,
+    percent: status === 'complete' ? 100 : percent,
+    totalTiles,
+    downloadedTiles,
+    failedTiles,
+    estimatedSizeMB,
+    downloadedSizeMB,
+    errorMessage: failed[0]?.errorMessage ?? (status === 'failed' ? 'Required offline map coverage is incomplete.' : null),
+    retryable: status === 'failed' || status === 'cancelled',
+    active: status === 'queued' || status === 'downloading',
+    source: states.some((state) => state.source === 'sync_job') ? 'sync_job' : 'tile_region',
+    updatedAt,
+    regionIds,
+    jobIds,
+    requiredRegionCount: states.length,
+    completedRegionCount: complete.length,
+    failedRegionCount: failed.length,
+  };
+}
+
 export function resolveOfflinePrepMapQueueState(input: {
   manifest: OfflinePrepPackManifest | null;
   syncSnapshot: OfflineTileSyncSnapshot | null;
@@ -198,13 +438,51 @@ export function resolveOfflinePrepMapQueueState(input: {
   const explicitRegionId = item.cacheKey ?? metadataString(item, 'regionId');
 
   const jobs = syncSnapshot?.jobs ?? [];
-  const matchingJob = jobs.find((job) => jobMatches(job, manifest, explicitRegionId));
-  if (matchingJob) return stateFromJob(matchingJob);
-
-  const matchingRegion =
-    regions.find((region) => regionMatches(region, manifest, item)) ??
-    (explicitRegionId ? regions.find((region) => region.id === explicitRegionId) : null);
-  if (matchingRegion) return stateFromRegion(matchingRegion);
+  const explicitRegionIds = Array.from(new Set([
+    ...readinessMapRegionIds(manifest),
+    ...(explicitRegionId ? [explicitRegionId] : []),
+  ]));
+  const candidateRouteJobs = jobs.filter((job) => (
+    explicitRegionIds.length > 0
+      ? explicitRegionIds.includes(job.regionId)
+      : jobMatches(job, manifest, null)
+  ));
+  const routeJobs = explicitRegionIds.length > 0
+    ? candidateRouteJobs
+    : latestPreparationAttemptJobs(candidateRouteJobs);
+  const jobsByRegion = latestJobsByRegion(routeJobs);
+  const jobRegionIds = Array.from(jobsByRegion.keys());
+  const routeRegions = regions.filter((region) => (
+    explicitRegionIds.length > 0
+      ? explicitRegionIds.includes(region.id)
+      : jobRegionIds.length > 0
+        ? jobRegionIds.includes(region.id)
+        : regionMatches(region, manifest, item)
+  ));
+  const requiredRegionIds = Array.from(new Set([
+    ...explicitRegionIds,
+    ...jobRegionIds,
+    ...routeRegions.map((region) => region.id),
+  ]));
+  const regionsById = new Map(routeRegions.map((region) => [region.id, region]));
+  const requiredStates = requiredRegionIds
+    .map((regionId) => stateForRequiredRegion(
+      regionId,
+      jobsByRegion.get(regionId) ?? null,
+      regionsById.get(regionId) ?? regions.find((region) => region.id === regionId) ?? null,
+    ));
+  if (requiredStates.length > 0) {
+    return requiredStates.length === 1
+      ? {
+          ...requiredStates[0],
+          regionIds: requiredRegionIds,
+          jobIds: Array.from(new Set(routeJobs.map((job) => job.jobId))),
+          requiredRegionCount: 1,
+          completedRegionCount: requiredStates[0].status === 'complete' ? 1 : 0,
+          failedRegionCount: requiredStates[0].status === 'failed' ? 1 : 0,
+        }
+      : aggregateRequiredRegionStates(requiredStates);
+  }
 
   if (item.status === 'ready' || item.availability === 'already_cached') {
     return {

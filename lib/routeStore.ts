@@ -134,6 +134,13 @@ export type CustomRouteCreateOptions = {
   externalSourceId?: string | null;
   externalSourceType?: string | null;
   idempotencyKey?: string | null;
+  /** Ordered route checkpoints retained with the saved custom route. */
+  waypoints?: RouteWaypoint[];
+  /**
+   * Refresh the existing idempotent record instead of returning stale
+   * geometry. Used by Trip Builder when an operator reorders its itinerary.
+   */
+  updateExisting?: boolean;
 };
 
 // ── Storage keys ────────────────────────────────────────
@@ -569,6 +576,17 @@ export const routeStore = {
     }
 
     const sourceFingerprint = buildGeometryFingerprint(segments, 'route:custom');
+    const waypoints = (options?.waypoints ?? []).filter((waypoint) => (
+      Number.isFinite(waypoint?.lat) &&
+      Number.isFinite(waypoint?.lon) &&
+      Math.abs(waypoint.lat) <= 90 &&
+      Math.abs(waypoint.lon) <= 180
+    )).map((waypoint) => ({
+      ...waypoint,
+      ele: Number.isFinite(waypoint.ele) ? waypoint.ele : null,
+      name: waypoint.name?.trim() || null,
+      time: waypoint.time ?? null,
+    }));
     const existing = findRouteByCreationIdentity({
       sourceFormat: 'custom',
       sourceApp: options?.sourceApp ?? null,
@@ -578,7 +596,53 @@ export const routeStore = {
         ? sourceFingerprint
         : null,
     });
-    if (existing) return existing;
+    if (existing && !options?.updateExisting) return existing;
+
+    if (existing) {
+      if (existing.is_active && existing.source_fingerprint !== sourceFingerprint) {
+        throw new Error('End active guidance before replacing this saved route geometry.');
+      }
+      const routes = getLocalRoutes();
+      const routeIndex = routes.findIndex((route) => route.id === existing.id);
+      if (routeIndex === -1) return existing;
+      const updatedAt = nowISO();
+      const syncStatus = existing.sync_status === 'synced' ? 'pending' : existing.sync_status;
+      const refreshedLifecycle = buildRouteLifecycle({
+        routeId: existing.id,
+        sourceFormat: 'custom',
+        sourceApp: options?.sourceApp ?? existing.source_app,
+        externalSourceId: options?.externalSourceId ?? existing.external_source_id,
+        externalSourceType: options?.externalSourceType ?? existing.external_source_type,
+        sourceFingerprint,
+        syncStatus,
+        createdAt: existing.created_at,
+        updatedAt,
+      });
+      const updated: ImportedRoute = {
+        ...existing,
+        name: options?.name?.trim() || existing.name,
+        description: options?.description !== undefined ? options.description : existing.description,
+        source_app: options?.sourceApp ?? existing.source_app,
+        external_source_id: options?.externalSourceId ?? existing.external_source_id,
+        external_source_type: options?.externalSourceType ?? existing.external_source_type,
+        source_fingerprint: sourceFingerprint,
+        import_idempotency_key: options?.idempotencyKey?.trim() || existing.import_idempotency_key,
+        total_distance_miles: computeRouteDistanceMiles(segments),
+        waypoint_count: waypoints.length,
+        segment_count: segments.length,
+        waypoints,
+        segments,
+        sync_status: syncStatus,
+        updated_at: updatedAt,
+        lifecycle: mergeJourneyLinkage(existing.lifecycle, {
+          routeProvenance: refreshedLifecycle.routeProvenance,
+          updatedAt,
+        }),
+      };
+      routes[routeIndex] = updated;
+      saveLocalRoutes(routes);
+      return updated;
+    }
 
     const now = nowISO();
     const deviceId = getDeviceId();
@@ -600,9 +664,9 @@ export const routeStore = {
       import_idempotency_key: options?.idempotencyKey?.trim() || null,
       total_distance_miles: computeRouteDistanceMiles(segments),
       elevation_gain_ft: null,
-      waypoint_count: 0,
+      waypoint_count: waypoints.length,
       segment_count: segments.length,
-      waypoints: [],
+      waypoints,
       segments,
       is_active: false,
       sync_status: 'local',

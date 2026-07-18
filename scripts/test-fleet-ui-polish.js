@@ -22,6 +22,7 @@ const modalShell = read('components/ECSModalShell.tsx');
 const vehicleProfileDomain = read('lib/fleet/fleetVehicleProfile.ts');
 const buildLoadoutDomain = read('lib/fleet/fleetBuildLoadout.ts');
 const fleetOverviewStatus = read('lib/fleet/fleetOverviewStatus.ts');
+const fleetVehicleStatusModal = read('components/fleet/FleetVehicleStatusModal.tsx');
 
 const addVehicleButtonLabels = fleetScreen.match(/label="Add Vehicle"/g) ?? [];
 assert(
@@ -90,27 +91,28 @@ assert(
 
 assert(
     fleetScreen.includes('onConfidencePress') &&
-    fleetScreen.includes('FleetConfidenceNoticeModal') &&
-    fleetScreen.includes('scoreEyebrow="VEHICLE CONFIDENCE"') &&
-    fleetScreen.includes('title="Vehicle Confidence"') &&
+    fleetScreen.includes('<FleetVehicleStatusModal') &&
+    fleetScreen.includes('kind="confidence"') &&
     fleetScreen.includes('const handleVehicleConfidencePress = useCallback((vehicleId: string) => {') &&
     fleetScreen.includes('setVehicleConfidenceNoticeVehicleId(vehicleId)') &&
     fleetScreen.includes('onConfidencePress={handleVehicleConfidencePress}') &&
     fleetScreen.includes('selectedVehicleConfidenceNotice') &&
     fleetScreen.includes('accessibilityHint={`Opens the confidence explanation for ${vehicle.name}.`}') &&
-    fleetScreen.includes('scrollable') &&
-    fleetScreen.includes('bodyStyle={s.confidenceNoticeModalBody}') &&
-    fleetScreen.includes('contentContainerStyle={s.confidenceNoticeModalContent}') &&
-    fleetScreen.includes('confidenceNoticeModalContent') &&
-    fleetScreen.includes('paddingBottom: 18') &&
-    fleetScreen.includes('ECS Intelligence') &&
-    fleetScreen.includes('To Improve Confidence') &&
+    fleetVehicleStatusModal.includes("title: 'Vehicle Confidence'") &&
+    fleetVehicleStatusModal.includes("improvementTitle: 'To Improve Confidence'") &&
+    fleetVehicleStatusModal.includes('maxHeightFraction={0.94}') &&
+    !fleetVehicleStatusModal.includes('minHeightFraction=') &&
+    fleetVehicleStatusModal.includes('scrollable') &&
+    fleetVehicleStatusModal.includes('flexGrow: 0') &&
+    fleetVehicleStatusModal.includes('MAX_VISIBLE_STATUS_ITEMS = 4') &&
+    fleetVehicleStatusModal.includes('notice.priorityReasons?.length') &&
+    fleetVehicleStatusModal.includes('ECS Intelligence') &&
     fleetOverviewStatus.includes('buildFleetConfidenceNotice') &&
     fleetOverviewStatus.includes('FleetConfidenceIntelligenceInput') &&
     fleetOverviewStatus.includes('intelligenceSummary') &&
     fleetOverviewStatus.includes('incomplete accessory, loadout, consumable, or validation inputs') &&
     !fleetOverviewStatus.includes('Upgrade the user-entered'),
-  'Fleet vehicle confidence action should open a scroll-safe ECS intelligence explanation with improvement actions.',
+  'Fleet vehicle confidence action should open a content-sized ECS intelligence explanation with bounded key actions and overflow-only scrolling.',
 );
 
 assert(
@@ -122,14 +124,26 @@ assert(
     fleetScreen.includes('setVehicleReadinessNoticeVehicleId(vehicleId)') &&
     fleetScreen.includes('onReadinessPress={handleVehicleReadinessPress}') &&
     fleetScreen.includes('accessibilityHint={`Opens the readiness explanation for ${vehicle.name}.`}') &&
-    fleetScreen.includes('title="Vehicle Readiness"') &&
-    fleetScreen.includes('scoreEyebrow="VEHICLE READINESS"') &&
-    fleetScreen.includes('improvementTitle="To Improve Readiness"'),
+    fleetScreen.includes('kind="readiness"') &&
+    fleetVehicleStatusModal.includes("title: 'Vehicle Readiness'") &&
+    fleetVehicleStatusModal.includes("scoreEyebrow: 'VEHICLE READINESS'") &&
+    fleetVehicleStatusModal.includes("improvementTitle: 'To Improve Readiness'"),
   'Fleet vehicle readiness tile should open a vehicle-specific readiness explanation with score drivers and improvement actions.',
 );
 
 assert(
+  !fleetScreen.includes('Coordinate Vehicle') &&
+    !fleetScreen.includes('MissionCommandProposalAction') &&
+    !fleetVehicleStatusModal.includes('Weight sources') &&
+    fleetScreen.includes('Source: {formatFleetSourceSummary(weightResult)}'),
+  'Fleet should omit the redundant coordinate action and popup weight-source drilldown while retaining truthful source context on the card.',
+);
+
+assert(
   fleetScreen.includes('readiness starts with payload margin') &&
+    fleetScreen.includes('const priorityReasons = uniqueNoticeItems([') &&
+    fleetScreen.includes('...scoringResult.blockingIssues.map') &&
+    fleetScreen.includes('...deductionReasons') &&
     fleetScreen.includes('Source confidence is evidence quality, not a direct readiness penalty.') &&
     !fleetScreen.includes('readiness blends payload score'),
   'Fleet readiness intelligence should separate readiness score drivers from source confidence evidence quality.',

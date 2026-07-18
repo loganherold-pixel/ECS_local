@@ -255,6 +255,16 @@ notIncludes(
   'What Did I Forget',
   'Vehicle card action footer must not include the removed What Did I Forget button.',
 );
+notIncludes(
+  cardFooter,
+  'Coordinate Vehicle',
+  'The active Fleet vehicle is already coordinated through canonical active-vehicle state.',
+);
+notIncludes(
+  cardFooter,
+  'MissionCommandProposalAction',
+  'Fleet card actions should not mount an extra Dispatch proposal control for active-vehicle coordination.',
+);
 
 const actionButtonCount = (cardFooter.match(/<ECSButton label="/g) || []).length;
 assert.strictEqual(actionButtonCount, 4, 'Vehicle card action footer should have exactly four ECS buttons.');

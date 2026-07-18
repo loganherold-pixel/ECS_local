@@ -167,10 +167,8 @@ const ROUTE_CATALOG_SEARCH_COLUMNS = [
 ];
 
 const PREVIEW_MAX_POINTS = 120;
-const ROUTE_CATALOG_RADIUS_CANDIDATE_FANOUT = 12;
-const ROUTE_CATALOG_RADIUS_CANDIDATE_MIN = 250;
-const ROUTE_CATALOG_RADIUS_CANDIDATE_MAX = 2000;
-const ROUTE_CATALOG_RADIUS_GEOMETRY_PADDING_MILES = 150;
+const ROUTE_CATALOG_ID_QUERY_CHUNK_SIZE = 100;
+const ROUTE_CATALOG_MAX_RADIUS_MILES = 500;
 const ROUTE_CATALOG_KNOWN_FEATURED_ROUTES = [
   {
     key: 'rubicon_trail',
@@ -451,18 +449,6 @@ function featuredRouteScore(record: Record<string, unknown>): number {
   return score;
 }
 
-function candidateLimit(limit: number, hasRadiusCriteria: boolean): number {
-  if (!hasRadiusCriteria) return limit;
-  return Math.min(
-    ROUTE_CATALOG_RADIUS_CANDIDATE_MAX,
-    Math.max(ROUTE_CATALOG_RADIUS_CANDIDATE_MIN, limit * ROUTE_CATALOG_RADIUS_CANDIDATE_FANOUT),
-  );
-}
-
-function radiusBboxDegrees(radiusMiles: number): number {
-  return Math.max(0.05, (radiusMiles + ROUTE_CATALOG_RADIUS_GEOMETRY_PADDING_MILES) / 69);
-}
-
 function confidenceScore(record: Record<string, unknown>): number {
   return readNumber(record.confidence_score) ?? 0;
 }
@@ -600,12 +586,45 @@ async function inspectRouteCatalogCurationCandidates(
     routeType: string;
     difficulty: string;
     vehicleClass: string;
+    sourceAdapter: string;
   },
 ): Promise<{
   curationCandidateCount: number;
   diagnosticRecords: RouteCatalogSafeDiagnosticRecord[];
 }> {
   const hasRadiusCriteria = args.latitude != null && args.longitude != null && args.radiusMiles != null;
+  if (hasRadiusCriteria) {
+    const nearby = await fetchNearbyRouteCatalogCandidates(admin, {
+      latitude: args.latitude,
+      longitude: args.longitude,
+      radiusMiles: args.radiusMiles,
+      limit: Math.min(args.queryLimit, 50),
+      recommendationFilter: 'non_recommendable',
+      includeGeometry: false,
+      includePreviewGeometry: false,
+      vehicleClass: args.vehicleClass,
+      minDistanceMiles: args.minDistanceMiles,
+      maxDistanceMiles: args.maxDistanceMiles,
+      minDurationMinutes: args.minDurationMinutes,
+      maxDurationMinutes: args.maxDurationMinutes,
+      minConfidenceScore: args.minConfidenceScore,
+      minRemotenessScore: args.minRemotenessScore,
+      maxRemotenessScore: args.maxRemotenessScore,
+      minCampabilityScore: args.minCampabilityScore,
+      availableFuelRangeMiles: args.availableFuelRangeMiles,
+      availableWaterCapacityGallons: args.availableWaterCapacityGallons,
+      routeType: args.routeType,
+      difficulty: args.difficulty,
+      sourceAdapter: args.sourceAdapter,
+    });
+    const diagnosticCandidates = await attachSourceRecords(admin, nearby.records);
+    return {
+      curationCandidateCount: nearby.lookupCount,
+      diagnosticRecords: diagnosticCandidates
+        .map(buildSafeRouteCatalogDiagnostic)
+        .filter((diagnostic): diagnostic is RouteCatalogSafeDiagnosticRecord => !!diagnostic),
+    };
+  }
   let query = admin
     .from('verified_routes')
     .select([
@@ -643,15 +662,6 @@ async function inspectRouteCatalogCurationCandidates(
     .order('confidence_score', { ascending: false })
     .order('updated_at', { ascending: false })
     .limit(args.queryLimit);
-
-  if (hasRadiusCriteria) {
-    const degrees = radiusBboxDegrees(args.radiusMiles);
-    query = query
-      .gte('center_latitude', args.latitude - degrees)
-      .lte('center_latitude', args.latitude + degrees)
-      .gte('center_longitude', args.longitude - degrees)
-      .lte('center_longitude', args.longitude + degrees);
-  }
 
   if (args.vehicleClass) query = query.contains('vehicle_fit', [args.vehicleClass]);
   if (args.minDistanceMiles != null) query = query.gte('distance_miles', args.minDistanceMiles);
@@ -910,6 +920,129 @@ async function attachSourceRecords(
   });
 }
 
+type NearbyRouteCatalogSearchArgs = {
+  latitude: number;
+  longitude: number;
+  radiusMiles: number;
+  limit: number;
+  recommendationFilter: 'recommendable' | 'non_recommendable' | 'all';
+  includeGeometry: boolean;
+  includePreviewGeometry: boolean;
+  vehicleClass: string;
+  minDistanceMiles: number | null;
+  maxDistanceMiles: number | null;
+  minDurationMinutes: number | null;
+  maxDurationMinutes: number | null;
+  minConfidenceScore: number | null;
+  minRemotenessScore: number | null;
+  maxRemotenessScore: number | null;
+  minCampabilityScore: number | null;
+  availableFuelRangeMiles: number | null;
+  availableWaterCapacityGallons: number | null;
+  routeType: string;
+  difficulty: string;
+  sourceAdapter: string;
+};
+
+function chunkRouteIds(routeIds: string[]): string[][] {
+  const chunks: string[][] = [];
+  for (let index = 0; index < routeIds.length; index += ROUTE_CATALOG_ID_QUERY_CHUNK_SIZE) {
+    chunks.push(routeIds.slice(index, index + ROUTE_CATALOG_ID_QUERY_CHUNK_SIZE));
+  }
+  return chunks;
+}
+
+async function fetchNearbyRouteCatalogCandidates(
+  admin: ReturnType<typeof createAdminClient>,
+  args: NearbyRouteCatalogSearchArgs,
+): Promise<{
+  records: Record<string, unknown>[];
+  lookupCount: number;
+  lookupBounded: boolean;
+}> {
+  const { data: nearbyData, error: nearbyError } = await admin.rpc(
+    'route_catalog_nearby_route_ids',
+    {
+      p_latitude: args.latitude,
+      p_longitude: args.longitude,
+      p_radius_miles: args.radiusMiles,
+      p_limit: args.limit,
+      p_recommendation_filter: args.recommendationFilter,
+      p_vehicle_class: args.vehicleClass || null,
+      p_min_distance_miles: args.minDistanceMiles,
+      p_max_distance_miles: args.maxDistanceMiles,
+      p_min_duration_minutes: args.minDurationMinutes,
+      p_max_duration_minutes: args.maxDurationMinutes,
+      p_min_confidence_score: args.minConfidenceScore,
+      p_min_remoteness_score: args.minRemotenessScore,
+      p_max_remoteness_score: args.maxRemotenessScore,
+      p_min_campability_score: args.minCampabilityScore,
+      p_available_fuel_range_miles: args.availableFuelRangeMiles,
+      p_available_water_capacity_gallons: args.availableWaterCapacityGallons,
+      p_route_type: args.routeType || null,
+      p_difficulty: args.difficulty || null,
+      p_source_adapter: args.sourceAdapter || null,
+    },
+  );
+  if (nearbyError) throw new Error('Unable to search the indexed nearby route catalog.');
+
+  const nearbyRows = Array.isArray(nearbyData)
+    ? nearbyData
+        .map(readRecord)
+        .filter((row): row is Record<string, unknown> => !!row)
+    : [];
+  const orderedRouteIds = unique(
+    nearbyRows
+      .map((row) => cleanText(row.route_id ?? row.routeId))
+      .filter(Boolean),
+  );
+  if (orderedRouteIds.length === 0) {
+    return { records: [], lookupCount: 0, lookupBounded: false };
+  }
+
+  const recordBatches = await Promise.all(
+    chunkRouteIds(orderedRouteIds).map(async (routeIds) => {
+      let query = admin
+        .from('verified_routes')
+        .select(searchSelect(args.includeGeometry, args.includePreviewGeometry))
+        .in('id', routeIds)
+        .eq('review_status', 'approved');
+      if (args.recommendationFilter === 'recommendable') {
+        query = query.eq('recommendation_status', 'recommendable');
+      } else if (args.recommendationFilter === 'non_recommendable') {
+        query = query.neq('recommendation_status', 'recommendable');
+      }
+      const { data, error } = await query;
+      if (error) throw new Error('Unable to load nearby route catalog summaries.');
+      return Array.isArray(data) ? data as Record<string, unknown>[] : [];
+    }),
+  );
+  const distanceByRouteId = new Map(
+    nearbyRows.map((row) => [
+      cleanText(row.route_id ?? row.routeId),
+      readNumber(row.center_distance_miles ?? row.centerDistanceMiles),
+    ]),
+  );
+  const recordsById = new Map(
+    recordBatches
+      .flat()
+      .map((record) => [cleanText(record.id), record] as const),
+  );
+  const records = orderedRouteIds.flatMap((routeId) => {
+    const record = recordsById.get(routeId);
+    if (!record) return [];
+    return [{
+      ...record,
+      center_distance_miles: distanceByRouteId.get(routeId) ?? null,
+    }];
+  });
+  return {
+    records,
+    lookupCount: nearbyRows.length,
+    lookupBounded: nearbyRows.length >= args.limit,
+  };
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'GET' && req.method !== 'POST') return jsonResponse({ ok: false, error: 'GET or POST required' }, 405);
@@ -939,6 +1072,24 @@ serve(async (req) => {
     const latitude = readNumber(params.latitude ?? params.lat);
     const longitude = readNumber(params.longitude ?? params.lng ?? params.lon);
     const radiusMiles = readNumber(params.radiusMiles ?? params.radius_miles);
+    const hasAnyRadiusCriterion = latitude != null || longitude != null || radiusMiles != null;
+    const hasValidRadiusCriteria =
+      latitude != null &&
+      longitude != null &&
+      radiusMiles != null &&
+      latitude >= -90 &&
+      latitude <= 90 &&
+      longitude >= -180 &&
+      longitude <= 180 &&
+      radiusMiles > 0 &&
+      radiusMiles <= ROUTE_CATALOG_MAX_RADIUS_MILES;
+    if (hasAnyRadiusCriterion && !hasValidRadiusCriteria) {
+      return jsonResponse({
+        ok: false,
+        error: `Latitude, longitude, and a radius from 0 to ${ROUTE_CATALOG_MAX_RADIUS_MILES} miles are required together.`,
+        safeErrorCode: 'ROUTE_CATALOG_INVALID_SEARCH_AREA',
+      }, 400);
+    }
     const minDistanceMiles = readNumber(params.minDistanceMiles ?? params.min_distance_miles);
     const maxDistanceMiles = readNumber(params.maxDistanceMiles ?? params.max_distance_miles);
     const minDurationMinutes = readNumber(params.minDurationMinutes ?? params.min_duration_minutes);
@@ -958,82 +1109,27 @@ serve(async (req) => {
     const expectedKnownRouteKeys = skipCoverageDiagnostics
       ? []
       : expectedKnownRoutes(params.expectedKnownRoutes ?? params.expected_known_routes);
-    const hasRadiusCriteria = latitude != null && longitude != null && radiusMiles != null;
-    // Fetch one record beyond the requested window when the bounded candidate
-    // policy permits it, so `hasMore` is evidence-backed instead of inferred
-    // from a completely filled page.
-    const queryLimit = candidateLimit(windowEnd + 1, hasRadiusCriteria);
+    const hasRadiusCriteria = hasValidRadiusCriteria;
+    // Fetch one record beyond the requested page so `hasMore` remains
+    // evidence-backed. Radius-qualified IDs are selected by PostGIS before
+    // this bound is applied; distant high-confidence records can no longer
+    // consume the candidate window.
+    const queryLimit = Math.min(ROUTE_CATALOG_MAX_PAGINATION_WINDOW, windowEnd + 1);
 
     const admin = createAdminClient();
-    let query = admin
-      .from('verified_routes')
-      .select(searchSelect(includeGeometry, includePreviewGeometry))
-      .eq('review_status', 'approved')
-      .order('confidence_score', { ascending: false })
-      .order('updated_at', { ascending: false })
-      .order('id', { ascending: true })
-      .limit(queryLimit);
-
-    if (recommendationOnly) query = query.eq('recommendation_status', 'recommendable');
-
+    let candidates: Record<string, unknown>[] = [];
+    let nearbyLookupCount = 0;
+    let nearbyLookupBounded = false;
     if (hasRadiusCriteria) {
-      const degrees = radiusBboxDegrees(radiusMiles);
-      query = query
-        .gte('center_latitude', latitude - degrees)
-        .lte('center_latitude', latitude + degrees)
-        .gte('center_longitude', longitude - degrees)
-        .lte('center_longitude', longitude + degrees);
-    }
-
-    if (vehicleClass) {
-      query = query.contains('vehicle_fit', [vehicleClass]);
-    }
-
-    if (minDistanceMiles != null) query = query.gte('distance_miles', minDistanceMiles);
-    if (maxDistanceMiles != null) query = query.lte('distance_miles', maxDistanceMiles);
-    if (minDurationMinutes != null) query = query.gte('estimated_duration_minutes', minDurationMinutes);
-    if (maxDurationMinutes != null) query = query.lte('estimated_duration_minutes', maxDurationMinutes);
-    if (minConfidenceScore != null) query = query.gte('confidence_score', minConfidenceScore);
-    if (minRemotenessScore != null) query = query.gte('remoteness_score', minRemotenessScore);
-    if (maxRemotenessScore != null) query = query.lte('remoteness_score', maxRemotenessScore);
-    if (minCampabilityScore != null) query = query.gte('campability_score', minCampabilityScore);
-    if (availableFuelRangeMiles != null && availableFuelRangeMiles > 0) {
-      query = query.lte('minimum_fuel_range_miles', availableFuelRangeMiles);
-    }
-    if (availableWaterCapacityGallons != null && availableWaterCapacityGallons > 0) {
-      query = query.lte('minimum_water_capacity_gallons', availableWaterCapacityGallons);
-    }
-    if (routeType) query = query.eq('route_type', routeType);
-    if (difficulty) query = query.eq('difficulty', difficulty);
-
-    const { data, error } = await query;
-    if (error) throw new Error('Unable to search verified route catalog.');
-    const candidates = Array.isArray(data) ? data as Record<string, unknown>[] : [];
-    const radiusFiltered = filterRecordsWithinSearchRadius(candidates, { latitude, longitude, radiusMiles });
-    let limitedRecords: Record<string, unknown>[];
-    let sourceMatchedCount: number | null = null;
-    if (sourceAdapter) {
-      const sourcedRadiusRecords = await attachSourceRecords(admin, radiusFiltered.records);
-      const sourceMatchedRecords = filterRecordsBySourceAdapter(sourcedRadiusRecords, sourceAdapter);
-      sourceMatchedCount = sourceMatchedRecords.length;
-      limitedRecords = sourceMatchedRecords.slice(offset, windowEnd);
-    } else {
-      limitedRecords = await attachSourceRecords(admin, radiusFiltered.records.slice(offset, windowEnd));
-    }
-    const knownRouteDiagnostics = skipCoverageDiagnostics
-      ? []
-      : await inspectKnownRouteDiagnostics(
-        admin,
-        expectedKnownRouteKeys,
-        sourceAdapter ? limitedRecords : radiusFiltered.records,
-      );
-    const curationCoverage = skipCoverageDiagnostics
-      ? { curationCandidateCount: 0, diagnosticRecords: [] as RouteCatalogSafeDiagnosticRecord[] }
-      : await inspectRouteCatalogCurationCandidates(admin, {
+      const nearby = await fetchNearbyRouteCatalogCandidates(admin, {
         latitude,
         longitude,
         radiusMiles,
-        queryLimit,
+        limit: queryLimit,
+        recommendationFilter: recommendationOnly ? 'recommendable' : 'all',
+        includeGeometry,
+        includePreviewGeometry,
+        vehicleClass,
         minDistanceMiles,
         maxDistanceMiles,
         minDurationMinutes,
@@ -1046,8 +1142,94 @@ serve(async (req) => {
         availableWaterCapacityGallons,
         routeType,
         difficulty,
-        vehicleClass,
+        sourceAdapter,
       });
+      candidates = nearby.records;
+      nearbyLookupCount = nearby.lookupCount;
+      nearbyLookupBounded = nearby.lookupBounded;
+    } else {
+      let query = admin
+        .from('verified_routes')
+        .select(searchSelect(includeGeometry, includePreviewGeometry))
+        .eq('review_status', 'approved')
+        .order('confidence_score', { ascending: false })
+        .order('updated_at', { ascending: false })
+        .order('id', { ascending: true })
+        .limit(queryLimit);
+
+      if (recommendationOnly) query = query.eq('recommendation_status', 'recommendable');
+      if (vehicleClass) query = query.contains('vehicle_fit', [vehicleClass]);
+      if (minDistanceMiles != null) query = query.gte('distance_miles', minDistanceMiles);
+      if (maxDistanceMiles != null) query = query.lte('distance_miles', maxDistanceMiles);
+      if (minDurationMinutes != null) query = query.gte('estimated_duration_minutes', minDurationMinutes);
+      if (maxDurationMinutes != null) query = query.lte('estimated_duration_minutes', maxDurationMinutes);
+      if (minConfidenceScore != null) query = query.gte('confidence_score', minConfidenceScore);
+      if (minRemotenessScore != null) query = query.gte('remoteness_score', minRemotenessScore);
+      if (maxRemotenessScore != null) query = query.lte('remoteness_score', maxRemotenessScore);
+      if (minCampabilityScore != null) query = query.gte('campability_score', minCampabilityScore);
+      if (availableFuelRangeMiles != null && availableFuelRangeMiles > 0) {
+        query = query.lte('minimum_fuel_range_miles', availableFuelRangeMiles);
+      }
+      if (availableWaterCapacityGallons != null && availableWaterCapacityGallons > 0) {
+        query = query.lte('minimum_water_capacity_gallons', availableWaterCapacityGallons);
+      }
+      if (routeType) query = query.eq('route_type', routeType);
+      if (difficulty) query = query.eq('difficulty', difficulty);
+
+      const { data, error } = await query;
+      if (error) throw new Error('Unable to search verified route catalog.');
+      candidates = Array.isArray(data) ? data as Record<string, unknown>[] : [];
+    }
+    const radiusFiltered = filterRecordsWithinSearchRadius(candidates, { latitude, longitude, radiusMiles });
+    let limitedRecords: Record<string, unknown>[];
+    let sourceMatchedCount: number | null = null;
+    if (sourceAdapter) {
+      const sourcedRadiusRecords = await attachSourceRecords(admin, radiusFiltered.records);
+      const sourceMatchedRecords = filterRecordsBySourceAdapter(sourcedRadiusRecords, sourceAdapter);
+      sourceMatchedCount = sourceMatchedRecords.length;
+      limitedRecords = sourceMatchedRecords.slice(offset, windowEnd);
+    } else {
+      limitedRecords = await attachSourceRecords(admin, radiusFiltered.records.slice(offset, windowEnd));
+    }
+    let knownRouteDiagnostics: Record<string, unknown>[] = [];
+    let curationCoverage = {
+      curationCandidateCount: 0,
+      diagnosticRecords: [] as RouteCatalogSafeDiagnosticRecord[],
+    };
+    let coverageDiagnosticsUnavailable = false;
+    // Coverage diagnostics are explanatory only. They must not delay or erase
+    // valid public summaries, and any provider failure remains fail-soft.
+    if (!skipCoverageDiagnostics && limitedRecords.length === 0) {
+      try {
+        knownRouteDiagnostics = await inspectKnownRouteDiagnostics(
+          admin,
+          expectedKnownRouteKeys,
+          sourceAdapter ? limitedRecords : radiusFiltered.records,
+        );
+        curationCoverage = await inspectRouteCatalogCurationCandidates(admin, {
+          latitude,
+          longitude,
+          radiusMiles,
+          queryLimit,
+          minDistanceMiles,
+          maxDistanceMiles,
+          minDurationMinutes,
+          maxDurationMinutes,
+          minConfidenceScore,
+          minRemotenessScore,
+          maxRemotenessScore,
+          minCampabilityScore,
+          availableFuelRangeMiles,
+          availableWaterCapacityGallons,
+          routeType,
+          difficulty,
+          vehicleClass,
+          sourceAdapter,
+        });
+      } catch {
+        coverageDiagnosticsUnavailable = true;
+      }
+    }
     const anySourceBackedCandidateCount = radiusFiltered.radiusMatchedCount + curationCoverage.curationCandidateCount;
 
     const conditionAwareRecords = attachCurrentConditionOverlays(limitedRecords);
@@ -1078,7 +1260,9 @@ serve(async (req) => {
       ? sourceMatchedCount ?? 0
       : radiusFiltered.radiusMatchedCount;
     const hasMore = matchedCount > windowEnd;
-    const totalMatchedCountBounded = candidates.length >= queryLimit;
+    const totalMatchedCountBounded = hasRadiusCriteria
+      ? nearbyLookupBounded
+      : candidates.length >= queryLimit;
     return jsonResponse({
       ok: true,
       records,
@@ -1089,10 +1273,12 @@ serve(async (req) => {
         source: 'verified_routes',
         recommendationOnly,
         includeCoverageDiagnostics,
-        bboxFilterApplied: hasRadiusCriteria,
+        bboxFilterApplied: false,
+        spatialIndexFilterApplied: hasRadiusCriteria,
         radiusFilterApplied: radiusFiltered.radiusFilterApplied,
         candidateLimit: queryLimit,
         candidateCount: candidates.length,
+        spatialIndexCandidateCount: nearbyLookupCount,
         radiusMatchedCount: radiusFiltered.radiusMatchedCount,
         geometryMatchedCount: radiusFiltered.geometryMatchedCount,
         trailheadMatchedCount: radiusFiltered.trailheadMatchedCount,
@@ -1100,6 +1286,7 @@ serve(async (req) => {
         aliasMatchedCount: radiusFiltered.aliasMatchedCount,
         featuredMatchedCount: radiusFiltered.featuredMatchedCount,
         knownRouteDiagnostics,
+        coverageDiagnosticsUnavailable,
         sourceAdapter: sourceAdapter || null,
         sourceFilterApplied: !!sourceAdapter,
         sourceMatchedCount,

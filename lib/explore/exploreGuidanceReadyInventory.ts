@@ -719,13 +719,29 @@ function availabilityDecision(
   };
 }
 
+function isExploreDiscoveryBlockingReason(
+  route: ExpeditionOpportunity,
+  guidanceReason: string | null,
+  reason: ExploreGuidanceReadyExclusionReason,
+): boolean {
+  // The five-mile threshold is a guidance-card policy, not evidence that a
+  // route summary is unsafe or unusable. Short official routes remain
+  // discoverable and may enter Trip Builder, where detail geometry is fetched
+  // and validated before any active-guidance handoff.
+  if (reason.code === 'too_short') return false;
+  return !(
+    reason.code === 'missing_geometry' &&
+    getExploreRouteDetailState(route, guidanceReason) === 'deferred'
+  );
+}
+
 export function classifyExploreRouteAvailability(
   route: ExpeditionOpportunity,
 ): ExploreRouteAvailability {
   const guidance = defaultExploreReadyRouteEligibility(route);
   const detailState = getExploreRouteDetailState(route, guidance.reason);
   const discoverabilityReasons = guidance.exclusionReasons.filter(
-    (reason) => !(detailState === 'deferred' && reason.code === 'missing_geometry'),
+    (reason) => isExploreDiscoveryBlockingReason(route, guidance.reason, reason),
   );
   const tripBuilderEligibility = getExploreTripBuilderEligibility(route);
   const tripBuilderReasons: Array<{
@@ -999,9 +1015,10 @@ function buildForRefinement(
       const eligibility = purpose === 'discovery'
         ? buildEligibilityResult(
             guidanceEligibility.exclusionReasons.filter(
-              (reason) => !(
-                reason.code === 'missing_geometry' &&
-                getExploreRouteDetailState(route, guidanceEligibility.reason) === 'deferred'
+              (reason) => isExploreDiscoveryBlockingReason(
+                route,
+                guidanceEligibility.reason,
+                reason,
               ),
             ),
           )

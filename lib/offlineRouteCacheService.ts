@@ -17,6 +17,8 @@ import {
   type RunStats,
 } from './runStore';
 import type { RouteWaypoint } from './routeStore';
+import type { RoadNavRoute } from './mapboxRoadNavigation';
+import { getValidatedRoadNavRoute } from './navigation/roadNavRoutePersistence';
 import type { SegmentRiskProfile } from './segmentRiskEngine';
 import type { TileBounds } from './tileCacheStore';
 import {
@@ -28,6 +30,7 @@ import {
 export type OfflineRouteSource = 'gpx' | 'built' | 'imported' | 'explore' | 'drawn';
 
 export type OfflineRouteCacheStatus = 'not_cached' | 'caching' | 'cached' | 'failed';
+export type OfflineRouteTileCacheStatus = 'not_requested' | 'downloading' | 'complete' | 'failed' | 'unavailable';
 
 export interface Coordinate {
   latitude: number;
@@ -120,13 +123,21 @@ export interface OfflineCachedRoute {
   runDetail?: RunDetailSnapshot;
   segmentRiskAnalysis?: SegmentRiskAnalysisSnapshot;
   turnCues?: TurnCue[];
+  /** Exact normalized provider route used for offline road maneuvers. */
+  preparedRoadRoute?: RoadNavRoute | null;
+  roadGuidanceStatus?: 'cached_turn_by_turn' | 'unavailable';
   originalGpxText?: string;
   originalGpxMetadata?: Record<string, unknown>;
+  /** All map regions required by this route package. */
+  offlineTileRegionIds?: string[];
+  /** Per-region terminal/progress truth used to derive the aggregate status. */
+  offlineTileRegionStatuses?: Record<string, OfflineRouteTileCacheStatus>;
+  /** Legacy primary region retained for older consumers. */
   offlineTileRegionId?: string | null;
   cacheVersion: number;
   cacheStatus: OfflineRouteCacheStatus;
   tileCacheAvailable: boolean;
-  tileCacheStatus?: 'not_requested' | 'downloading' | 'complete' | 'failed' | 'unavailable';
+  tileCacheStatus?: OfflineRouteTileCacheStatus;
   tileCacheError?: string | null;
   cacheGroups?: string[];
   remoteCache?: OfflineRemoteCacheManifest | null;
@@ -137,14 +148,17 @@ export interface CacheOfflineRouteInput {
   health?: RunHealthResult | null;
   segmentRiskAnalysis?: SegmentRiskAnalysisSnapshot;
   offlineTileRegionId?: string | null;
+  offlineTileRegionIds?: string[] | null;
   tileCacheStatus?: OfflineCachedRoute['tileCacheStatus'];
   tileCacheError?: string | null;
   includeRemoteConnectivityCache?: boolean;
   remoteCache?: OfflineRemoteCacheManifest | null;
   routeIntent?: OfflineRouteIntentMetadata | null;
+  /** Omit to preserve an existing cached provider route; null clears it. */
+  preparedRoadRoute?: RoadNavRoute | null;
 }
 
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 const STORAGE_KEY = 'ecs_offline_cached_routes_v1';
 const NATIVE_DIR = 'offline-routes/';
 const NATIVE_FILE = 'offline-routes.json';
@@ -418,13 +432,125 @@ function routeToRunPoint(point: Coordinate, idx: number): RunPoint {
   };
 }
 
+export function getOfflineCachedPreparedRoadRoute(
+  route: Pick<OfflineCachedRoute, 'preparedRoadRoute'> | null | undefined,
+): RoadNavRoute | null {
+  return getValidatedRoadNavRoute(route?.preparedRoadRoute, {
+    requireTurnByTurn: true,
+  });
+}
+
+function normalizeOfflineTileRegionIds(
+  ids: unknown,
+  legacyId?: string | null,
+): string[] {
+  return Array.from(new Set([
+    ...(Array.isArray(ids) ? ids : []),
+    ...(legacyId ? [legacyId] : []),
+  ]
+    .map((value) => typeof value === 'string' ? value.trim() : '')
+    .filter(Boolean)));
+}
+
+function normalizeOfflineTileRegionStatuses(
+  value: unknown,
+  regionIds: string[],
+  legacyRegionId: string | null,
+  legacyStatus: OfflineRouteTileCacheStatus | undefined,
+): Record<string, OfflineRouteTileCacheStatus> {
+  const source = value && typeof value === 'object'
+    ? value as Record<string, unknown>
+    : {};
+  const statuses: Record<string, OfflineRouteTileCacheStatus> = {};
+  regionIds.forEach((regionId) => {
+    const candidate = source[regionId];
+    if (['not_requested', 'downloading', 'complete', 'failed', 'unavailable'].includes(String(candidate))) {
+      statuses[regionId] = candidate as OfflineRouteTileCacheStatus;
+    } else if (legacyRegionId === regionId && legacyStatus) {
+      statuses[regionId] = legacyStatus;
+    } else {
+      statuses[regionId] = 'not_requested';
+    }
+  });
+  return statuses;
+}
+
+function aggregateOfflineTileRegionStatus(
+  regionIds: string[],
+  statuses: Record<string, OfflineRouteTileCacheStatus>,
+  fallback: OfflineRouteTileCacheStatus,
+): OfflineRouteTileCacheStatus {
+  if (regionIds.length === 0) return fallback;
+  const values = regionIds.map((regionId) => statuses[regionId] ?? 'not_requested');
+  if (values.some((status) => status === 'downloading')) return 'downloading';
+  if (values.some((status) => status === 'failed')) return 'failed';
+  if (values.every((status) => status === 'complete')) return 'complete';
+  if (values.some((status) => status === 'unavailable')) return 'unavailable';
+  return 'not_requested';
+}
+
+function normalizePersistedCachedRoute(value: unknown): OfflineCachedRoute | null {
+  if (!value || typeof value !== 'object') return null;
+  const route = value as OfflineCachedRoute;
+  const preparedRoadRoute = getOfflineCachedPreparedRoadRoute(route);
+  const offlineTileRegionIds = normalizeOfflineTileRegionIds(
+    route.offlineTileRegionIds,
+    route.offlineTileRegionId,
+  );
+  const offlineTileRegionStatuses = normalizeOfflineTileRegionStatuses(
+    route.offlineTileRegionStatuses,
+    offlineTileRegionIds,
+    route.offlineTileRegionId ?? null,
+    route.tileCacheStatus,
+  );
+  return {
+    ...route,
+    preparedRoadRoute,
+    roadGuidanceStatus: preparedRoadRoute ? 'cached_turn_by_turn' : 'unavailable',
+    offlineTileRegionIds,
+    offlineTileRegionStatuses,
+    tileCacheAvailable: offlineTileRegionIds.length > 0,
+    tileCacheStatus: aggregateOfflineTileRegionStatus(
+      offlineTileRegionIds,
+      offlineTileRegionStatuses,
+      route.tileCacheStatus ?? 'not_requested',
+    ),
+  };
+}
+
+function normalizePersistedCachedRoutes(value: unknown): OfflineCachedRoute[] {
+  return Array.isArray(value)
+    ? value
+        .map(normalizePersistedCachedRoute)
+        .filter((route): route is OfflineCachedRoute => route != null)
+    : [];
+}
+
+function turnCuesFromPreparedRoadRoute(route: RoadNavRoute): TurnCue[] {
+  return route.steps.map((step) => {
+    const location = step?.location;
+    const validLocation = location &&
+      Number.isFinite(Number(location.lat)) &&
+      Number.isFinite(Number(location.lng));
+    return {
+      id: String(step?.id ?? `offline-turn-${route.id}`),
+      instruction: String(step?.instruction ?? 'Continue on route'),
+      latitude: validLocation ? Number(location.lat) : undefined,
+      longitude: validLocation ? Number(location.lng) : undefined,
+      distanceMiles: Number.isFinite(Number(step?.startDistanceM))
+        ? Number(step.startDistanceM) / 1609.344
+        : undefined,
+    };
+  });
+}
+
 function webRead(): OfflineCachedRoute[] {
   if (Platform.OS !== 'web' || typeof localStorage === 'undefined') return [];
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return normalizePersistedCachedRoutes(parsed);
   } catch {
     return [];
   }
@@ -462,7 +588,7 @@ async function readAllRoutes(): Promise<OfflineCachedRoute[]> {
   try {
     const raw = await fsReadString(uri, 'utf8');
     const parsed = JSON.parse(raw);
-    memoryRoutes = Array.isArray(parsed) ? parsed : [];
+    memoryRoutes = normalizePersistedCachedRoutes(parsed);
     return memoryRoutes;
   } catch {
     memoryRoutes = [];
@@ -516,9 +642,43 @@ export async function cacheOfflineRoute(input: CacheOfflineRouteInput): Promise<
     (route) => routeMatchesCacheRequest(route, run.id, stableRouteKey, routeStyleKey)
   );
   const existing = existingIndex >= 0 ? routes[existingIndex] : null;
-  const tileCacheStatus =
+  const preparedRoadRouteSupplied = input.preparedRoadRoute !== undefined;
+  const preparedRoadRoute = !preparedRoadRouteSupplied
+    ? getOfflineCachedPreparedRoadRoute(existing)
+    : getValidatedRoadNavRoute(input.preparedRoadRoute, { requireTurnByTurn: true });
+  const requestedTileCacheStatus =
     input.tileCacheStatus ??
     (input.offlineTileRegionId ? 'complete' : existing?.tileCacheStatus ?? 'not_requested');
+  const offlineTileRegionIds = normalizeOfflineTileRegionIds(
+    input.offlineTileRegionIds == null
+      ? existing?.offlineTileRegionIds ?? []
+      : input.offlineTileRegionIds,
+    input.offlineTileRegionId ?? existing?.offlineTileRegionId ?? null,
+  );
+  const offlineTileRegionStatuses = normalizeOfflineTileRegionStatuses(
+    existing?.offlineTileRegionStatuses,
+    offlineTileRegionIds,
+    existing?.offlineTileRegionId ?? null,
+    existing?.tileCacheStatus,
+  );
+  (input.offlineTileRegionIds ?? []).forEach((regionId) => {
+    if (typeof regionId === 'string' && regionId.trim()) {
+      offlineTileRegionStatuses[regionId.trim()] = requestedTileCacheStatus;
+    }
+  });
+  if (input.offlineTileRegionId) {
+    offlineTileRegionStatuses[input.offlineTileRegionId] = requestedTileCacheStatus;
+  }
+  const tileCacheStatus = aggregateOfflineTileRegionStatus(
+    offlineTileRegionIds,
+    offlineTileRegionStatuses,
+    requestedTileCacheStatus,
+  );
+  const tileCacheError = tileCacheStatus === 'complete'
+    ? null
+    : input.tileCacheError !== undefined
+      ? input.tileCacheError
+      : existing?.tileCacheError ?? null;
   const segmentRiskAnalysis = input.segmentRiskAnalysis ?? existing?.segmentRiskAnalysis ?? null;
   const includeRemoteConnectivityCache = input.includeRemoteConnectivityCache ?? true;
   const remoteCache = includeRemoteConnectivityCache
@@ -556,15 +716,23 @@ export async function cacheOfflineRoute(input: CacheOfflineRouteInput): Promise<
     waypoints: Array.isArray(run.waypoints) ? run.waypoints : [],
     runDetail: buildRunDetailSnapshot(run, input.health),
     segmentRiskAnalysis,
-    turnCues: existing?.turnCues ?? [],
+    turnCues: preparedRoadRoute
+      ? turnCuesFromPreparedRoadRoute(preparedRoadRoute)
+      : preparedRoadRouteSupplied
+        ? []
+        : existing?.turnCues ?? [],
+    preparedRoadRoute,
+    roadGuidanceStatus: preparedRoadRoute ? 'cached_turn_by_turn' : 'unavailable',
     originalGpxText: existing?.originalGpxText ?? generateRunGPX(run),
     originalGpxMetadata: buildOriginalMetadata(run),
-    offlineTileRegionId: input.offlineTileRegionId ?? existing?.offlineTileRegionId ?? null,
+    offlineTileRegionIds,
+    offlineTileRegionStatuses,
+    offlineTileRegionId: input.offlineTileRegionId ?? existing?.offlineTileRegionId ?? offlineTileRegionIds[0] ?? null,
     cacheVersion: CACHE_VERSION,
     cacheStatus: 'cached',
-    tileCacheAvailable: !!(input.offlineTileRegionId ?? existing?.offlineTileRegionId),
+    tileCacheAvailable: offlineTileRegionIds.length > 0,
     tileCacheStatus,
-    tileCacheError: input.tileCacheError ?? null,
+    tileCacheError,
     cacheGroups,
     remoteCache,
   };
@@ -727,9 +895,13 @@ export function offlineCachedRouteToRun(cachedRoute: OfflineCachedRoute): ECSRun
       cache_status: cachedRoute.cacheStatus,
       cache_version: cachedRoute.cacheVersion,
       original_gpx_metadata: cachedRoute.originalGpxMetadata ?? null,
+      tile_region_ids: cachedRoute.offlineTileRegionIds ?? (cachedRoute.offlineTileRegionId ? [cachedRoute.offlineTileRegionId] : []),
+      tile_region_statuses: cachedRoute.offlineTileRegionStatuses ?? {},
       tile_cache_status: cachedRoute.tileCacheStatus ?? 'not_requested',
       cache_groups: cachedRoute.cacheGroups ?? (cachedRoute.remoteCache ? [REMOTE_CACHE_GROUP_ID] : []),
       remote_cache: cachedRoute.remoteCache ?? null,
+      prepared_road_route: getOfflineCachedPreparedRoadRoute(cachedRoute),
+      road_guidance_status: cachedRoute.roadGuidanceStatus ?? 'unavailable',
     },
     is_active: false,
   };
@@ -782,8 +954,12 @@ export function offlineCachedRouteToRunCacheManifest(
     cache_status: cachedRoute.cacheStatus,
     cache_version: cachedRoute.cacheVersion,
     original_gpx_metadata: cachedRoute.originalGpxMetadata ?? null,
+    tile_region_ids: cachedRoute.offlineTileRegionIds ?? (cachedRoute.offlineTileRegionId ? [cachedRoute.offlineTileRegionId] : []),
+    tile_region_statuses: cachedRoute.offlineTileRegionStatuses ?? {},
     tile_cache_status: cachedRoute.tileCacheStatus ?? 'not_requested',
     cache_groups: cachedRoute.cacheGroups ?? (cachedRoute.remoteCache ? [REMOTE_CACHE_GROUP_ID] : []),
     remote_cache: cachedRoute.remoteCache ?? fallbackRun?.offline_cache?.remote_cache ?? null,
+    prepared_road_route: getOfflineCachedPreparedRoadRoute(cachedRoute),
+    road_guidance_status: cachedRoute.roadGuidanceStatus ?? 'unavailable',
   };
 }

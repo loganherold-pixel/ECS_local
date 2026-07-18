@@ -190,6 +190,11 @@ assert.deepStrictEqual(
 );
 assert(
   edgeSource.includes("from './providerContract.ts'") &&
+    edgeSource.includes("'route_catalog_nearby_route_ids'") &&
+    edgeSource.includes("'ROUTE_CATALOG_INVALID_SEARCH_AREA'") &&
+    edgeSource.includes('spatialIndexFilterApplied: hasRadiusCriteria') &&
+    edgeSource.includes('coverageDiagnosticsUnavailable = true') &&
+    edgeSource.includes('if (!skipCoverageDiagnostics && limitedRecords.length === 0)') &&
     edgeSource.includes('partitionRestrictedRouteCatalogRecords(conditionAwareRecords)') &&
     edgeSource.includes('diagnosticRecords,') &&
     edgeSource.includes('normalizeRouteCatalogPagination(params)') &&
@@ -198,7 +203,7 @@ assert(
     edgeSource.includes('cleanText(a.id).localeCompare(cleanText(b.id))') &&
     edgeSource.includes('totalMatchedCount: matchedCount') &&
     edgeSource.includes('nextPage: hasMore ? page + 1 : null'),
-  'The executed provider contract must be wired into the raw Edge response and pagination path.',
+  'The executed provider contract must use radius-first lookup, fail-soft diagnostics, restricted-source partitioning, and bounded pagination.',
 );
 
 const sourceVersionMigration = fs.readFileSync(verifiedRoutesSourceVersionMigrationPath, 'utf8');
@@ -210,3 +215,7 @@ assert(
 );
 
 console.log('Route catalog search provider contract checks passed.');
+
+// Keep the radius-first database behavior in the established provider-contract
+// lane so the regression cannot be skipped by running only package scripts.
+require('./test-route-catalog-nearby-route-ids-rpc.js');

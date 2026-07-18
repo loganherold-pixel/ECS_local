@@ -14,6 +14,7 @@
 import { Platform } from 'react-native';
 import { parseGPX, type ImportedRoute, type RouteWaypoint } from './routeStore';
 import type { OfflineRemoteCacheManifest } from './remote/offlineRemoteCache';
+import type { RoadNavRoute } from './mapboxRoadNavigation';
 import { createPersistedKeyValueCache } from './keyValuePersistence';
 import {
   buildGeometryFingerprint,
@@ -171,9 +172,13 @@ export interface RunOfflineCacheManifest {
   cache_status?: 'not_cached' | 'caching' | 'cached' | 'failed';
   cache_version?: number;
   original_gpx_metadata?: Record<string, unknown> | null;
+  tile_region_ids?: string[];
+  tile_region_statuses?: Record<string, 'not_requested' | 'downloading' | 'complete' | 'failed' | 'unavailable'>;
   tile_cache_status?: 'not_requested' | 'downloading' | 'complete' | 'failed' | 'unavailable';
   cache_groups?: string[];
   remote_cache?: OfflineRemoteCacheManifest | null;
+  prepared_road_route?: RoadNavRoute | null;
+  road_guidance_status?: 'cached_turn_by_turn' | 'unavailable';
 }
 
 export interface ECSRun {

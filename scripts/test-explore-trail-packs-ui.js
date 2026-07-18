@@ -135,9 +135,9 @@ assert(
   'Explore list rendering should avoid summary detail reads while selected Trip Builder detail uses route plus source-version cache identity.',
 );
 assert(
-  tripBuilder.includes('testID="trip-builder-selected-route-detail-state"') &&
-    tripBuilder.includes("title: 'Route Detail Unavailable'") &&
-    tripBuilder.includes('retryLabel="Retry Route Detail"') &&
+  tripBuilder.includes('testID="trip-builder-route-preparation-state"') &&
+    tripBuilder.includes("title: 'Route Preparation Unavailable'") &&
+    tripBuilder.includes('retryLabel="Retry Route Preparation"') &&
     selectedRouteDetail.includes("| 'ROUTE_CATALOG_DETAIL_UNAVAILABLE'") &&
     selectedRouteDetail.includes('safeErrorCode: failureCode(error)') &&
     selectedRouteDetail.includes('route: selectedSummary'),

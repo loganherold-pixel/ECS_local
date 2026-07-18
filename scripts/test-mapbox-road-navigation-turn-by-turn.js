@@ -65,6 +65,10 @@ function loadTsModule(relativePath) {
 
 const {
   fetchRoadRouteAlternatives,
+  getValidatedRoadNavRoute,
+  getRemainingRoadRouteWaypoints,
+  ROAD_NAV_MAX_INTERMEDIATE_WAYPOINTS,
+  ROAD_NAV_TOO_MANY_WAYPOINTS_SAFE_CODE,
 } = loadTsModule(path.join('lib', 'mapboxRoadNavigation.ts'));
 
 const destination = {
@@ -268,10 +272,250 @@ async function testDefensiveMissingStepFields() {
   assert.deepStrictEqual(routes[0].steps[0].voiceInstructions, []);
 }
 
+async function testOrderedIntermediateStopsUseOneMultiLegRequest() {
+  const fuelStop = { lat: 38.7811, lng: -121.2074 };
+  const supplyStop = { lat: 38.7818, lng: -121.2069 };
+  const fuelWaypoint = {
+    id: 'fuel-stop',
+    title: 'Last Fuel',
+    subtitle: 'Fuel before remote entry',
+    coordinate: fuelStop,
+    role: 'fuel',
+  };
+  const supplyWaypoint = {
+    id: 'supply-stop',
+    title: 'Groceries and Supplies',
+    subtitle: 'Final supply stop',
+    coordinate: supplyStop,
+    role: 'resupply',
+  };
+  const multiLegRoute = buildRoute({
+    legs: [
+      {
+        summary: 'Origin to fuel',
+        distance: 90,
+        duration: 40,
+        steps: [buildStep({
+          distance: 90,
+          duration: 40,
+          maneuver: {
+            instruction: 'Continue to fuel stop',
+            type: 'arrive',
+            location: [fuelStop.lng, fuelStop.lat],
+          },
+        })],
+      },
+      {
+        summary: 'Fuel to supplies',
+        distance: 80,
+        duration: 35,
+        steps: [buildStep({
+          distance: 80,
+          duration: 35,
+          maneuver: {
+            instruction: 'Continue to supply stop',
+            type: 'arrive',
+            location: [supplyStop.lng, supplyStop.lat],
+          },
+        })],
+      },
+      {
+        summary: 'Supplies to trailhead',
+        distance: 100,
+        duration: 45,
+        steps: [buildStep({
+          distance: 100,
+          duration: 45,
+          maneuver: {
+            instruction: 'Continue to trailhead',
+            type: 'arrive',
+            location: [destination.coordinate.lng, destination.coordinate.lat],
+          },
+        })],
+      },
+    ],
+  });
+
+  const { routes, requestedUrl } = await withMockedFetch(
+    { routes: [multiLegRoute] },
+    async (getRequestedUrl) => {
+      const result = await fetchRoadRouteAlternatives({
+        accessToken: 'test-token',
+        origin: { lat: 38.7807, lng: -121.2076 },
+        waypoints: [fuelWaypoint, supplyWaypoint],
+        destination,
+      });
+      return { routes: result, requestedUrl: getRequestedUrl() };
+    },
+  );
+
+  const encodedCoordinates = decodeURIComponent(new URL(requestedUrl).pathname);
+  assert.match(
+    encodedCoordinates,
+    /-121\.2076,38\.7807;-121\.2074,38\.7811;-121\.2069,38\.7818;-121\.2063,38\.7824$/,
+    'Directions must receive origin, ordered resupply stops, then trailhead in one request.',
+  );
+  assert.strictEqual(routes[0].legs.length, 3);
+  assert.deepStrictEqual(
+    routes[0].legs.map((leg) => leg.summary),
+    ['Origin to fuel', 'Fuel to supplies', 'Supplies to trailhead'],
+    'Normalized guidance must preserve the provider leg order through every itinerary stop.',
+  );
+  assert.deepStrictEqual(
+    routes[0].orderedWaypoints.map((waypoint) => ({ id: waypoint.id, title: waypoint.title })),
+    [
+      { id: 'fuel-stop', title: 'Last Fuel' },
+      { id: 'supply-stop', title: 'Groceries and Supplies' },
+    ],
+    'Prepared guidance must retain named ordered stop descriptors, not anonymous coordinates.',
+  );
+  assert.deepStrictEqual(
+    routes[0].legs.map((leg) => leg.arrivalWaypoint?.title),
+    ['Last Fuel', 'Groceries and Supplies', 'Field Office'],
+    'Every provider leg should identify its named arrival, including the final destination.',
+  );
+  assert.deepStrictEqual(
+    routes[0].steps.map((step) => step.instruction),
+    ['Arrive at Last Fuel', 'Arrive at Groceries and Supplies', 'Arrive at Field Office'],
+    'Arrival maneuvers should name the itinerary stop reached by that leg.',
+  );
+  assert.deepStrictEqual(
+    routes[0].guidance.steps.map((step) => step.instruction),
+    ['Arrive at Last Fuel', 'Arrive at Groceries and Supplies', 'Arrive at Field Office'],
+    'The mounted active-guidance contract should receive the same named arrivals.',
+  );
+  assert.strictEqual(
+    getValidatedRoadNavRoute(routes[0], { requireTurnByTurn: true }),
+    routes[0],
+    'The canonical persisted-route validator must retain valid ordered waypoint descriptors.',
+  );
+  assert.strictEqual(
+    getValidatedRoadNavRoute({
+      ...routes[0],
+      orderedWaypoints: [{ ...routes[0].orderedWaypoints[0], coordinate: { lat: 999, lng: 999 } }],
+    }),
+    null,
+    'Invalid persisted stop coordinates must not enter reroute guidance.',
+  );
+
+  return routes[0];
+}
+
+async function testReroutePreservesOnlyUnreachedStops() {
+  const preparedRoute = await testOrderedIntermediateStopsUseOneMultiLegRequest();
+  const remaining = getRemainingRoadRouteWaypoints(preparedRoute, {
+    currentLegIndex: 1,
+    currentStepIndex: 1,
+    routeDistanceFromStartM: 100,
+  });
+  assert.deepStrictEqual(
+    remaining.map((waypoint) => waypoint.id),
+    ['supply-stop'],
+    'After reaching fuel, reroute must retain the unreached supply stop and omit the completed stop.',
+  );
+
+  const rerouteOrigin = { lat: 38.7813, lng: -121.2072 };
+  const rerouteResponse = buildRoute({
+    legs: [
+      {
+        summary: 'Current location to supplies',
+        distance: 70,
+        duration: 30,
+        steps: [buildStep({
+          distance: 70,
+          duration: 30,
+          maneuver: {
+            instruction: 'Arrive at supply stop',
+            type: 'arrive',
+            location: [-121.2069, 38.7818],
+          },
+        })],
+      },
+      {
+        summary: 'Supplies to trailhead',
+        distance: 100,
+        duration: 45,
+        steps: [buildStep({
+          distance: 100,
+          duration: 45,
+          maneuver: {
+            instruction: 'Arrive at trailhead',
+            type: 'arrive',
+            location: [destination.coordinate.lng, destination.coordinate.lat],
+          },
+        })],
+      },
+    ],
+  });
+  const { routes, requestedUrl } = await withMockedFetch(
+    { routes: [rerouteResponse] },
+    async (getRequestedUrl) => {
+      const result = await fetchRoadRouteAlternatives({
+        accessToken: 'test-token',
+        origin: rerouteOrigin,
+        waypoints: remaining,
+        destination,
+        rerouteGeneration: 1,
+      });
+      return { routes: result, requestedUrl: getRequestedUrl() };
+    },
+  );
+  const encodedCoordinates = decodeURIComponent(new URL(requestedUrl).pathname);
+  assert.match(
+    encodedCoordinates,
+    /-121\.2072,38\.7813;-121\.2069,38\.7818;-121\.2063,38\.7824$/,
+    'Reroute must request current location, remaining supply stop, then the final trailhead.',
+  );
+  assert.ok(!encodedCoordinates.includes('-121.2074,38.7811'));
+  assert.deepStrictEqual(routes[0].orderedWaypoints.map((waypoint) => waypoint.id), ['supply-stop']);
+}
+
+async function testWaypointLimitTerminatesWithoutDroppingStops() {
+  const tooManyWaypoints = Array.from(
+    { length: ROAD_NAV_MAX_INTERMEDIATE_WAYPOINTS + 1 },
+    (_, index) => ({
+      id: `stop-${index + 1}`,
+      title: `Stop ${index + 1}`,
+      subtitle: null,
+      role: 'resupply',
+      coordinate: {
+        lat: 38.7808 + index * 0.00002,
+        lng: -121.2075 + index * 0.00002,
+      },
+    }),
+  );
+  let fetchCount = 0;
+  const originalFetch = global.fetch;
+  global.fetch = async () => {
+    fetchCount += 1;
+    throw new Error('Provider request should not run');
+  };
+  try {
+    await assert.rejects(
+      fetchRoadRouteAlternatives({
+        accessToken: 'test-token',
+        origin: { lat: 38.7807, lng: -121.2076 },
+        destination,
+        waypoints: tooManyWaypoints,
+      }),
+      (error) => (
+        error?.safeCode === ROAD_NAV_TOO_MANY_WAYPOINTS_SAFE_CODE &&
+        /up to 23 ordered intermediate stops/i.test(error.message)
+      ),
+      'More than 23 intermediate stops must produce an explicit terminal error.',
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+  assert.strictEqual(fetchCount, 0, 'An over-limit itinerary must not issue a truncated provider request.');
+}
+
 Promise.resolve()
   .then(testTurnByTurnRequestAndParser)
   .then(testSummaryOnlyWhenNoSteps)
   .then(testDefensiveMissingStepFields)
+  .then(testReroutePreservesOnlyUnreachedStops)
+  .then(testWaypointLimitTerminatesWithoutDroppingStops)
   .then(() => {
     console.log('Mapbox road navigation turn-by-turn request/parser regression passed.');
   })

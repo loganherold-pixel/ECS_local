@@ -25,11 +25,19 @@ assert(fs.existsSync(modulePath), 'Shared route catalog viewport service should 
 
 const {
   ROUTE_CATALOG_VIEWPORT_DEFAULT_LIMIT,
+  ROUTE_CATALOG_VIEWPORT_MIN_ZOOM,
   RouteCatalogViewportCache,
+  buildRouteCatalogViewportGuidancePlan,
+  buildRouteCatalogViewportPersistencePlan,
   buildRouteCatalogViewportQuery,
+  isRouteCatalogViewportZoomEligible,
   queryRouteCatalogViewportRecords,
+  resolveRouteCatalogViewportSelection,
   routeCatalogViewportFeaturesToRouteGeometrySegments,
 } = require(modulePath);
+const {
+  ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM,
+} = require(path.join(root, 'lib', 'routeGeometryViewport.ts'));
 
 const nowIso = new Date().toISOString();
 const tahoeViewport = {
@@ -158,6 +166,14 @@ const query = buildRouteCatalogViewportQuery({
 
 assert.strictEqual(query.limit, ROUTE_CATALOG_VIEWPORT_DEFAULT_LIMIT);
 assert(query.radiusMiles >= 15, 'Viewport query should derive a usable radius from the map bounds.');
+assert.strictEqual(ROUTE_CATALOG_VIEWPORT_MIN_ZOOM, 8);
+assert(
+  ROUTE_CATALOG_VIEWPORT_MIN_ZOOM < ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM,
+  'Suggested ECS routes should become eligible farther out than close-detail MVUM segments.',
+);
+assert.strictEqual(isRouteCatalogViewportZoomEligible(7.99), false);
+assert.strictEqual(isRouteCatalogViewportZoomEligible(8), true);
+assert.strictEqual(isRouteCatalogViewportZoomEligible(Number.NaN), false);
 
 const result = queryRouteCatalogViewportRecords(records, query);
 assert.strictEqual(result.candidateCount, 5);
@@ -193,6 +209,81 @@ assert.strictEqual(preview.geometry.type, 'LineString');
 assert.strictEqual(preview.properties.geometryStatus, 'preview_geometry');
 assert.strictEqual(preview.properties.guidanceReady, false);
 
+const rawGpsOrigin = { lat: 39.31005, lng: -120.52 };
+const rawGpsSnapshot = { ...rawGpsOrigin };
+const guidancePlan = buildRouteCatalogViewportGuidancePlan(tahoe, {
+  origin: rawGpsOrigin,
+  accuracyM: 8,
+});
+assert.strictEqual(guidancePlan.status, 'ready');
+assert.strictEqual(guidancePlan.reason, null);
+assert.strictEqual(guidancePlan.requiresApproach, false, 'GPS inside the bounded trail tolerance should use stored canonical geometry directly.');
+assert(guidancePlan.entryDistanceFromOriginM <= guidancePlan.snapToleranceM);
+assert.strictEqual(guidancePlan.canonicalGeometry.length, 3);
+assert(
+  guidancePlan.entryDistanceFromRouteStartM > 1_000,
+  'A GPS origin beside the middle of a route should enter near the middle rather than at the first coordinate.',
+);
+assert(
+  guidancePlan.remainingGeometry.length >= 2 &&
+    guidancePlan.remainingGeometry.length < guidancePlan.canonicalGeometry.length + 1,
+  'Guidance should retain only the canonical route at and after the projected entry point.',
+);
+assert.deepStrictEqual(
+  guidancePlan.remainingGeometry[0],
+  guidancePlan.entryCoordinate,
+  'The remaining route should begin at the projected canonical coordinate.',
+);
+assert.notDeepStrictEqual(
+  guidancePlan.entryCoordinate,
+  rawGpsOrigin,
+  'The guidance entry may be projected, but raw GPS must not be used as route-line geometry.',
+);
+assert.deepStrictEqual(rawGpsOrigin, rawGpsSnapshot, 'Projection must not mutate the raw GPS input.');
+assert.deepStrictEqual(
+  guidancePlan.destinationCoordinate,
+  guidancePlan.canonicalGeometry[guidancePlan.canonicalGeometry.length - 1],
+  'Projected guidance must preserve the canonical route destination.',
+);
+
+const offRouteGuidancePlan = buildRouteCatalogViewportGuidancePlan(tahoe, {
+  origin: { lat: 38.9, lng: -121.2 },
+  accuracyM: 10,
+});
+assert.strictEqual(offRouteGuidancePlan.status, 'ready');
+assert.strictEqual(offRouteGuidancePlan.requiresApproach, true, 'GPS outside the bounded tolerance must require an approach route.');
+assert(offRouteGuidancePlan.entryDistanceFromOriginM > offRouteGuidancePlan.snapToleranceM);
+
+const persistencePlan = buildRouteCatalogViewportPersistencePlan(tahoe);
+const repeatedPersistencePlan = buildRouteCatalogViewportPersistencePlan(tahoe);
+assert.strictEqual(persistencePlan.status, 'ready');
+assert.strictEqual(persistencePlan.persistenceKey, repeatedPersistencePlan.persistenceKey);
+assert.strictEqual(persistencePlan.geometryFingerprint, repeatedPersistencePlan.geometryFingerprint);
+assert.deepStrictEqual(
+  persistencePlan.coordinates,
+  [
+    [-120.66, 39.23],
+    [-120.52, 39.31],
+    [-120.34, 39.38],
+  ],
+  'Persistence coordinates must retain canonical longitude/latitude order.',
+);
+assert.strictEqual(persistencePlan.sourceMetadata.routeCatalogRouteId, 'route-a');
+assert.strictEqual(persistencePlan.sourceMetadata.routeGeometrySourceKind, 'route_catalog');
+assert.strictEqual(persistencePlan.sourceMetadata.guidanceReady, true);
+
+const previewGuidancePlan = buildRouteCatalogViewportGuidancePlan(preview, {
+  origin: rawGpsOrigin,
+  accuracyM: 8,
+});
+assert.strictEqual(previewGuidancePlan.status, 'unavailable');
+assert.match(previewGuidancePlan.reason, /preview geometry/i);
+assert.deepStrictEqual(previewGuidancePlan.remainingGeometry, []);
+const previewPersistencePlan = buildRouteCatalogViewportPersistencePlan(preview);
+assert.strictEqual(previewPersistencePlan.status, 'unavailable');
+assert.strictEqual(previewPersistencePlan.persistenceKey, null);
+assert.deepStrictEqual(previewPersistencePlan.coordinates, []);
+
 assert(
   !result.featureCollection.features.some((feature) => feature.properties.routeId === 'outside'),
   'Routes outside the viewport and tag query should not be rendered.',
@@ -207,6 +298,122 @@ assert.strictEqual(overlaySegments[0].routeGeometrySelected, true);
 assert.strictEqual(overlaySegments[0].sourceMetadata.routeGeometrySourceKind, 'route_catalog');
 assert.strictEqual(overlaySegments[0].sourceMetadata.routeCatalogRouteId, 'route-a');
 assert.strictEqual(overlaySegments[0].sourceMetadata.geometryStatus, 'guidance_ready');
+
+const multipartRoute = catalogRoute({
+  id: 'multipart-route',
+  public_id: 'multipart-route',
+  name: 'Two Part Suggested Route',
+  route_geometry: {
+    type: 'MultiLineString',
+    coordinates: [
+      [
+        [-120.62, 39.24],
+        [-120.55, 39.29],
+      ],
+      [
+        [-120.55, 39.29],
+        [-120.47, 39.34],
+      ],
+    ],
+  },
+});
+const anotherRoute = catalogRoute({
+  id: 'another-route',
+  public_id: 'another-route',
+  name: 'Another Suggested Route',
+});
+const disconnectedRoute = catalogRoute({
+  id: 'disconnected-route',
+  public_id: 'disconnected-route',
+  name: 'Disconnected Source Parts',
+  route_geometry: {
+    type: 'MultiLineString',
+    coordinates: [
+      [
+        [-120.64, 39.23],
+        [-120.58, 39.27],
+      ],
+      [
+        [-120.42, 39.35],
+        [-120.34, 39.39],
+      ],
+    ],
+  },
+});
+const selectionResult = queryRouteCatalogViewportRecords([multipartRoute, anotherRoute, disconnectedRoute], query);
+const disconnectedFeature = selectionResult.featureCollection.features.find(
+  (feature) => feature.properties.routeId === 'disconnected-route',
+);
+assert(disconnectedFeature, 'Disconnected source-backed route parts should remain visible for truthful preview.');
+assert.strictEqual(disconnectedFeature.properties.guidanceReady, false);
+assert.strictEqual(disconnectedFeature.properties.geometryStatus, 'insufficient_geometry');
+assert.strictEqual(buildRouteCatalogViewportGuidancePlan(disconnectedFeature).status, 'unavailable');
+const unselectedRouteSegments = routeCatalogViewportFeaturesToRouteGeometrySegments(
+  selectionResult.featureCollection,
+);
+const multipartParts = unselectedRouteSegments.filter((segment) => segment.sourceId === 'multipart-route');
+assert.strictEqual(multipartParts.length, 2, 'Multipart catalog routes should retain all drawable route parts.');
+
+const multipartSelection = resolveRouteCatalogViewportSelection(
+  selectionResult.featureCollection,
+  multipartParts[1].id,
+);
+assert(multipartSelection, 'Selecting any route part should resolve the stable whole-route identity.');
+assert.strictEqual(multipartSelection.routeId, 'multipart-route');
+assert.deepStrictEqual(
+  multipartSelection.overlaySegmentIds,
+  multipartParts.map((segment) => segment.id),
+  'A tap on one part must select every drawable part of the same suggested route.',
+);
+const selectedMultipartSegments = routeCatalogViewportFeaturesToRouteGeometrySegments(
+  selectionResult.featureCollection,
+  multipartSelection.overlaySegmentIds,
+);
+assert(
+  selectedMultipartSegments
+    .filter((segment) => segment.sourceId === 'multipart-route')
+    .every((segment) => segment.routeGeometrySelected),
+  'Every part of the selected route should receive selected presentation state.',
+);
+
+const replacementSelection = resolveRouteCatalogViewportSelection(
+  selectionResult.featureCollection,
+  'another-route',
+);
+assert(replacementSelection, 'A second route should resolve to a replacement selection.');
+assert.strictEqual(replacementSelection.routeId, 'another-route');
+assert(
+  replacementSelection.overlaySegmentIds.every((id) => !multipartSelection.overlaySegmentIds.includes(id)),
+  'Selecting another route should replace, rather than accumulate, the prior route selection.',
+);
+
+const refreshedFeatureCollection = {
+  ...selectionResult.featureCollection,
+  features: selectionResult.featureCollection.features.map((feature) =>
+    feature.properties.routeId === 'multipart-route'
+      ? { ...feature, id: 'provider-refresh-feature-id' }
+      : feature,
+  ),
+};
+const retainedSelection = resolveRouteCatalogViewportSelection(
+  refreshedFeatureCollection,
+  multipartSelection.routeId,
+);
+assert(retainedSelection, 'Selection should survive viewport refresh by stable route identity.');
+assert.strictEqual(retainedSelection.routeId, multipartSelection.routeId);
+assert.strictEqual(
+  resolveRouteCatalogViewportSelection(
+    {
+      ...selectionResult.featureCollection,
+      features: selectionResult.featureCollection.features.filter(
+        (feature) => feature.properties.routeId !== multipartSelection.routeId,
+      ),
+    },
+    multipartSelection.routeId,
+  ),
+  null,
+  'Selection should clear when its stable route identity is no longer in the viewport result.',
+);
 
 let loaderCalls = 0;
 const cache = new RouteCatalogViewportCache({ maxEntries: 2 });

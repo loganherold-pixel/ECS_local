@@ -22,6 +22,10 @@ const registry = require(path.join(root, 'lib', 'features', 'featureVisibilityRe
 const dispatchRollout = require(path.join(root, 'lib', 'dispatchRolloutConfig.ts'));
 const fleetRollout = require(path.join(root, 'lib', 'fleet', 'fleetPremiumReleaseConfig.ts'));
 const { buildProductionReport } = require(path.join(root, 'scripts', 'generate-production-visibility-report.js'));
+const registrySource = fs.readFileSync(
+  path.join(root, 'lib', 'features', 'featureVisibilityRegistry.ts'),
+  'utf8',
+);
 
 function context(overrides = {}) {
   return registry.createRuntimeFeatureVisibilityContext({
@@ -57,6 +61,81 @@ assert.strictEqual(registry.resolveECSFeatureVisibility('explore_offline_prep', 
 assert.strictEqual(registry.resolveECSFeatureVisibility('dispatch_team_position_sharing', context()).visible, false);
 assert.strictEqual(registry.resolveECSFeatureVisibility('dispatch_smart_rally', context()).visible, false);
 assert.strictEqual(registry.resolveECSFeatureVisibility('ai_assist', context()).visible, false);
+
+const approvedInternalCampEnv = {
+  EXPO_PUBLIC_APP_ENV: 'internal',
+  EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER: 'true',
+  EXPO_PUBLIC_ECS_DISPERSED_CAMPING_LAYER: 'true',
+};
+assert.strictEqual(
+  registry.resolveECSFeatureVisibility(
+    'established_campgrounds',
+    context({ environment: 'internal', env: approvedInternalCampEnv }),
+  ).visible,
+  true,
+  'Approved internal builds should expose established campgrounds.',
+);
+assert.strictEqual(
+  registry.resolveECSFeatureVisibility(
+    'dispersed_camping',
+    context({ environment: 'internal', env: approvedInternalCampEnv }),
+  ).visible,
+  true,
+  'Approved internal builds should expose dispersed camping reference data.',
+);
+assert.strictEqual(
+  registry.resolveECSFeatureVisibility(
+    'dispersed_camping',
+    context({
+      environment: 'internal',
+      env: {
+        ...approvedInternalCampEnv,
+        EXPO_PUBLIC_ECS_KILL_DISPERSED_CAMPING: 'true',
+      },
+    }),
+  ).reason,
+  'kill_switch',
+  'The dispersed-camping kill switch must retain precedence in internal builds.',
+);
+assert.strictEqual(
+  registry.resolveECSFeatureVisibility(
+    'established_campgrounds',
+    context({
+      environment: 'internal',
+      env: {
+        ...approvedInternalCampEnv,
+        EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER: 'false',
+      },
+    }),
+  ).visible,
+  false,
+  'An explicit false rollout value must keep established campgrounds unavailable.',
+);
+assert.strictEqual(
+  registry.resolveECSFeatureVisibility(
+    'dispersed_camping',
+    context({
+      environment: 'production',
+      env: {
+        EXPO_PUBLIC_APP_ENV: 'production',
+        EXPO_PUBLIC_ECS_DISPERSED_CAMPING_LAYER: 'true',
+      },
+    }),
+  ).reason,
+  'environment_blocked',
+  'A public production build must not inherit the internal dispersed-camping rollout.',
+);
+[
+  'EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER',
+  'EXPO_PUBLIC_ECS_KILL_ESTABLISHED_CAMPGROUNDS',
+  'EXPO_PUBLIC_ECS_DISPERSED_CAMPING_LAYER',
+  'EXPO_PUBLIC_ECS_KILL_DISPERSED_CAMPING',
+].forEach((environmentKey) => {
+  assert(
+    new RegExp(`${environmentKey}:\\s*process\\.env\\.${environmentKey}`).test(registrySource),
+    `Expo's authoritative feature reader should retain static camp rollout reference: ${environmentKey}`,
+  );
+});
 
 const missingContext = registry.resolveECSFeatureVisibility('fleet_tab', {
   ...context(),

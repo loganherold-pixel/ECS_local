@@ -58,6 +58,7 @@ import {
   NAVIGATE_STITCHED_ROUTE_SOURCE_ID,
   MVUM_OVERLAY_HALO_LAYER_ID,
   MVUM_OVERLAY_LAYER_ID,
+  MVUM_SEGMENT_ID_PROPERTY_KEYS,
   MVUM_OVERLAY_SELECTED_LAYER_ID,
   MVUM_OVERLAY_SELECTED_SOURCE_ID,
   MVUM_OVERLAY_SOURCE_ID,
@@ -226,6 +227,7 @@ type Waypoint = {
 
 type SegmentFeature = {
   id?: string | number;
+  sourceSegmentId?: string | null;
   coordinates?: [number, number][] | { latitude: number; longitude: number }[];
   color?: string;
   health?: string;
@@ -623,6 +625,7 @@ type WebMapPayload = {
     invalidFeatureCount: number;
     segments: {
       id: string;
+      sourceSegmentId?: string | null;
       coordinates: [number, number][];
       color: string;
       kind?: string | null;
@@ -1861,6 +1864,7 @@ export function buildWebPayload(props: MapRendererProps): WebMapPayload {
 
   const normalizedSegments = (props.segments || []).map((segment, index) => ({
     id: toMarkerId('seg', segment.id, index),
+    sourceSegmentId: String(segment.sourceSegmentId ?? segment.id ?? index),
     coordinates: normalizeLineCoordinates(segment.coordinates),
     color:
       segment.color ||
@@ -2939,6 +2943,7 @@ function makeMapHtml(
       var MVUM_OVERLAY_SOURCE_ID = ${JSON.stringify(MVUM_OVERLAY_SOURCE_ID)};
       var MVUM_OVERLAY_HALO_LAYER_ID = ${JSON.stringify(MVUM_OVERLAY_HALO_LAYER_ID)};
       var MVUM_OVERLAY_LAYER_ID = ${JSON.stringify(MVUM_OVERLAY_LAYER_ID)};
+      var MVUM_SEGMENT_ID_PROPERTY_KEYS = ${JSON.stringify(MVUM_SEGMENT_ID_PROPERTY_KEYS)};
       var MVUM_OVERLAY_SELECTED_SOURCE_ID = ${JSON.stringify(MVUM_OVERLAY_SELECTED_SOURCE_ID)};
       var MVUM_OVERLAY_SELECTED_LAYER_ID = ${JSON.stringify(MVUM_OVERLAY_SELECTED_LAYER_ID)};
       var NAVIGATE_STITCHED_ROUTE_SOURCE_ID = ${JSON.stringify(NAVIGATE_STITCHED_ROUTE_SOURCE_ID)};
@@ -3349,6 +3354,8 @@ function makeMapHtml(
       var mvumOverlaySourceSignature = null;
       var routeGeometryOverlayAppliedSignature = null;
       var mvumOverlayAppliedSignature = null;
+      var mvumOverlayDataSignature = null;
+      var mvumOverlaySelectionSignature = null;
       var routeGeometryRenderVerification = null;
       var mvumRenderVerification = null;
       var LAYER_RENDER_VERIFICATION_TIMEOUT_MS = 5000;
@@ -4110,6 +4117,7 @@ function makeMapHtml(
           features.push(lineFeature(String(segment.id || ('route-geometry-' + features.length)), normalizedCoordinates, {
             color: segment.color || '#F2C24D',
             kind: 'route_geometry_segment',
+            sourceSegmentId: segment.sourceSegmentId || segment.id || null,
             name: segment.name || null,
             category: segment.category || null,
             categoryLabel: segment.categoryLabel || null,
@@ -4119,7 +4127,8 @@ function makeMapHtml(
             routeGeometryWarningsJson: segment.routeGeometryWarningsJson || null,
             routeGeometrySelected:
               segment.routeGeometrySelected === true ||
-              selectedRouteGeometrySegmentIds[String(segment.id)] === true
+              selectedRouteGeometrySegmentIds[String(segment.id)] === true ||
+              selectedRouteGeometrySegmentIds[String(segment.sourceSegmentId || '')] === true
           }));
         });
         return {
@@ -4177,7 +4186,7 @@ function makeMapHtml(
           ],
           layout: { 'line-cap': 'round', 'line-join': 'round' },
           paint: {
-            'line-color': '#F2C24D',
+            'line-color': '#2ECC71',
             'line-width': 6.25,
             'line-opacity': 0.98,
             'line-blur': 0.2
@@ -4264,7 +4273,10 @@ function makeMapHtml(
       }
 
       function mvumSegmentIdExpression() {
-        return ['to-string', ['coalesce', ['get', 'segmentId'], ['get', 'id'], ['id']]];
+        var propertyExpressions = MVUM_SEGMENT_ID_PROPERTY_KEYS.map(function(propertyKey) {
+          return ['get', propertyKey];
+        });
+        return ['to-string', ['coalesce'].concat(propertyExpressions, [['id']])];
       }
 
       function mvumSelectedFilter(selectedSegmentIds) {
@@ -4286,6 +4298,8 @@ function makeMapHtml(
         removeMapSource(MVUM_OVERLAY_SOURCE_ID);
         mvumOverlaySourceSignature = null;
         mvumOverlayAppliedSignature = null;
+        mvumOverlayDataSignature = null;
+        mvumOverlaySelectionSignature = null;
       }
 
       function ensureMvumOverlayLayers(payload) {
@@ -4386,6 +4400,22 @@ function makeMapHtml(
       function updateMvumOverlay(payload) {
         var requestFingerprint = payload && payload.requestFingerprint;
         var appliedSignature = stableLayerOverlaySignature(payload);
+        var dataSignature = stableLayerOverlaySignature(payload ? {
+          enabled: payload.enabled === true,
+          requestFingerprint: payload.requestFingerprint || null,
+          requestGeneration: payload.requestGeneration || 0,
+          invalidFeatureCount: payload.invalidFeatureCount || 0,
+          minZoom: payload.minZoom || 0,
+          sourceType: payload.sourceType || null,
+          vectorTileUrl: payload.vectorTileUrl || null,
+          vectorSourceLayer: payload.vectorSourceLayer || null,
+          featureCollection: payload.featureCollection || null
+        } : null);
+        var selectionSignature = stableLayerOverlaySignature(
+          payload && Array.isArray(payload.selectedSegmentIds)
+            ? payload.selectedSegmentIds.map(String)
+            : []
+        );
         var unchangedArtifactsReady = !!(
           payload &&
           payload.enabled === true &&
@@ -4401,10 +4431,26 @@ function makeMapHtml(
         ) {
           return;
         }
+        if (
+          unchangedArtifactsReady &&
+          dataSignature === mvumOverlayDataSignature &&
+          selectionSignature !== mvumOverlaySelectionSignature
+        ) {
+          var selectionFilterUpdated = false;
+          try {
+            map.setFilter(MVUM_OVERLAY_SELECTED_LAYER_ID, mvumSelectedFilter(payload.selectedSegmentIds || []));
+            mvumOverlaySelectionSignature = selectionSignature;
+            mvumOverlayAppliedSignature = appliedSignature;
+            selectionFilterUpdated = true;
+          } catch (e) {}
+          if (selectionFilterUpdated) return;
+        }
         cancelLayerRenderVerification('navigate_mvum_segments');
         if (!payload || payload.enabled !== true) {
           clearMvumOverlayLayersAndSources();
           mvumOverlayAppliedSignature = appliedSignature;
+          mvumOverlayDataSignature = dataSignature;
+          mvumOverlaySelectionSignature = selectionSignature;
           sendLayerRenderState('navigate_mvum_segments', {
             requestFingerprint: requestFingerprint,
             requestGeneration: payload && payload.requestGeneration,
@@ -4461,6 +4507,8 @@ function makeMapHtml(
             return;
           }
           mvumOverlayAppliedSignature = appliedSignature;
+          mvumOverlayDataSignature = dataSignature;
+          mvumOverlaySelectionSignature = selectionSignature;
           scheduleLayerRenderVerification('navigate_mvum_segments', {
             requestFingerprint: requestFingerprint,
             requestGeneration: payload && payload.requestGeneration,
@@ -5201,9 +5249,24 @@ function makeMapHtml(
         if (!map) return null;
         if (!map.getLayer(ROUTE_GEOMETRY_SELECTED_LAYER_ID) && !map.getLayer(ROUTE_GEOMETRY_LAYER_ID)) return null;
         try {
-          var features = map.queryRenderedFeatures(point, {
-            layers: [ROUTE_GEOMETRY_SELECTED_LAYER_ID, ROUTE_GEOMETRY_LAYER_ID, ROUTE_GEOMETRY_HALO_LAYER_ID]
-          }) || [];
+          var routeGeometryQueryLayers = [
+            ROUTE_GEOMETRY_SELECTED_LAYER_ID,
+            ROUTE_GEOMETRY_LAYER_ID,
+            ROUTE_GEOMETRY_HALO_LAYER_ID
+          ].filter(function(layerId) { return !!map.getLayer(layerId); });
+          var features = map.queryRenderedFeatures(point, { layers: routeGeometryQueryLayers }) || [];
+          if (
+            features.length === 0 &&
+            point &&
+            typeof point.x === 'number' &&
+            typeof point.y === 'number'
+          ) {
+            var routeGeometryTapRadius = 9;
+            features = map.queryRenderedFeatures([
+              [point.x - routeGeometryTapRadius, point.y - routeGeometryTapRadius],
+              [point.x + routeGeometryTapRadius, point.y + routeGeometryTapRadius]
+            ], { layers: routeGeometryQueryLayers }) || [];
+          }
           return features.length ? features[0] : null;
         } catch (e) {
           return null;
@@ -5212,7 +5275,15 @@ function makeMapHtml(
 
       function buildMvumSegmentPayloadFromFeature(feature, lngLat) {
         var props = feature && feature.properties ? feature.properties : {};
-        var segmentId = String(props.segmentId || props.id || feature.id || '').trim();
+        var rawSegmentId = null;
+        for (var propertyIndex = 0; propertyIndex < MVUM_SEGMENT_ID_PROPERTY_KEYS.length; propertyIndex += 1) {
+          var propertyKey = MVUM_SEGMENT_ID_PROPERTY_KEYS[propertyIndex];
+          if (props[propertyKey] != null && String(props[propertyKey]).trim()) {
+            rawSegmentId = props[propertyKey];
+            break;
+          }
+        }
+        var segmentId = String(rawSegmentId || feature.id || '').trim();
         if (!segmentId) return null;
         return {
           kind: 'mvum_segment',
@@ -8652,7 +8723,7 @@ function makeMapHtml(
             if (routeGeometryFeature && routeGeometryProps.kind === 'route_geometry_segment') {
               return withConnectedSegments({
                 kind: routeGeometryProps.kind || null,
-                id: routeGeometryFeature.id || null,
+                id: routeGeometryProps.sourceSegmentId || routeGeometryFeature.id || null,
                 name: routeGeometryProps.name || null,
                 category: routeGeometryProps.category || null,
                 categoryLabel: routeGeometryProps.categoryLabel || null,
@@ -8913,24 +8984,12 @@ function makeMapHtml(
             }
           } catch (err) {}
           try {
-            if (map.getLayer(MVUM_OVERLAY_SELECTED_LAYER_ID) || map.getLayer(MVUM_OVERLAY_LAYER_ID)) {
-              var mvumFeatures = map.queryRenderedFeatures(e.point, { layers: [MVUM_OVERLAY_SELECTED_LAYER_ID, MVUM_OVERLAY_LAYER_ID] }) || [];
-              if (mvumFeatures.length > 0) {
-                var mvumPayload = buildMvumSegmentPayloadFromFeature(mvumFeatures[0], e.lngLat);
-                if (mvumPayload) {
-                  send('segmentTap', mvumPayload);
-                  return;
-                }
-              }
-            }
-          } catch (err) {}
-          try {
             var routeGeometryFeature = findRouteGeometrySegmentFeatureAtPoint(e.point);
             var routeGeometryProps = routeGeometryFeature && routeGeometryFeature.properties ? routeGeometryFeature.properties : {};
             if (routeGeometryFeature && routeGeometryProps.kind === 'route_geometry_segment') {
               send('segmentTap', {
                 kind: routeGeometryProps.kind || null,
-                id: routeGeometryFeature.id || null,
+                id: routeGeometryProps.sourceSegmentId || routeGeometryFeature.id || null,
                 name: routeGeometryProps.name || null,
                 category: routeGeometryProps.category || null,
                 categoryLabel: routeGeometryProps.categoryLabel || null,
@@ -8943,6 +9002,27 @@ function makeMapHtml(
                 longitude: e.lngLat.lng
               });
               return;
+            }
+          } catch (err) {}
+          try {
+            if (map.getLayer(MVUM_OVERLAY_SELECTED_LAYER_ID) || map.getLayer(MVUM_OVERLAY_LAYER_ID)) {
+              var mvumQueryLayers = [MVUM_OVERLAY_SELECTED_LAYER_ID, MVUM_OVERLAY_LAYER_ID, MVUM_OVERLAY_HALO_LAYER_ID]
+                .filter(function(layerId) { return !!map.getLayer(layerId); });
+              var mvumFeatures = map.queryRenderedFeatures(e.point, { layers: mvumQueryLayers }) || [];
+              if (mvumFeatures.length === 0 && e.point) {
+                var mvumTapRadius = 9;
+                mvumFeatures = map.queryRenderedFeatures([
+                  [e.point.x - mvumTapRadius, e.point.y - mvumTapRadius],
+                  [e.point.x + mvumTapRadius, e.point.y + mvumTapRadius]
+                ], { layers: mvumQueryLayers }) || [];
+              }
+              if (mvumFeatures.length > 0) {
+                var mvumPayload = buildMvumSegmentPayloadFromFeature(mvumFeatures[0], e.lngLat);
+                if (mvumPayload) {
+                  send('segmentTap', mvumPayload);
+                  return;
+                }
+              }
             }
           } catch (err) {}
           try {

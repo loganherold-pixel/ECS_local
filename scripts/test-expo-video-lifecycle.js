@@ -64,7 +64,7 @@ assert(
 );
 assert(
   loadingTransition.includes("const STARTUP_LOADING_VIDEO_ENABLED = Platform.OS !== 'android';"),
-  'LoadingTransitionVideo should keep Android startup on the static fallback instead of mounting expo-video during shell handoff.',
+  'LoadingTransitionVideo should keep Android startup on static media instead of mounting expo-video during shell handoff.',
 );
 assert(
   /safePlaybackAction\('play'\);\s*const cycleTimer = setInterval\(\(\) => \{/.test(loadingTransition),
@@ -80,8 +80,11 @@ assert(
     loadingTransition.includes('videoFailed') &&
     loadingTransition.includes('videoReady') &&
     loadingTransition.includes('onFirstFrameRender') &&
-    loadingTransition.includes('<ActivityIndicator size="small" color={TACTICAL.amber} />'),
-  'LoadingTransitionVideo should show a branded non-gray fallback while media loads or fails.',
+    loadingTransition.includes('animating={true}') &&
+    loadingTransition.includes('size="large"') &&
+    loadingTransition.includes('testID="ecs-startup-loading-spinner"') &&
+    !loadingTransition.includes('staticLoadingGlyph'),
+  'LoadingTransitionVideo should show a complete animated native wheel over the branded fallback while media loads or fails.',
 );
 assert(
   loadingTransition.includes('const handleReady = useCallback') &&

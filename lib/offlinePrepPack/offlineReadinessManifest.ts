@@ -217,7 +217,7 @@ const KIND_LABELS: Record<OfflineReadinessAssetKind, string> = {
 const ITEM_TYPES_BY_KIND: Record<OfflineReadinessAssetKind, string[]> = {
   route_geometry: ['route_line', 'trail_route', 'approach_route', 'exit_route'],
   map_region: ['offline_map', 'critical_offline_segments'],
-  navigation_assets: ['gpx_export', 'trip_sheet', 'trip_itinerary', 'trailhead', 'trail_end'],
+  navigation_assets: ['gpx_export', 'trip_sheet', 'trip_itinerary', 'trailhead', 'trail_end', 'road_turn_guidance'],
   camp_candidates: ['campsites'],
   weather_snapshot: ['weather_snapshot'],
   emergency_recovery_packet: ['emergency_notes'],

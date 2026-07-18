@@ -38,10 +38,44 @@ function loadTsModule(relativePath) {
 }
 
 const {
+  resolveNavigateRouteOverlayToggle,
   resolveCampLayerMenuLayout,
   resolveCampLayerMenuToggles,
   userCanSeeCommunityCampLayerTools,
 } = loadTsModule('lib/navigation/campLayerMenuPresentation.ts');
+
+assert.deepStrictEqual(
+  resolveNavigateRouteOverlayToggle(
+    { mvumEnabled: false, routeGeometryEnabled: false },
+    'mvum',
+  ),
+  { mvumEnabled: true, routeGeometryEnabled: false },
+  'Selecting MVUM should enable only the MVUM route-building overlay.',
+);
+assert.deepStrictEqual(
+  resolveNavigateRouteOverlayToggle(
+    { mvumEnabled: true, routeGeometryEnabled: false },
+    'route_geometry',
+  ),
+  { mvumEnabled: false, routeGeometryEnabled: true },
+  'Selecting ECS Route Geometry should atomically supersede MVUM.',
+);
+assert.deepStrictEqual(
+  resolveNavigateRouteOverlayToggle(
+    { mvumEnabled: false, routeGeometryEnabled: true },
+    'mvum',
+  ),
+  { mvumEnabled: true, routeGeometryEnabled: false },
+  'Selecting MVUM should atomically supersede ECS Route Geometry.',
+);
+assert.deepStrictEqual(
+  resolveNavigateRouteOverlayToggle(
+    { mvumEnabled: true, routeGeometryEnabled: false },
+    'mvum',
+  ),
+  { mvumEnabled: false, routeGeometryEnabled: false },
+  'Selecting the active route overlay should turn it off without enabling its peer.',
+);
 
 const nonAdminToggles = resolveCampLayerMenuToggles({
   communityCampsitesEnabled: true,
@@ -110,21 +144,53 @@ assert(
     navigateSource.includes('styles.campLayerMenuScrollContent'),
   'Camp layer menu content should scroll inside a bounded panel instead of falling off the map body.',
 );
-const campLayerPopupTitle = navigateSource.indexOf("'CAMP LAYERS'");
+const campLayerPopupTitle = navigateSource.indexOf("'MAP LAYERS'");
 const campLayerPopupStart = navigateSource.lastIndexOf('renderMapPopup(', campLayerPopupTitle);
 const campLayerPopupEnd = navigateSource.indexOf('<CompassRose', campLayerPopupStart);
 assert(
   campLayerPopupStart >= 0 && campLayerPopupEnd > campLayerPopupStart,
-  'Navigate should render a dedicated Camp Layers popup inside the map surface before the compass overlay.',
+  'Navigate should render a dedicated Map Layers popup inside the map surface before the compass overlay.',
 );
 const campLayerPopupSource = navigateSource.slice(campLayerPopupStart, campLayerPopupEnd);
 assert(
-  navigateSource.includes('const campLayerMenuContent = campLayerControlsAvailable && campLayerMenuOpen ? (') &&
-    campLayerPopupSource.includes('campLayerControlsAvailable && campLayerMenuOpen,') &&
+  navigateSource.includes('const campLayerMenuContent = campLayerMenuOpen ? (') &&
+    campLayerPopupSource.includes('campLayerMenuOpen,') &&
     campLayerPopupSource.includes('styles.campLayerMenuPopupContent') &&
     campLayerPopupSource.includes('CAMP_LAYER_POPUP_WIDTH') &&
     campLayerPopupSource.includes("{ placement: 'center', backdropTint: 'transparent', fullBody: false, layerId: 'campLayers' }"),
   'Camp layer menu should render as a larger centered map-body popup instead of expanding from the right-side rail trigger.',
+);
+[
+  'MVUM Trail Segments',
+  'ECS Route Geometry',
+  'Remoteness',
+  'Established Campgrounds',
+  'Dispersed Camping Eligibility',
+].forEach((label) => {
+  assert(
+    navigateSource.includes(label),
+    `The consolidated Map Layers popup should expose ${label}.`,
+  );
+});
+const floatingRailStart = navigateSource.indexOf('{floatingToolsVisible ? (');
+const floatingRailEnd = navigateSource.indexOf('{campsiteDrawControlsVisible ? (', floatingRailStart);
+const floatingRailSource = navigateSource.slice(floatingRailStart, floatingRailEnd);
+const mapLayersTriggerIndex = floatingRailSource.indexOf('testID="navigate-map-layer-menu-toggle"');
+const toolsTriggerIndex = floatingRailSource.indexOf('testID="navigate-tools-menu-toggle"');
+assert(
+  mapLayersTriggerIndex >= 0 && toolsTriggerIndex > mapLayersTriggerIndex,
+  'The single Map Layers trigger should be mounted immediately above the Tools trigger.',
+);
+assert(
+  !floatingRailSource.includes('onPress={toggleMvumOverlay}') &&
+    !floatingRailSource.includes('onPress={toggleRouteGeometryOverlay}') &&
+    !floatingRailSource.includes('onPress={toggleRemotenessOverlay}'),
+  'MVUM, ECS Route Geometry, and Remoteness should live inside the consolidated menu, not as duplicate rail buttons.',
+);
+assert(
+  navigateSource.includes("resolveNavigateRouteOverlayToggle(") &&
+    navigateSource.includes("'exclusive_overlay_switch'"),
+  'Navigate should use the tested exclusive route-overlay transition and cancel superseded work.',
 );
 assert(
   !/dispersedCampingToggleTitle\} numberOfLines=\{[12]\}/.test(navigateSource) &&

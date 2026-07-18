@@ -13,7 +13,16 @@ import type {
   RouteLineGeometry,
   StitchedRouteDraft,
   StitchedRouteGap,
+  StitchedRouteGeometrySourceState,
 } from '../../../../lib/routeDataContracts';
+import { normalizeNavigationGuidanceGeometry } from '../../../../lib/navigationCatalogGuidanceGeometry';
+import {
+  buildGuidanceRouteDistanceIndex,
+  findNearestPlausibleRouteProjection,
+  resolveGuidanceSnapToleranceMeters,
+  splitGuidanceRouteAtProjection,
+  type GuidanceRouteCoordinate,
+} from '../../../../lib/navigation/guidanceRouteProjection';
 
 export const MVUM_OVERLAY_SOURCE_ID = 'navigate-mvum-source';
 export const MVUM_OVERLAY_HALO_LAYER_ID = 'navigate-mvum-halo-layer';
@@ -25,6 +34,13 @@ export const MVUM_OVERLAY_SOURCE_LAYER = 'mvum_segments';
 export const MVUM_OVERLAY_CACHE_NAMESPACE = 'navigate.mvum.viewport';
 export const MVUM_VIEWPORT_CACHE_TTL_MS = 5 * 60 * 1000;
 export const MVUM_SOURCE_PROVIDER_PREFIX = 'usfs_mvum';
+export const MVUM_SEGMENT_ID_PROPERTY_KEYS = [
+  'segmentId',
+  'segment_id',
+  'routeSegmentId',
+  'route_segment_id',
+  'id',
+] as const;
 export const NAVIGATE_STITCHED_ROUTE_SOURCE_ID = 'navigate-stitched-route-source';
 export const NAVIGATE_STITCHED_ROUTE_LAYER_ID = 'navigate-stitched-route-layer';
 export const NAVIGATE_STITCHED_ROUTE_HALO_LAYER_ID = 'navigate-stitched-route-halo-layer';
@@ -99,6 +115,22 @@ export type NavigateMvumStitchedRoutePreviewPayload = {
   featureCollection: MvumRouteFeatureCollection;
   unresolvedGapCount: number;
   warnings: string[];
+};
+
+export type NavigateMvumGuidanceEntryPlan = {
+  status:
+    | 'ready_on_route'
+    | 'ready_with_approach'
+    | 'location_unavailable'
+    | 'preview_only'
+    | 'invalid_geometry';
+  entryCoordinate: GuidanceRouteCoordinate | null;
+  trailGeometry: GuidanceRouteCoordinate[];
+  distanceToEntryM: number | null;
+  snapToleranceM: number;
+  skippedRouteDistanceM: number;
+  remainingRouteDistanceM: number;
+  reason: string | null;
 };
 
 export type MvumLineStringGeometry = {
@@ -717,6 +749,28 @@ export function buildMvumStitchedRouteDraft(args: {
     .map((ordered) => ordered.segment.estimatedDurationSeconds)
     .filter((duration): duration is number => duration != null && duration >= 0);
   const segmentWarnings = args.segments.flatMap((segment) => segment.warnings);
+  const usedSegments = orderedSegments.map((ordered) => ordered.segment);
+  const hasCanonicalGeometry = usedSegments.some(
+    (segment) => segment.sourceQuality === 'canonical',
+  );
+  const hasLimitedGeometry = usedSegments.some(
+    (segment) => segment.sourceQuality === 'limited_tile_geometry',
+  );
+  const hasUnavailableGeometrySource = usedSegments.some(
+    (segment) => segment.sourceQuality === 'unavailable',
+  );
+  const geometrySourceState: StitchedRouteGeometrySourceState =
+    geometry == null || missingGeometryGaps.length > 0
+      ? 'unavailable'
+      : hasUnavailableGeometrySource
+        ? hasCanonicalGeometry || hasLimitedGeometry
+          ? 'mixed'
+          : 'unavailable'
+      : hasCanonicalGeometry && hasLimitedGeometry
+        ? 'mixed'
+        : hasLimitedGeometry
+          ? 'limited_tile_geometry'
+          : 'canonical';
   const warnings = Array.from(new Set([
     ...segmentWarnings,
     orderedSegments.some((ordered) => ordered.segment.sourceQuality === 'limited_tile_geometry')
@@ -745,8 +799,137 @@ export function buildMvumStitchedRouteDraft(args: {
         : null,
     warnings,
     unresolvedGaps: allGaps,
+    geometrySourceState,
     createdAt: now,
     updatedAt: now,
+  };
+}
+
+function hashMvumPersistenceValue(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+export function buildMvumStitchedRoutePersistenceKey(
+  draft: StitchedRouteDraft | null | undefined,
+): string | null {
+  const geometry = normalizeRouteLineGeometry(draft?.geometry);
+  if (
+    !draft ||
+    !geometry ||
+    draft.unresolvedGaps.length > 0 ||
+    draft.geometrySourceState !== 'canonical'
+  ) {
+    return null;
+  }
+  const identity = JSON.stringify({
+    selectedSegmentIds: draft.selectedSegmentIds,
+    orderedSegmentIds: draft.orderedSegmentIds,
+    geometry,
+    geometrySourceState: draft.geometrySourceState ?? null,
+  });
+  return `mvum-stitch:${hashMvumPersistenceValue(identity)}`;
+}
+
+export function buildMvumGuidanceEntryPlan(args: {
+  draft: StitchedRouteDraft | null | undefined;
+  origin: GuidanceRouteCoordinate | null | undefined;
+  accuracyM?: number | null;
+}): NavigateMvumGuidanceEntryPlan {
+  const snapToleranceM = resolveGuidanceSnapToleranceMeters({
+    context: 'trail',
+    accuracyM: args.accuracyM,
+  });
+  const emptyPlan = (
+    status: NavigateMvumGuidanceEntryPlan['status'],
+    reason: string,
+  ): NavigateMvumGuidanceEntryPlan => ({
+    status,
+    entryCoordinate: null,
+    trailGeometry: [],
+    distanceToEntryM: null,
+    snapToleranceM,
+    skippedRouteDistanceM: 0,
+    remainingRouteDistanceM: 0,
+    reason,
+  });
+
+  if (!args.draft?.geometry || args.draft.unresolvedGaps.length > 0) {
+    return emptyPlan(
+      'invalid_geometry',
+      'Connected canonical MVUM geometry is required before guidance can start.',
+    );
+  }
+  if (args.draft.geometrySourceState !== 'canonical') {
+    return emptyPlan(
+      'preview_only',
+      'Active guidance requires canonical MVUM segment geometry. Limited viewport geometry remains available for save and preview only.',
+    );
+  }
+
+  const normalized = normalizeNavigationGuidanceGeometry(args.draft.geometry, {
+    allowLoop: false,
+  });
+  if (normalized.status !== 'ready' || normalized.points.length < 2) {
+    return emptyPlan(
+      normalized.status === 'preview_only' ? 'preview_only' : 'invalid_geometry',
+      normalized.unavailableReason ?? 'MVUM route geometry is unavailable for active guidance.',
+    );
+  }
+  if (
+    !args.origin ||
+    !Number.isFinite(args.origin.lat) ||
+    !Number.isFinite(args.origin.lng) ||
+    Math.abs(args.origin.lat) > 90 ||
+    Math.abs(args.origin.lng) > 180
+  ) {
+    return emptyPlan(
+      'location_unavailable',
+      'A current GPS fix is required to route to the nearest point on this MVUM route.',
+    );
+  }
+
+  const routeIndex = buildGuidanceRouteDistanceIndex(normalized.points);
+  const projection = findNearestPlausibleRouteProjection({
+    position: args.origin,
+    routeIndex,
+    accuracyM: args.accuracyM,
+  });
+  if (!projection) {
+    return emptyPlan(
+      'invalid_geometry',
+      'ECS could not project the current GPS position onto the canonical MVUM route.',
+    );
+  }
+
+  const split = splitGuidanceRouteAtProjection(routeIndex.geometry, projection);
+  const usesForwardRemainder = split.remaining.length >= 2;
+  const trailGeometry = usesForwardRemainder
+    ? split.remaining
+    : split.completed.slice().reverse();
+  if (trailGeometry.length < 2) {
+    return emptyPlan(
+      'invalid_geometry',
+      'The selected MVUM route does not contain enough remaining geometry for guidance.',
+    );
+  }
+
+  const needsApproach = projection.distanceFromPositionM > snapToleranceM;
+  return {
+    status: needsApproach ? 'ready_with_approach' : 'ready_on_route',
+    entryCoordinate: projection.coordinate,
+    trailGeometry,
+    distanceToEntryM: projection.distanceFromPositionM,
+    snapToleranceM,
+    skippedRouteDistanceM: projection.distanceFromRouteStartM,
+    remainingRouteDistanceM: usesForwardRemainder
+      ? Math.max(0, routeIndex.totalDistanceM - projection.distanceFromRouteStartM)
+      : projection.distanceFromRouteStartM,
+    reason: null,
   };
 }
 

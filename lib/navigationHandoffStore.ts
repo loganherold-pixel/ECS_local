@@ -1,7 +1,12 @@
 import { Platform } from 'react-native';
 import { createPersistedKeyValueCache } from './keyValuePersistence';
 
-import type { RoadNavCoordinate, RoadNavDestination } from './mapboxRoadNavigation';
+import type {
+  RoadNavCoordinate,
+  RoadNavDestination,
+  RoadNavRoute,
+} from './mapboxRoadNavigation';
+import { getValidatedRoadNavRoute } from './navigation/roadNavRoutePersistence';
 import type { ExpeditionOpportunity } from './discoverEngine';
 import {
   normalizeNavigationGuidanceGeometry,
@@ -12,7 +17,10 @@ import {
   type ExploreRouteCampMarker,
 } from './exploreRouteCampHandoff';
 import { classifyExploreRouteAuthority } from './exploreRouteAuthority';
-import { orientGuidanceRouteFromStart } from './navigation/guidanceRouteProjection';
+import {
+  guidanceRouteDistanceMeters,
+  orientGuidanceRouteFromStart,
+} from './navigation/guidanceRouteProjection';
 import { routeAllowsLoopGuidance } from './navigation/routeLoopGuidancePolicy';
 
 const STORAGE_KEY = 'ecs_hybrid_navigation_handoff_v1';
@@ -88,6 +96,12 @@ export interface NavigationHandoffPayload {
   tripMode: NavigationTripMode | null;
   routeSource?: NavigationRouteSource;
   requiresOnlineRouting?: boolean;
+  /**
+   * Optional provider-normalized road approach prepared by Trip Builder.
+   * This remains inside the canonical handoff so Navigate can preserve
+   * ordered fuel/supply legs and their turn instructions.
+   */
+  preparedRoadRoute?: RoadNavRoute | null;
   trailWaypoints: NavigationTrailWaypoint[];
   trailDecisionPoints: NavigationTrailDecisionPoint[];
   campMarkers?: ExploreRouteCampMarker[];
@@ -123,6 +137,22 @@ export function canStageNavigationHandoffRoute(
   > & { trailGeometrySegments?: RoadNavCoordinate[][] } | null | undefined,
 ): boolean {
   return getNavigationHandoffRouteUnavailableReason(payload) == null;
+}
+
+export function getNavigationHandoffPreparedRoadRoute(
+  payload: Pick<NavigationHandoffPayload, 'preparedRoadRoute'> &
+    Partial<Pick<NavigationHandoffPayload, 'trailheadCoordinate'>> | null | undefined,
+): RoadNavRoute | null {
+  const route = getValidatedRoadNavRoute(payload?.preparedRoadRoute, { requireTurnByTurn: true });
+  if (!route) return null;
+  const trailhead = payload?.trailheadCoordinate;
+  if (
+    trailhead &&
+    guidanceRouteDistanceMeters(route.destination.coordinate, trailhead) > 150
+  ) {
+    return null;
+  }
+  return route;
 }
 
 function readRouteMetadata(value: unknown): Record<string, unknown> | null {
@@ -884,6 +914,7 @@ export async function loadNavigationHandoffPayload(): Promise<NavigationHandoffP
       }),
       routeSource: parsed.routeSource,
       requiresOnlineRouting: parsed.requiresOnlineRouting,
+      preparedRoadRoute: getNavigationHandoffPreparedRoadRoute(parsed),
     };
   } catch {
     return null;

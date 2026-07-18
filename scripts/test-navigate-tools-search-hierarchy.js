@@ -144,19 +144,20 @@ assert(
     source.includes('const [campLayerMenuOpen, setCampLayerMenuOpen] = useState(false);') &&
     source.includes('const toggleCampLayerMenu = useCallback') &&
     source.includes('styles.campLayerMenuPopupContent') &&
-    source.includes('testID="navigate-camp-layer-menu-toggle"') &&
+    source.includes('testID="navigate-map-layer-menu-toggle"') &&
     source.includes('testID="navigate-camp-layer-menu-panel"') &&
-    source.includes('accessibilityLabel="Camp map layers"') &&
-    source.includes('name="bonfire-outline"') &&
+    source.includes('accessibilityLabel="Map layers"') &&
+    source.includes('name="layers-outline"') &&
     source.includes('bottom: TOOLS_TRIGGER_BOTTOM, right: TOOLS_TRIGGER_RIGHT'),
-  'Camp layers should be exposed through a dedicated camp icon button above the Tools icon.',
+  'Route, terrain, and camp overlays should be exposed through one Map Layers button above Tools.',
 );
 
 assert(
   !source.includes('accessibilityLabel="Draw area to search for campsites"\n          >') &&
-    source.includes('testID="navigate-route-geometry-overlay-toggle"') &&
-    source.includes("accessibilityValue={{ text: routeGeometryOverlayEnabled ? 'on' : 'off' }}"),
-  'Right-side map control rail should not be grouped under a stale campsite label, and route geometry needs a stable stateful QA target.',
+    source.includes('testID="navigate-map-layer-route-geometry-toggle"') &&
+    source.includes('testID="navigate-map-layer-mvum-toggle"') &&
+    source.includes('testID="navigate-map-layer-remoteness-toggle"'),
+  'The consolidated map-layer menu should retain stable stateful QA targets for each operational overlay.',
 );
 
 assert(
@@ -178,11 +179,11 @@ assert(
 );
 
 assert(
-  !toolsPopupSource.includes('>INTEL</Text>') &&
+    !toolsPopupSource.includes('>INTEL</Text>') &&
     !toolsPopupSource.includes('REMOTE ON') &&
     !toolsPopupSource.includes('REMOTE UNAVAILABLE') &&
-    source.includes('accessibilityLabel="Remoteness map overlay"'),
-  'Intel should be removed from Tools and Remoteness should live on the map control rail.',
+    source.includes('testID="navigate-map-layer-remoteness-toggle"'),
+  'Intel should be removed from Tools and Remoteness should live in the map-layer surface.',
 );
 
 assert(

@@ -98,7 +98,15 @@ function cloneRoadStep(step: RoadNavStep): RoadNavStep {
 }
 
 function cloneRoadLeg(leg: RoadNavLeg): RoadNavLeg {
-  return { ...leg };
+  return {
+    ...leg,
+    arrivalWaypoint: leg.arrivalWaypoint
+      ? {
+          ...leg.arrivalWaypoint,
+          coordinate: cloneCoordinate(leg.arrivalWaypoint.coordinate),
+        }
+      : leg.arrivalWaypoint,
+  };
 }
 
 function cloneGuidanceStep(step: EcsGuidanceStep): EcsGuidanceStep {

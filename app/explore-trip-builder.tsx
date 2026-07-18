@@ -30,8 +30,10 @@ import MapRenderer, { type CameraCommand } from '../components/navigate/MapRende
 import MapFallbackSurface from '../components/navigate/MapFallbackSurface';
 import {
   DEFAULT_MAP_STYLE,
+  MAP_STYLES,
   getMapboxToken,
   getMapboxTokenSync,
+  type MapStyleKey,
 } from '../lib/mapConfig';
 import type { ExpeditionOpportunity } from '../lib/discoverEngine';
 import { buildProfileFromSpecs } from '../lib/rigCompatibilityEngine';
@@ -48,6 +50,9 @@ import {
   buildTripItineraryFromSuggestedRoute,
   buildTripPlan,
   buildTripBuilderCanonicalRouteSpine,
+  buildTripBuilderGuidanceItinerary,
+  buildTripBuilderNavigationOutput,
+  buildTripBuilderPlanOutputSpine,
   clearTripBuilderRouteHandoff,
   createMapboxRouteContextProviderRegistry,
   acceptTripItineraryEditItem,
@@ -140,6 +145,7 @@ import {
   beginTripBuilderRoutePreparation,
   cancelTripBuilderRoutePreparation,
   completeTripBuilderRoutePreparation,
+  completeTripBuilderRoutePreparationFromPracticalEntry,
   continueTripBuilderRoutePreparation,
   createTripBuilderRoutePreparationState,
   failTripBuilderRoutePreparation,
@@ -163,13 +169,20 @@ import {
   upsertExplorePlanningRoute,
 } from '../lib/explore/explorePlanningRouteContextStore';
 import { simplifyRouteGeometryForPreview } from '../lib/explore/exploreMapPreviewOptimization';
-import { activeTripModeStore } from '../lib/activeTripMode';
 import { useECSNavigation } from '../lib/navigation/useECSNavigation';
 import { loadoutItemStore, loadoutStore } from '../lib/loadoutStore';
 import {
+  buildExploreNavigationPayload,
+  saveNavigationHandoffPayload,
+} from '../lib/navigationHandoffStore';
+import { stageNavigationFlow } from '../lib/ecsNavigationFlow';
+import {
   createRoadSearchSessionToken,
   fetchRoadRoute,
+  type RoadNavCoordinate,
   type RoadNavDestination,
+  type RoadNavRoute,
+  type RoadNavWaypointDescriptor,
   resolveRoadDestination,
   searchRoadDestinations,
   type RoadNavSearchSuggestion,
@@ -237,6 +250,17 @@ const TRIP_BUILDER_RESULT_BATCHING_PERIOD_MS = 80;
 const TRIP_SETUP_DEFERRED_GROUP_DELAY_MS = 180;
 const TRIP_SETUP_DEFERRED_GROUP_MAX_WAIT_MS = 520;
 const TRIP_BUILDER_ITINERARY_REVIEW_ITEM_PREVIEW_COUNT = 4;
+const TRIP_BUILDER_PLANNING_MAP_STYLE_KEYS = ['ecs', 'satellite'] as const;
+type TripBuilderPlanningMapStyle = Extract<
+  MapStyleKey,
+  (typeof TRIP_BUILDER_PLANNING_MAP_STYLE_KEYS)[number]
+>;
+const TRIP_BUILDER_PLANNING_MAP_STYLES = TRIP_BUILDER_PLANNING_MAP_STYLE_KEYS.map((key) => ({
+  key,
+  label: MAP_STYLES.find((style) => style.key === key)?.label ?? key,
+}));
+const TRIP_BUILDER_DEFAULT_PLANNING_MAP_STYLE: TripBuilderPlanningMapStyle =
+  DEFAULT_MAP_STYLE === 'satellite' ? 'satellite' : 'ecs';
 
 function scheduleTripBuilderBackgroundLookup(callback: () => void): ShellInteractionTask {
   return runAfterShellInteractions(callback, {
@@ -251,6 +275,17 @@ function routeContextSupplyModeForTripBuilder(
   if (preference === 'fuel_only') return 'gas';
   if (preference === 'fuel_supplies') return 'gas_and_grocery';
   return 'none';
+}
+
+function hasProviderRoutedSelectedSupplySpine(
+  context: RouteContext | null | undefined,
+): boolean {
+  if (!isUsableRouteContext(context)) return false;
+  if ((context.selectedSupplyPlan?.orderedStops.length ?? 0) === 0) return false;
+  const metadata = context.routeGeometry?.providerMetadata;
+  return metadata?.source === 'routing_provider' &&
+    Array.isArray(context.routeGeometry?.coordinates) &&
+    (context.routeGeometry?.coordinates?.length ?? 0) >= 2;
 }
 
 const TRIP_BUILDER_ROUTE_CONTEXT_FEATURE_FLAGS = {
@@ -286,17 +321,16 @@ type TripBuilderResultSectionKey =
   | 'camp_check'
   | 'itinerary_confidence'
   | 'itinerary_summary'
-  | 'active_trip'
+  | 'plan_actions'
   | 'itinerary_review'
   | 'itinerary_editor'
-  | 'suggested_stops'
+  | 'guidance_itinerary'
   | 'camp_candidates'
   | 'exit_access'
   | 'smart_resupply'
   | 'ecs_notes'
   | 'items_to_verify'
-  | 'mission_command'
-  | 'offline_cta';
+  | 'mission_command';
 
 type TripMapCoordinate = {
   latitude: number;
@@ -382,6 +416,13 @@ type SmartResupplyRequestStatus = 'idle' | 'deferred' | 'loading' | 'ready' | 'e
 type SmartResupplyRequestState = {
   status: SmartResupplyRequestStatus;
   error: string | null;
+};
+
+type TripPlanOutputAction = 'offline' | 'save' | 'navigate' | null;
+
+type PreparedTripPlanRoadRouteCache = {
+  fingerprint: string;
+  route: RoadNavRoute;
 };
 type SmartResupplyTerminalRequest = {
   fingerprint: string;
@@ -515,7 +556,7 @@ function inferAddedStopType(suggestion: Pick<RoadNavSearchSuggestion, 'title' | 
   if (/\b(grocery|market|suppl|store)\b/.test(text)) return 'supply';
   if (/\b(repair|service|tire|mechanic|auto)\b/.test(text)) return 'repair';
   if (/\b(hospital|clinic|medical|urgent care|pharmacy)\b/.test(text)) return 'medical';
-  return 'resupply';
+  return 'waypoint';
 }
 
 function plannedDayForInsert(stops: TripPlanStop[], index: number): number {
@@ -831,44 +872,88 @@ function campReferenceStopsFromPlan(plan: TripPlan | null | undefined): TripPlan
   return plan?.suggestedStops.filter(isCampReferenceStop) ?? [];
 }
 
-function routeWaypointsFromPlan(plan: TripPlan, routePoints: TripMapCoordinate[] = []): unknown[] {
-  return plan.suggestedStops
-    .flatMap((stop) => {
-      const coordinate = coordinateForTripPlanStop(plan, stop, routePoints);
-      if (!coordinate) return [];
-      return [{
-        id: stop.id,
-        name: stop.title,
-        title: stop.title,
-        latitude: coordinate.latitude,
-        longitude: coordinate.longitude,
-        waypointType: stop.type,
-        routeMileMarker: stop.routeMileMarker,
-        plannedDay: stop.plannedDay,
-        source: stop.source,
-        guidanceRole: stop.guidanceRole,
-        referenceType: stop.referenceType,
-        notes: stop.notes,
-      }];
-    });
+function isTripBuilderGuidanceSupportStop(stop: TripPlanStop): boolean {
+  return stop.guidanceRole !== 'reference_only' &&
+    (stop.type === 'fuel' || stop.type === 'supply' || stop.type === 'resupply');
+}
+
+function tripBuilderGuidanceSupportStops(plan: TripPlan): TripPlanStop[] {
+  const ordered = plan.suggestedStops
+    .filter((stop) => isTripBuilderGuidanceSupportStop(stop) && !!stop.coordinate)
+    .sort((left, right) => left.sequence - right.sequence);
+  return ordered.filter((stop, index) => !ordered.slice(0, index).some((previous) => (
+    previous.coordinate &&
+    stop.coordinate &&
+    sameTripCoordinate(previous.coordinate, stop.coordinate)
+  )));
+}
+
+function tripBuilderRoadWaypoints(plan: TripPlan): RoadNavWaypointDescriptor[] {
+  return tripBuilderGuidanceSupportStops(plan).flatMap((stop) => (
+    stop.coordinate
+      ? [{
+          id: stop.id,
+          title: stop.title,
+          subtitle: stop.notes?.[0] ?? null,
+          coordinate: { lat: stop.coordinate.latitude, lng: stop.coordinate.longitude },
+          role: stop.type,
+        }]
+      : []
+  ));
+}
+
+function tripBuilderPreparedRoadRouteFingerprint(
+  plan: TripPlan,
+  origin: TripMapCoordinate,
+  trailhead: TripMapCoordinate,
+): string {
+  return [
+    plan.id,
+    origin.latitude.toFixed(5),
+    origin.longitude.toFixed(5),
+    ...tripBuilderRoadWaypoints(plan).flatMap((waypoint) => [
+      waypoint.id,
+      waypoint.coordinate.lat.toFixed(5),
+      waypoint.coordinate.lng.toFixed(5),
+    ]),
+    trailhead.latitude.toFixed(5),
+    trailhead.longitude.toFixed(5),
+  ].join(':');
 }
 
 function routeForOfflinePrep(
   route: TripBuilderRouteInput,
   plan: TripPlan,
   routePoints = routePointsForTripMap(route),
+  preparedRoadRoute: RoadNavRoute | null = null,
+  outputSpineStatus: 'ready' | 'trail_only' | 'invalid' = 'trail_only',
+  preparedRoadRouteUnavailableReason: string | null = null,
+  guidanceItinerary: ReturnType<typeof buildTripBuilderGuidanceItinerary> = [],
 ): TripBuilderRouteInput {
-  const existingWaypoints = Array.isArray(route.waypoints) ? route.waypoints : [];
   const prepRouteGeometry = routePoints.length >= 2
     ? routePoints.map((point) => ({ latitude: point.latitude, longitude: point.longitude }))
     : route.routeGeometry;
   return {
     ...route,
     routeGeometry: prepRouteGeometry,
-    waypoints: [...existingWaypoints, ...routeWaypointsFromPlan(plan, routePoints)],
+    waypoints: guidanceItinerary.map((point) => ({
+      id: point.id,
+      name: point.title,
+      title: point.title,
+      latitude: point.coordinate.latitude,
+      longitude: point.coordinate.longitude,
+      waypointType: point.role,
+      routeIndex: point.routeIndex,
+      source: 'ecs_trip_builder_plan',
+    })),
     routeMetadata: {
       ...(route.routeMetadata ?? {}),
-      offlinePrepPrepared: true,
+      offlinePrepPrepared: outputSpineStatus === 'ready',
+      offlinePrepFullItineraryState: outputSpineStatus === 'ready'
+        ? 'ready'
+        : outputSpineStatus === 'trail_only'
+          ? 'trail_only'
+          : 'unavailable',
       offlinePrepGeometrySource: routePoints.length >= 2
         ? 'trip_builder_selected_route_preview'
         : route.routeMetadata?.offlinePrepGeometrySource ?? null,
@@ -879,6 +964,14 @@ function routeForOfflinePrep(
       tripBuilderExitPointCount: exitPointsFromPlan(plan, routePoints).length,
       tripBuilderBailoutPointCount: plan.suggestedStops.filter(isBailoutItineraryStop).length,
       tripBuilderResupplyPointCount: resupplyPointsFromPlan(plan).length,
+      tripBuilderPreparedRoadRoute: preparedRoadRoute,
+      tripBuilderPreparedRoadRouteState: preparedRoadRoute
+        ? 'cached_turn_by_turn'
+        : 'unavailable',
+      tripBuilderPreparedRoadRouteUnavailableReason: preparedRoadRoute
+        ? null
+        : preparedRoadRouteUnavailableReason ??
+          'Detailed road turns were not cached for this itinerary.',
       referencePoints: plan.suggestedStops
         .filter((stop) => stop.guidanceRole === 'reference_only')
         .map((stop) => ({ id: stop.id, type: stop.type, referenceType: stop.referenceType ?? null })),
@@ -983,27 +1076,6 @@ function OptionChip({
       ) : null}
       <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{label}</Text>
     </TouchableOpacity>
-  );
-}
-
-function StopRow({ stop, index }: { stop: TripPlanStop; index: number }) {
-  const note = stop.notes?.[0] ?? null;
-  const sequenceLabel = formatTripMapLetter(index);
-  const tone = itineraryStopTone(stop);
-  return (
-    <View style={styles.stopRow}>
-      <View style={[styles.stopIndex, { borderColor: tone.color + '48', backgroundColor: tone.color + '18' }]}>
-        <Text style={[styles.stopIndexText, { color: tone.color }]}>{sequenceLabel}</Text>
-      </View>
-      <View style={styles.stopCopy}>
-        <Text style={styles.stopTitle}>{stop.title}</Text>
-        <Text style={styles.stopMeta}>
-          {stop.type.replace(/_/g, ' ').toUpperCase()} | Day {stop.plannedDay}
-          {stop.routeMileMarker != null ? ` | mile ${Math.round(stop.routeMileMarker)}` : ''}
-        </Text>
-        {note ? <Text style={styles.stopNote}>{note}</Text> : null}
-      </View>
-    </View>
   );
 }
 
@@ -1117,9 +1189,9 @@ function ItineraryAddSlot({
     >
       <Ionicons name="add-circle-outline" size={13} color={TACTICAL.amber} />
       <View style={styles.itineraryAddSlotCopy}>
-        <Text style={styles.itineraryAddSlotText}>Add itinerary location</Text>
+        <Text style={styles.itineraryAddSlotText}>Add fuel or supplies</Text>
         <Text style={styles.itineraryAddSlotHint} numberOfLines={1}>
-          Resupply, known camp, waypoint, or address
+          Add another practical fuel, grocery, or supply stop before trail entry
         </Text>
       </View>
     </TouchableOpacity>
@@ -1850,6 +1922,23 @@ function isValidMapCoordinate(coordinate: TripMapCoordinate | null | undefined):
     coordinate.longitude >= -180 &&
     coordinate.longitude <= 180
   );
+}
+
+function guidanceItineraryRoleLabel(
+  role: 'origin' | 'resupply' | 'trailhead' | 'destination',
+): string {
+  switch (role) {
+    case 'origin':
+      return 'Starting point';
+    case 'resupply':
+      return 'Fuel / groceries / supplies';
+    case 'trailhead':
+      return 'Trail entry';
+    case 'destination':
+      return 'Trip destination';
+    default:
+      return 'Itinerary point';
+  }
 }
 
 function simplifyTripBuilderPickerRoutePoints(
@@ -3801,11 +3890,78 @@ function TripPlanMapOverlay({
   );
 }
 
+function TripBuilderPlanningMapStyleSelector({
+  value,
+  onChange,
+  available,
+  unavailableReason,
+}: {
+  value: TripBuilderPlanningMapStyle;
+  onChange: (style: TripBuilderPlanningMapStyle) => void;
+  available: boolean;
+  unavailableReason: string;
+}) {
+  return (
+    <View
+      style={styles.planningMapStyleControl}
+      testID="trip-builder-planning-map-style-selector"
+    >
+      <Text style={styles.planningMapStyleLabel}>MAP VIEW</Text>
+      <View style={styles.planningMapStyleSegments}>
+        {TRIP_BUILDER_PLANNING_MAP_STYLES.map((style) => {
+          const selected = value === style.key;
+          return (
+            <TouchableOpacity
+              key={style.key}
+              style={[
+                styles.planningMapStyleSegment,
+                selected && styles.planningMapStyleSegmentSelected,
+                !available && styles.planningMapStyleSegmentDisabled,
+              ]}
+              activeOpacity={0.84}
+              disabled={!available}
+              onPress={() => onChange(style.key)}
+              accessibilityRole="button"
+              accessibilityLabel={`${style.label} map view`}
+              accessibilityHint={
+                available
+                  ? `Show the planning map in ${style.label.toLowerCase()} style.`
+                  : unavailableReason
+              }
+              accessibilityState={{ selected, disabled: !available }}
+              testID={`trip-builder-planning-map-style-${style.key}`}
+            >
+              <Text
+                style={[
+                  styles.planningMapStyleSegmentText,
+                  selected && styles.planningMapStyleSegmentTextSelected,
+                ]}
+              >
+                {style.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      {!available ? (
+        <Text
+          style={styles.planningMapStyleUnavailable}
+          accessibilityLiveRegion="polite"
+        >
+          {unavailableReason}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
 function CampPlanPickerOverlay({
   visible,
   route,
   routePreviewPoints,
   mapboxToken,
+  mapStyle,
+  onMapStyleChange,
   userLocation,
   pins,
   suggestedEstablishedCampPins,
@@ -3818,6 +3974,8 @@ function CampPlanPickerOverlay({
   route: TripBuilderRouteInput | null;
   routePreviewPoints: TripMapCoordinate[];
   mapboxToken: string | null;
+  mapStyle: TripBuilderPlanningMapStyle;
+  onMapStyleChange: (style: TripBuilderPlanningMapStyle) => void;
   userLocation: TripMapCoordinate | null;
   pins: CampPlanPin[];
   suggestedEstablishedCampPins: TripBuilderSuggestedEstablishedCampPin[];
@@ -3904,7 +4062,7 @@ function CampPlanPickerOverlay({
                 routeColor={TACTICAL.amber}
                 routeRenderMode="selected"
                 routeLineKey={routeLineKey}
-                mapStyle={DEFAULT_MAP_STYLE}
+                mapStyle={mapStyle}
                 mapboxToken={mapboxToken}
                 hasToken
                 surfaceMode="compact"
@@ -3938,6 +4096,16 @@ function CampPlanPickerOverlay({
               <Text style={styles.tripMapFallbackText}>Route geometry is unavailable. Camp pins can be added when the route preview is available.</Text>
             </View>
           )}
+          <TripBuilderPlanningMapStyleSelector
+            value={mapStyle}
+            onChange={onMapStyleChange}
+            available={!!mapboxToken && pickerRoutePoints.length > 0}
+            unavailableReason={
+              pickerRoutePoints.length === 0
+                ? 'Map view options will be available when route geometry is ready.'
+                : 'Day and satellite views require the configured map service. ECS is showing the offline route reference.'
+            }
+          />
         </View>
         <View style={styles.bailoutPickerFooter}>
           <View style={styles.bailoutPickerFooterHeader}>
@@ -4020,6 +4188,8 @@ function BailoutPlanPickerOverlay({
   route,
   routePreviewPoints,
   mapboxToken,
+  mapStyle,
+  onMapStyleChange,
   userLocation,
   pins,
   selectedPoint,
@@ -4032,6 +4202,8 @@ function BailoutPlanPickerOverlay({
   route: TripBuilderRouteInput | null;
   routePreviewPoints: TripMapCoordinate[];
   mapboxToken: string | null;
+  mapStyle: TripBuilderPlanningMapStyle;
+  onMapStyleChange: (style: TripBuilderPlanningMapStyle) => void;
   userLocation: TripMapCoordinate | null;
   pins: BailoutPlanPoint[];
   selectedPoint: BailoutPlanPoint | null;
@@ -4144,7 +4316,7 @@ function BailoutPlanPickerOverlay({
                 routeColor={TACTICAL.amber}
                 routeRenderMode="selected"
                 routeLineKey={routeLineKey}
-                mapStyle={DEFAULT_MAP_STYLE}
+                mapStyle={mapStyle}
                 mapboxToken={mapboxToken}
                 hasToken
                 surfaceMode="compact"
@@ -4178,6 +4350,16 @@ function BailoutPlanPickerOverlay({
               <Text style={styles.tripMapFallbackText}>Route geometry is unavailable. Bailout pins can be added when the route preview is available.</Text>
             </View>
           )}
+          <TripBuilderPlanningMapStyleSelector
+            value={mapStyle}
+            onChange={onMapStyleChange}
+            available={!!mapboxToken && pickerRoutePoints.length > 0}
+            unavailableReason={
+              pickerRoutePoints.length === 0
+                ? 'Map view options will be available when route geometry is ready.'
+                : 'Day and satellite views require the configured map service. ECS is showing the offline route reference.'
+            }
+          />
         </View>
         <View style={styles.bailoutPickerFooter}>
           <View style={styles.bailoutPickerFooterHeader}>
@@ -4280,6 +4462,9 @@ export default function ExploreTripBuilderScreen() {
   const [smartResupplyPreference, setSmartResupplyPreference] = useState<SmartResupplyPreference>('fuel_only');
   const [bailoutPlanPreference, setBailoutPlanPreference] = useState<BailoutPlanPreference>('no');
   const [campPlanPreference, setCampPlanPreference] = useState<CampPlanPreference>('skip');
+  const [planningMapStyle, setPlanningMapStyle] = useState<TripBuilderPlanningMapStyle>(
+    TRIP_BUILDER_DEFAULT_PLANNING_MAP_STYLE,
+  );
   const [campPickerVisible, setCampPickerVisible] = useState(false);
   const [campPlanPins, setCampPlanPins] = useState<CampPlanPin[]>([]);
   const [routeImportState, setRouteImportState] = useState<RouteImportState>({ status: 'idle', message: null });
@@ -4322,8 +4507,10 @@ export default function ExploreTripBuilderScreen() {
   const [routePreparationRetryGeneration, setRoutePreparationRetryGeneration] = useState(0);
   const [routePreparationState, setRoutePreparationState] =
     useState<TripBuilderRoutePreparationState>(createTripBuilderRoutePreparationState);
-  const [activeTripActivating, setActiveTripActivating] = useState(false);
-  const [activeTripActivationError, setActiveTripActivationError] = useState<string | null>(null);
+  const [planOutputBusy, setPlanOutputBusy] = useState<TripPlanOutputAction>(null);
+  const [planOutputMessage, setPlanOutputMessage] = useState<string | null>(null);
+  const [planOutputError, setPlanOutputError] = useState<string | null>(null);
+  const [preparedTripPlanRoadRouteRevision, setPreparedTripPlanRoadRouteRevision] = useState(0);
   const roadSearchSessionTokenRef = useRef(createRoadSearchSessionToken());
   const routePreparationStateRef = useRef(routePreparationState);
   const routePreparationAbortRef = useRef<AbortController | null>(null);
@@ -4341,6 +4528,15 @@ export default function ExploreTripBuilderScreen() {
   const smartResupplyFuelProviderRef = useRef<SmartResupplyProviderCache | null>(null);
   const smartResupplySupplyProviderRef = useRef<SmartResupplyProviderCache | null>(null);
   const liveApproachRouteRequestRef = useRef(0);
+  const preparedTripPlanRoadRouteRef = useRef<PreparedTripPlanRoadRouteCache | null>(null);
+  const preparedTripPlanRoadRouteRequestRef = useRef<{
+    fingerprint: string;
+    promise: Promise<RoadNavRoute>;
+  } | null>(null);
+  const preparedTripPlanRoadRouteGenerationRef = useRef(0);
+  const planOutputBusyRef = useRef<Exclude<TripPlanOutputAction, null> | null>(null);
+  const planOutputGenerationRef = useRef(0);
+  const generatingRef = useRef(false);
   const smartResupplyFuelSearchSignatureRef = useRef<string | null>(null);
   const smartResupplySupplySearchSignatureRef = useRef<string | null>(null);
   const tripSetupScrollerRef = useRef<React.ElementRef<typeof ScrollView> | null>(null);
@@ -4356,7 +4552,9 @@ export default function ExploreTripBuilderScreen() {
     planModalVisible ||
     bailoutPickerVisible ||
     campPickerVisible ||
-    itineraryEditMode;
+    itineraryEditMode ||
+    routePreparationState.status === 'loading_detail' ||
+    routePreparationState.status === 'awaiting_trailhead_selection';
   const tripBuilderGps = useThrottledGPS({ enabled: tripBuilderNeedsLivePosition, highAccuracy: true });
   const liveTripBuilderUserLocation = useMemo(
     () => tripBuilderCoordinateFromGpsPosition(tripBuilderGps.rawGPS.position ?? tripBuilderGps.position),
@@ -4384,6 +4582,9 @@ export default function ExploreTripBuilderScreen() {
   }, []);
 
   const closeTripPlanOverlay = useCallback(() => {
+    planOutputGenerationRef.current += 1;
+    planOutputBusyRef.current = null;
+    setPlanOutputBusy(null);
     setPlanMapScope(null);
     setPlanModalVisible(false);
     updateLastTripBuilderPlanState({
@@ -4394,6 +4595,12 @@ export default function ExploreTripBuilderScreen() {
       itineraryEditSession: savedTripItineraryEditSession,
     });
   }, [itinerarySaved, plan, savedTripItineraryEditSession, selectedRouteId]);
+
+  useEffect(() => () => {
+    generatingRef.current = false;
+    planOutputGenerationRef.current += 1;
+    preparedTripPlanRoadRouteGenerationRef.current += 1;
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -4531,8 +4738,9 @@ export default function ExploreTripBuilderScreen() {
           setSavedTripItineraryEditSession(lastTripBuilderPlanState.itineraryEditSession);
         } else {
           // A route is not ready merely because detail geometry exists. The
-          // preparation state machine opens setup only after trailhead
-          // confirmation, orientation, validation, and session persistence.
+          // preparation state machine opens setup only after practical entry
+          // resolution, orientation, validation, and session persistence.
+          // Manual selection remains a terminal fallback for true ambiguity.
           setTripSetupStarted(false);
           setPreparedTripRoutePreview(null);
           setSavedTripItineraryEditSession(null);
@@ -4573,13 +4781,15 @@ export default function ExploreTripBuilderScreen() {
     (capturedTripOrigin?.routeId === selectedRouteId ? capturedTripOrigin.coordinate : null) ??
     liveTripBuilderUserLocation;
   useEffect(() => {
-    if (!tripSetupStarted || !selectedRouteId) {
+    if (!selectedRouteId) {
       setCapturedTripOrigin(null);
       return;
     }
     const nextOrigin = itineraryTripOrigin ?? liveTripBuilderUserLocation;
     if (!nextOrigin) return;
     setCapturedTripOrigin((current) => {
+      // Capture one origin for the selected route so GPS jitter cannot restart
+      // detail preparation or silently change the itinerary while it is built.
       if (current?.routeId === selectedRouteId && !itineraryTripOrigin) return current;
       if (
         current?.routeId === selectedRouteId &&
@@ -4587,11 +4797,66 @@ export default function ExploreTripBuilderScreen() {
       ) return current;
       return { routeId: selectedRouteId, coordinate: nextOrigin };
     });
-  }, [itineraryTripOrigin, liveTripBuilderUserLocation, selectedRouteId, tripSetupStarted]);
+  }, [itineraryTripOrigin, liveTripBuilderUserLocation, selectedRouteId]);
   const planningRouteContextOrigin = useMemo(
     () => routeContextOriginFromTripCoordinate(selectedTripOrigin),
     [selectedTripOrigin],
   );
+  const integrateReadyRoutePreparation = useCallback((
+    ready: TripBuilderRoutePreparationState,
+    persistHandoff: boolean,
+  ) => {
+    if (ready.status !== 'ready' || !ready.canonicalRoute) {
+      commitRoutePreparationState(ready);
+      return false;
+    }
+    try {
+      const existingItinerary =
+        (ready.canonicalRoute as unknown as { itinerary?: TripItinerary | null }).itinerary ?? null;
+      const handoff = persistHandoff
+        ? saveTripBuilderRouteHandoff(ready.canonicalRoute as unknown as TripBuilderRouteInput, {
+            userLocation: selectedTripOrigin,
+          })
+        : null;
+      const persistedRoute = {
+        ...ready.canonicalRoute,
+        itinerary: handoff?.draftItinerary ?? existingItinerary,
+      } as ExpeditionOpportunity;
+      commitRoutePreparationState(ready);
+      latestSelectedPlanningRouteRef.current = persistedRoute;
+      setRoutes((current) => current.map((route) => (
+        String(route.id) !== String(ready.canonicalRoute?.id)
+          ? route
+          : !persistHandoff &&
+              route.routeMetadata?.tripBuilderCanonicalGeometryFingerprint ===
+                ready.geometryFingerprint
+            ? route
+            : persistedRoute
+      )));
+      if (persistHandoff) {
+        updateLastTripBuilderPlanState({
+          selectedRouteId: String(ready.canonicalRoute.id),
+          plan: null,
+          visible: false,
+          itinerarySaved: false,
+          itineraryEditSession: null,
+        });
+      }
+      if (params.setup === '1' && String(params.routeId ?? '') === String(ready.canonicalRoute.id)) {
+        setPreparedTripRoutePreview(buildPreparedTripRoutePreview(persistedRoute));
+        setTripSetupStarted(true);
+      }
+      return true;
+    } catch {
+      commitRoutePreparationState(failTripBuilderRoutePreparation(ready));
+      return false;
+    }
+  }, [
+    commitRoutePreparationState,
+    params.routeId,
+    params.setup,
+    selectedTripOrigin,
+  ]);
   useEffect(() => {
     routePreparationAbortRef.current?.abort('superseded');
     if (!selectedRoute) {
@@ -4613,25 +4878,21 @@ export default function ExploreTripBuilderScreen() {
       offline: offlineDiscoveryBridge.isOffline(),
     }).then((next) => {
       if (!active || routePreparationStateRef.current.requestId !== started.requestId) return;
-      commitRoutePreparationState(next);
-      if (next.status !== 'ready' || !next.canonicalRoute) return;
-      const mountedItinerary = (selectedRoute as unknown as { itinerary?: TripItinerary | null }).itinerary ?? null;
-      const preparedRoute = next.canonicalRoute === selectedRoute
-        ? selectedRoute
-        : {
-            ...next.canonicalRoute,
-            itinerary: mountedItinerary,
-          } as ExpeditionOpportunity;
-      latestSelectedPlanningRouteRef.current = preparedRoute;
-      if (preparedRoute !== selectedRoute) {
-        setRoutes((current) => current.map((route) => (
-          String(route.id) === String(selectedRoute.id) ? preparedRoute : route
-        )));
+      const practical = next.status === 'awaiting_trailhead_selection'
+        ? completeTripBuilderRoutePreparationFromPracticalEntry(next, {
+            origin: selectedTripOrigin
+              ? { lat: selectedTripOrigin.latitude, lng: selectedTripOrigin.longitude }
+              : null,
+          })
+        : next;
+      if (practical.status === 'ready') {
+        integrateReadyRoutePreparation(
+          practical,
+          next.status === 'awaiting_trailhead_selection',
+        );
+        return;
       }
-      if (params.setup === '1' && String(params.routeId ?? '') === String(preparedRoute.id)) {
-        setPreparedTripRoutePreview(buildPreparedTripRoutePreview(preparedRoute));
-        setTripSetupStarted(true);
-      }
+      commitRoutePreparationState(practical);
     }).catch(() => {
       if (!active || routePreparationStateRef.current.requestId !== started.requestId) return;
       commitRoutePreparationState(failTripBuilderRoutePreparation(started));
@@ -4650,10 +4911,12 @@ export default function ExploreTripBuilderScreen() {
     };
   }, [
     commitRoutePreparationState,
+    integrateReadyRoutePreparation,
     params.routeId,
     params.setup,
     routePreparationRetryGeneration,
     selectedRoute,
+    selectedTripOrigin,
   ]);
   const directRoutePickerRoutes = useMemo(
     () => (routes.length <= TRIP_BUILDER_DIRECT_ROUTE_RENDER_LIMIT ? routes : []),
@@ -4682,38 +4945,8 @@ export default function ExploreTripBuilderScreen() {
     if (building.status !== 'building') return;
     commitRoutePreparationState(building);
     const ready = completeTripBuilderRoutePreparation(building);
-    if (ready.status !== 'ready' || !ready.canonicalRoute) {
-      commitRoutePreparationState(ready);
-      return;
-    }
-    try {
-      const handoff = saveTripBuilderRouteHandoff(ready.canonicalRoute as unknown as TripBuilderRouteInput, {
-        userLocation: selectedTripOrigin,
-      });
-      const persistedRoute = {
-        ...ready.canonicalRoute,
-        itinerary: handoff.draftItinerary ?? null,
-      } as ExpeditionOpportunity;
-      commitRoutePreparationState(ready);
-      latestSelectedPlanningRouteRef.current = persistedRoute;
-      setRoutes((current) => current.map((route) => (
-        String(route.id) === String(ready.canonicalRoute?.id) ? persistedRoute : route
-      )));
-      updateLastTripBuilderPlanState({
-        selectedRouteId: String(ready.canonicalRoute.id),
-        plan: null,
-        visible: false,
-        itinerarySaved: false,
-        itineraryEditSession: null,
-      });
-      if (params.setup === '1' && String(params.routeId ?? '') === String(ready.canonicalRoute.id)) {
-        setPreparedTripRoutePreview(buildPreparedTripRoutePreview(persistedRoute));
-        setTripSetupStarted(true);
-      }
-    } catch {
-      commitRoutePreparationState(failTripBuilderRoutePreparation(building));
-    }
-  }, [commitRoutePreparationState, params.routeId, params.setup, selectedTripOrigin]);
+    integrateReadyRoutePreparation(ready, true);
+  }, [commitRoutePreparationState, integrateReadyRoutePreparation]);
   const handleCancelRoutePreparation = useCallback(() => {
     routePreparationAbortRef.current?.abort('consumer_cancelled');
     routePreparationAbortRef.current = null;
@@ -4892,8 +5125,17 @@ export default function ExploreTripBuilderScreen() {
     selectedRouteStartCoordinate,
     selectedTripOrigin,
   ]);
+  const selectedSupplyAwareRoutePoints = useMemo(
+    () => hasProviderRoutedSelectedSupplySpine(routeContextSnapshot)
+      ? routeContextRoutePoints(routeContextSnapshot)
+      : [],
+    [routeContextSnapshot],
+  );
 
   const selectedPreparedRoutePoints = useMemo(() => {
+    if (selectedSupplyAwareRoutePoints.length >= 2) {
+      return selectedSupplyAwareRoutePoints;
+    }
     if (selectedPrimaryRouteSpine?.lineString) {
       return selectedPrimaryRouteSpine.coordinates.filter(isValidMapCoordinate);
     }
@@ -4917,7 +5159,149 @@ export default function ExploreTripBuilderScreen() {
     routeContextSnapshot,
     selectedPrimaryRouteSpine,
     selectedRoute,
+    selectedSupplyAwareRoutePoints,
     tripSetupStarted,
+  ]);
+
+  const prepareTripPlanRoadRoute = useCallback(async (
+    targetPlan: TripPlan,
+  ): Promise<RoadNavRoute> => {
+    if (!selectedTripOrigin || !selectedRouteStartCoordinate) {
+      throw new Error('Trip origin and trailhead are required for road turn guidance.');
+    }
+    const fingerprint = tripBuilderPreparedRoadRouteFingerprint(
+      targetPlan,
+      selectedTripOrigin,
+      selectedRouteStartCoordinate,
+    );
+    if (preparedTripPlanRoadRouteRef.current?.fingerprint === fingerprint) {
+      return preparedTripPlanRoadRouteRef.current.route;
+    }
+    if (preparedTripPlanRoadRouteRequestRef.current?.fingerprint === fingerprint) {
+      return preparedTripPlanRoadRouteRequestRef.current.promise;
+    }
+
+    const promise = (async () => {
+      const token = itinerarySearchToken || await getMapboxToken();
+      if (!token) throw new Error('Map service configuration is unavailable for road turn guidance.');
+      const route = await fetchRoadRoute({
+        accessToken: token,
+        origin: {
+          lat: selectedTripOrigin.latitude,
+          lng: selectedTripOrigin.longitude,
+        },
+        waypoints: tripBuilderRoadWaypoints(targetPlan),
+        destination: {
+          id: String(selectedRouteId ?? targetPlan.route.routeId),
+          title: selectedRouteDisplayName || targetPlan.route.name || 'Selected trailhead',
+          subtitle: 'Trip Builder approach via selected resupply stops',
+          coordinate: {
+            lat: selectedRouteStartCoordinate.latitude,
+            lng: selectedRouteStartCoordinate.longitude,
+          },
+          sourceType: 'explore_handoff',
+        },
+      });
+      if (route.guidanceMode !== 'turn_by_turn') {
+        throw new Error('The road provider returned geometry without detailed turn guidance.');
+      }
+      return route;
+    })();
+    preparedTripPlanRoadRouteRequestRef.current = { fingerprint, promise };
+    try {
+      const route = await promise;
+      if (
+        preparedTripPlanRoadRouteRequestRef.current?.fingerprint === fingerprint &&
+        preparedTripPlanRoadRouteRequestRef.current.promise === promise
+      ) {
+        preparedTripPlanRoadRouteRef.current = { fingerprint, route };
+        setPreparedTripPlanRoadRouteRevision((revision) => revision + 1);
+      }
+      return route;
+    } finally {
+      if (preparedTripPlanRoadRouteRequestRef.current?.promise === promise) {
+        preparedTripPlanRoadRouteRequestRef.current = null;
+      }
+    }
+  }, [
+    itinerarySearchToken,
+    selectedRouteDisplayName,
+    selectedRouteId,
+    selectedRouteStartCoordinate,
+    selectedTripOrigin,
+  ]);
+  const getPreparedTripPlanRoadRoute = useCallback((targetPlan: TripPlan): RoadNavRoute | null => {
+    if (!selectedTripOrigin || !selectedRouteStartCoordinate) return null;
+    const fingerprint = tripBuilderPreparedRoadRouteFingerprint(
+      targetPlan,
+      selectedTripOrigin,
+      selectedRouteStartCoordinate,
+    );
+    return preparedTripPlanRoadRouteRef.current?.fingerprint === fingerprint
+      ? preparedTripPlanRoadRouteRef.current.route
+      : null;
+  }, [selectedRouteStartCoordinate, selectedTripOrigin]);
+
+  const getTripPlanOutputSpine = useCallback((
+    preparedRoadRoute: RoadNavRoute | null,
+  ) => {
+    const route = routePreparationStateRef.current.canonicalRoute ?? selectedRoute;
+    if (!route) return null;
+    return buildTripBuilderPlanOutputSpine({
+      route: route as unknown as TripBuilderRouteInput,
+      origin: selectedTripOrigin,
+      trailhead: selectedRouteStartCoordinate,
+      trailEnd: selectedRouteEndCoordinate,
+      preparedRoadRoute,
+      fallbackApproachGeometry: liveApproachRoutePoints,
+    });
+  }, [
+    liveApproachRoutePoints,
+    selectedRoute,
+    selectedRouteEndCoordinate,
+    selectedRouteStartCoordinate,
+    selectedTripOrigin,
+  ]);
+
+  const selectedTripPlanOutputSpine = useMemo(() => {
+    if (!plan) return null;
+    // The revision is a render signal for the ref-backed single-flight cache.
+    void preparedTripPlanRoadRouteRevision;
+    return getTripPlanOutputSpine(getPreparedTripPlanRoadRoute(plan));
+  }, [
+    getPreparedTripPlanRoadRoute,
+    getTripPlanOutputSpine,
+    plan,
+    preparedTripPlanRoadRouteRevision,
+  ]);
+  const selectedTripPlanOutputPoints = useMemo(
+    () => selectedTripPlanOutputSpine?.lineString
+      ? selectedTripPlanOutputSpine.coordinates.filter(isValidMapCoordinate)
+      : selectedPreparedRoutePoints,
+    [selectedPreparedRoutePoints, selectedTripPlanOutputSpine],
+  );
+
+  const tripPlanGuidanceItinerary = useMemo(() => {
+    if (!plan) return [];
+    return buildTripBuilderGuidanceItinerary({
+      plan,
+      origin: selectedTripOrigin,
+      trailhead: selectedRouteStartCoordinate,
+      destination: selectedRouteEndCoordinate,
+      routeGeometry: {
+        type: 'LineString',
+        coordinates: selectedTripPlanOutputPoints.map((point) => [
+          point.longitude,
+          point.latitude,
+        ]),
+      },
+    });
+  }, [
+    plan,
+    selectedTripPlanOutputPoints,
+    selectedRouteEndCoordinate,
+    selectedRouteStartCoordinate,
+    selectedTripOrigin,
   ]);
 
   const suggestedEstablishedCampPins = useMemo(
@@ -6032,6 +6416,14 @@ export default function ExploreTripBuilderScreen() {
     setCampPickerVisible(false);
     setCampPlanPins([]);
     setResupplyOverrides({});
+    preparedTripPlanRoadRouteRef.current = null;
+    preparedTripPlanRoadRouteRequestRef.current = null;
+    preparedTripPlanRoadRouteGenerationRef.current += 1;
+    planOutputGenerationRef.current += 1;
+    setPlanOutputBusy(null);
+    planOutputBusyRef.current = null;
+    setPlanOutputMessage(null);
+    setPlanOutputError(null);
     updateLastTripBuilderPlanState({
       selectedRouteId: routeId,
       plan: null,
@@ -6100,9 +6492,15 @@ export default function ExploreTripBuilderScreen() {
       setCampPickerVisible(false);
       setCampPlanPins([]);
       setResupplyOverrides({});
+      preparedTripPlanRoadRouteRef.current = null;
+      preparedTripPlanRoadRouteRequestRef.current = null;
+      preparedTripPlanRoadRouteGenerationRef.current += 1;
+      planOutputGenerationRef.current += 1;
+      planOutputBusyRef.current = null;
+      setPlanOutputBusy(null);
       setRouteImportState({
         status: 'success',
-        message: `${fileName} parsed. Confirm the trailhead to build canonical route geometry.`,
+        message: `${fileName} parsed. ECS will use the practical route entry and orient the route automatically.`,
       });
       updateLastTripBuilderPlanState({
         selectedRouteId: importedRoute.id,
@@ -6183,7 +6581,8 @@ export default function ExploreTripBuilderScreen() {
     setCampPlanPins([]);
   };
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
+    if (generatingRef.current) return;
     if (!selectedRoute) {
       setError('Select a route before generating a trip plan.');
       return;
@@ -6218,10 +6617,11 @@ export default function ExploreTripBuilderScreen() {
       return;
     }
     try {
+      generatingRef.current = true;
       setGenerating(true);
       setError(null);
       const selectedSupplyMode = routeContextSupplyModeForTripBuilder(smartResupplyPreference);
-      const routeContext = routeContextOrchestrator.getContext({
+      const routeContext = await routeContextOrchestrator.refreshContext({
         trailId: String(selectedRoute.id),
         trail: selectedRoute as unknown as TripBuilderRouteInput & { id: string },
         origin: planningRouteContextOrigin,
@@ -6276,6 +6676,12 @@ export default function ExploreTripBuilderScreen() {
         currentLocation: selectedTripOrigin,
       });
       const finalizedPlan = appendBailoutStopsToPlan(nextPlan, selectedBailoutPoints);
+      preparedTripPlanRoadRouteRef.current = null;
+      preparedTripPlanRoadRouteRequestRef.current = null;
+      const preparationGeneration = preparedTripPlanRoadRouteGenerationRef.current + 1;
+      preparedTripPlanRoadRouteGenerationRef.current = preparationGeneration;
+      setPlanOutputMessage('Trip built. Preparing detailed road guidance for the ordered stops...');
+      setPlanOutputError(null);
       setPlan(finalizedPlan);
       setPlanModalVisible(true);
       setPlanMapScope(null);
@@ -6293,9 +6699,23 @@ export default function ExploreTripBuilderScreen() {
         itinerarySaved: false,
         itineraryEditSession: null,
       });
+      void prepareTripPlanRoadRoute(finalizedPlan).then(() => {
+        if (preparedTripPlanRoadRouteGenerationRef.current !== preparationGeneration) return;
+        setPlanOutputError(null);
+        setPlanOutputMessage('Detailed road guidance is ready for this itinerary.');
+      }).catch((roadRouteError) => {
+        if (preparedTripPlanRoadRouteGenerationRef.current !== preparationGeneration) return;
+        setPlanOutputMessage(null);
+        setPlanOutputError(
+          roadRouteError instanceof Error
+            ? roadRouteError.message
+            : 'Detailed road guidance is unavailable for this itinerary.',
+        );
+      });
     } catch {
       setError('Trip Builder could not build a plan from the selected route.');
     } finally {
+      generatingRef.current = false;
       setGenerating(false);
     }
   };
@@ -6332,6 +6752,25 @@ export default function ExploreTripBuilderScreen() {
     hapticMicro();
     const nextPlan = updateTripPlanStops(plan, draftItineraryStops);
     const nextTripItineraryEditSession = draftTripItineraryEditSession;
+    preparedTripPlanRoadRouteRef.current = null;
+    preparedTripPlanRoadRouteRequestRef.current = null;
+    planOutputGenerationRef.current += 1;
+    const preparationGeneration = preparedTripPlanRoadRouteGenerationRef.current + 1;
+    preparedTripPlanRoadRouteGenerationRef.current = preparationGeneration;
+    setPlanOutputMessage('Itinerary updated. Road guidance will use this new stop order.');
+    setPlanOutputError(null);
+    void prepareTripPlanRoadRoute(nextPlan).then(() => {
+      if (preparedTripPlanRoadRouteGenerationRef.current !== preparationGeneration) return;
+      setPlanOutputError(null);
+      setPlanOutputMessage('Itinerary updated. Detailed road guidance now follows the new stop order.');
+    }).catch((roadRouteError) => {
+      if (preparedTripPlanRoadRouteGenerationRef.current !== preparationGeneration) return;
+      setPlanOutputError(
+        roadRouteError instanceof Error
+          ? roadRouteError.message
+          : 'Detailed road guidance could not be refreshed for this stop order.',
+      );
+    });
     setPlan(nextPlan);
     setDraftItineraryStops([]);
     setSavedTripItineraryEditSession(nextTripItineraryEditSession);
@@ -6348,7 +6787,14 @@ export default function ExploreTripBuilderScreen() {
       itinerarySaved: true,
       itineraryEditSession: nextTripItineraryEditSession,
     });
-  }, [draftItineraryStops, draftTripItineraryEditSession, plan, planModalVisible, selectedRouteId]);
+  }, [
+    draftItineraryStops,
+    draftTripItineraryEditSession,
+    plan,
+    planModalVisible,
+    prepareTripPlanRoadRoute,
+    selectedRouteId,
+  ]);
 
   const handleAcceptItineraryReviewItem = useCallback((itemId: string) => {
     hapticMicro();
@@ -6443,6 +6889,16 @@ export default function ExploreTripBuilderScreen() {
         latitude: destination.coordinate.lat,
         longitude: destination.coordinate.lng,
       };
+      const stopType = inferAddedStopType({
+        title: destination.title || suggestion.title,
+        subtitle: destination.subtitle ?? suggestion.subtitle,
+      });
+      if (stopType !== 'fuel' && stopType !== 'supply' && stopType !== 'resupply') {
+        setItinerarySearchError(
+          'Only fuel, grocery, or supply stops can be added to active guidance. Camps, bailouts, and other places remain reference annotations.',
+        );
+        return;
+      }
       setDraftItineraryStops((current) => {
         const insertIndex = Math.max(0, Math.min(insertState.index, current.length));
         const nextStop = buildUserItineraryStop(
@@ -6471,81 +6927,268 @@ export default function ExploreTripBuilderScreen() {
     }
   }, [insertState, itinerarySearchToken, plan]);
 
-  const handleActivateTrip = useCallback(async () => {
-    const itineraryForActiveTrip = editableTripItinerary ?? selectedTripItinerary;
+  const handleSaveTripPlanRoute = useCallback(async () => {
+    if (!plan || planOutputBusyRef.current) return;
+    if (itineraryEditMode) {
+      setPlanOutputError('Save the itinerary edits before saving the route.');
+      return;
+    }
+    hapticMicro();
+    const actionGeneration = planOutputGenerationRef.current + 1;
+    planOutputGenerationRef.current = actionGeneration;
+    planOutputBusyRef.current = 'save';
+    setPlanOutputBusy('save');
+    setPlanOutputMessage(null);
+    setPlanOutputError(null);
+    try {
+      const preparedRoadRoute = selectedTripOrigin && selectedRouteStartCoordinate
+        ? getPreparedTripPlanRoadRoute(plan) ?? await prepareTripPlanRoadRoute(plan)
+        : null;
+      if (planOutputGenerationRef.current !== actionGeneration) return;
+      const outputSpine = getTripPlanOutputSpine(preparedRoadRoute);
+      if (selectedTripOrigin && outputSpine?.status !== 'ready') {
+        throw new Error('The road approach does not connect to the trailhead yet. Retry before saving the complete itinerary.');
+      }
+      const outputSpinePoints = outputSpine?.lineString
+        ? outputSpine.coordinates.filter(isValidMapCoordinate)
+        : [];
+      if (outputSpinePoints.length < 2) {
+        throw new Error('A connected trip route is required before saving.');
+      }
+      const savedGuidanceItinerary = buildTripBuilderGuidanceItinerary({
+        plan,
+        origin: selectedTripOrigin,
+        trailhead: selectedRouteStartCoordinate,
+        destination: selectedRouteEndCoordinate,
+        routeGeometry: {
+          type: 'LineString',
+          coordinates: outputSpinePoints.map((point) => [point.longitude, point.latitude]),
+        },
+      });
+      const saved = routeStore.createCustomRoute([{
+        coordinates: outputSpinePoints.map((point) => [
+          point.longitude,
+          point.latitude,
+        ] as [number, number]),
+        sourceMetadata: {
+          kind: 'snapped_trace',
+          sourceLabel: 'ecs_trip_builder_plan',
+          confidence: 'planning_geometry',
+          dataState: preparedRoadRoute ? 'provider_routed' : 'cached_geometry',
+          warnings: [
+            'Trip Builder plan geometry. Verify access, closures, and current conditions before travel.',
+          ],
+          guidanceReady: true,
+        },
+      }], {
+        name: plan.route.name,
+        description: 'Trip Builder itinerary route with selected approach stops and canonical trail geometry.',
+        sourceApp: 'ecs_trip_builder',
+        externalSourceId: plan.id,
+        externalSourceType: 'trip_plan',
+        idempotencyKey: `trip-builder:${plan.id}`,
+        updateExisting: true,
+        waypoints: savedGuidanceItinerary.map((point) => {
+          const sourceStop = point.sourceStopId
+            ? plan.suggestedStops.find((stop) => stop.id === point.sourceStopId)
+            : null;
+          return {
+            lat: point.coordinate.latitude,
+            lon: point.coordinate.longitude,
+            ele: null,
+            name: point.title,
+            time: null,
+            waypointType: point.role === 'trailhead'
+              ? 'trailhead' as const
+              : sourceStop?.type === 'fuel'
+                ? 'fuel' as const
+                : null,
+          };
+        }),
+      });
+      setPlanOutputMessage(`Saved ${saved.name} to Route Command Center.`);
+    } catch (saveError) {
+      setPlanOutputError(
+        saveError instanceof Error ? saveError.message : 'The trip route could not be saved.',
+      );
+    } finally {
+      if (planOutputGenerationRef.current === actionGeneration) {
+        planOutputBusyRef.current = null;
+        setPlanOutputBusy(null);
+      }
+    }
+  }, [
+    getPreparedTripPlanRoadRoute,
+    getTripPlanOutputSpine,
+    itineraryEditMode,
+    plan,
+    prepareTripPlanRoadRoute,
+    selectedRouteEndCoordinate,
+    selectedRouteStartCoordinate,
+    selectedTripOrigin,
+  ]);
+
+  const handleStartTripGuidance = useCallback(async () => {
+    if (planOutputBusyRef.current) return;
+    if (itineraryEditMode) {
+      setPlanOutputError('Save the itinerary edits before starting guidance.');
+      return;
+    }
     const guidanceUnavailableReason = getTripBuilderNavigationHandoffUnavailableReason(
       routePreparationStateRef.current,
     );
     const preparedRoute = routePreparationStateRef.current.canonicalRoute;
     if (guidanceUnavailableReason || !preparedRoute) {
-      setActiveTripActivationError(
+      setPlanOutputError(
         guidanceUnavailableReason ?? 'Prepare canonical route geometry before activating this trip.',
       );
       return;
     }
-    if (!plan || !itineraryForActiveTrip) {
-      setActiveTripActivationError('Build or preview an itinerary before activating Active Trip Mode.');
+    if (!plan || selectedPreparedRoutePoints.length < 2) {
+      setPlanOutputError('Build a connected itinerary before starting guidance.');
       return;
     }
 
     hapticMicro();
-    setActiveTripActivating(true);
-    setActiveTripActivationError(null);
+    const actionGeneration = planOutputGenerationRef.current + 1;
+    planOutputGenerationRef.current = actionGeneration;
+    planOutputBusyRef.current = 'navigate';
+    setPlanOutputBusy('navigate');
+    setPlanOutputMessage(null);
+    setPlanOutputError(null);
     try {
-      activeTripModeStore.activate({
-        itinerary: itineraryForActiveTrip,
-        selectedRoute: preparedRoute as unknown as TripBuilderRouteInput,
-        vehicleProfile,
-        plan,
-        routeConfidence: tripConfidenceSummary,
-        lastKnownLocation: liveTripBuilderUserLocation,
-        environment: {
-          weather: { status: 'unknown', label: 'Trip Builder weather unavailable' },
-          daylight: { status: 'unknown', label: 'Trip Builder daylight unavailable' },
-          remoteness: {
-            status: preparedRoute.remotenessScore != null ? 'available' : 'unknown',
-            score: preparedRoute.remotenessScore ?? null,
-          },
-        },
-        telemetry: { status: 'unavailable', label: 'Telemetry unavailable for Trip Builder MVP' },
+      const preparedRoadRoute =
+        getPreparedTripPlanRoadRoute(plan) ?? await prepareTripPlanRoadRoute(plan);
+      if (planOutputGenerationRef.current !== actionGeneration) return;
+      const outputSpine = getTripPlanOutputSpine(preparedRoadRoute);
+      if (outputSpine?.status !== 'ready' || !outputSpine.lineString) {
+        throw new Error('The complete itinerary route is not connected yet.');
+      }
+      const outputSpinePoints = outputSpine.coordinates.filter(isValidMapCoordinate);
+      const basePayload = buildExploreNavigationPayload(preparedRoute, {
+        approachOriginCoordinate: selectedTripOrigin
+          ? { lat: selectedTripOrigin.latitude, lng: selectedTripOrigin.longitude }
+          : null,
       });
-      await activeTripModeStore.flush();
+      const navigationPayload = buildTripBuilderNavigationOutput({
+        basePayload,
+        plan,
+        preparedRoadRoute,
+        spinePoints: outputSpinePoints,
+        origin: selectedTripOrigin,
+        trailhead: selectedRouteStartCoordinate,
+        destination: selectedRouteEndCoordinate,
+        canonicalRoute: preparedRoute,
+      });
+      await saveNavigationHandoffPayload(navigationPayload);
+      if (planOutputGenerationRef.current !== actionGeneration) return;
+      await stageNavigationFlow({
+        source: 'explore',
+        target: 'navigate',
+        intent: 'route_preview',
+        label: `Start ${plan.route.name}`,
+        message: 'Opening the complete itinerary route in Navigate.',
+        context: {
+          routeId: navigationPayload.id,
+          tripPlanId: plan.id,
+          autoStartNavigation: true,
+          routePreviewStartGuidance: true,
+        },
+      });
+      if (planOutputGenerationRef.current !== actionGeneration) return;
       setPlanMapScope(null);
       setPlanModalVisible(false);
-      router.push('/active-trip' as any);
-    } catch (activationError) {
-      setActiveTripActivationError(
-        activationError instanceof Error
-          ? activationError.message
-          : 'Active Trip Mode could not be started from this itinerary.',
+      pushSingleFlight('/navigate');
+    } catch (navigationError) {
+      setPlanOutputError(
+        navigationError instanceof Error
+          ? navigationError.message
+          : 'The complete itinerary could not be staged in Navigate.',
       );
     } finally {
-      setActiveTripActivating(false);
+      if (planOutputGenerationRef.current === actionGeneration) {
+        planOutputBusyRef.current = null;
+        setPlanOutputBusy(null);
+      }
     }
   }, [
-    editableTripItinerary,
-    liveTripBuilderUserLocation,
+    getPreparedTripPlanRoadRoute,
+    getTripPlanOutputSpine,
+    itineraryEditMode,
     plan,
-    router,
-    selectedTripItinerary,
-    tripConfidenceSummary,
-    vehicleProfile,
+    prepareTripPlanRoadRoute,
+    pushSingleFlight,
+    selectedPreparedRoutePoints.length,
+    selectedRouteEndCoordinate,
+    selectedRouteStartCoordinate,
+    selectedTripOrigin,
   ]);
 
-  const handlePrepareOfflinePack = useCallback(() => {
-    if (selectedRoute && plan) {
+  const handlePrepareOfflinePack = useCallback(async () => {
+    if (!selectedRoute || !plan || planOutputBusyRef.current) return;
+    if (itineraryEditMode) {
+      setPlanOutputError('Save the itinerary edits before preparing the offline pack.');
+      return;
+    }
+    hapticMicro();
+    const actionGeneration = planOutputGenerationRef.current + 1;
+    planOutputGenerationRef.current = actionGeneration;
+    planOutputBusyRef.current = 'offline';
+    setPlanOutputBusy('offline');
+    setPlanOutputMessage(null);
+    setPlanOutputError(null);
+    try {
+      let preparedRoadRoute = getPreparedTripPlanRoadRoute(plan);
+      let preparedRoadRouteUnavailableReason: string | null = null;
+      if (!preparedRoadRoute && selectedTripOrigin && selectedRouteStartCoordinate) {
+        try {
+          preparedRoadRoute = await prepareTripPlanRoadRoute(plan);
+        } catch (roadGuidanceError) {
+          // The Offline Prep screen receives an explicit unavailable state in
+          // route metadata; map/trail assets can still be prepared truthfully.
+          preparedRoadRoute = null;
+          preparedRoadRouteUnavailableReason = roadGuidanceError instanceof Error
+            ? roadGuidanceError.message
+            : 'Detailed road turns could not be cached for this itinerary.';
+        }
+      } else if (!preparedRoadRoute) {
+        preparedRoadRouteUnavailableReason =
+          'Trip origin or trailhead is unavailable, so detailed road turns could not be cached.';
+      }
+      if (planOutputGenerationRef.current !== actionGeneration) return;
+      const outputSpine = getTripPlanOutputSpine(preparedRoadRoute);
+      const outputSpinePoints = outputSpine?.lineString
+        ? outputSpine.coordinates.filter(isValidMapCoordinate)
+        : [];
+      const offlineRoutePoints = outputSpinePoints.length >= 2
+        ? outputSpinePoints
+        : routePointsForTripMap(selectedRoute as unknown as TripBuilderRouteInput);
+      const offlineGuidanceItinerary = buildTripBuilderGuidanceItinerary({
+        plan,
+        origin: selectedTripOrigin,
+        trailhead: selectedRouteStartCoordinate,
+        destination: selectedRouteEndCoordinate,
+        routeGeometry: {
+          type: 'LineString',
+          coordinates: offlineRoutePoints.map((point) => [point.longitude, point.latitude]),
+        },
+      });
       const route = routeForOfflinePrep(
         selectedRoute as unknown as TripBuilderRouteInput,
         plan,
-        selectedPreparedRoutePoints.length >= 2
-          ? selectedPreparedRoutePoints
-          : routePointsForTripMap(selectedRoute as unknown as TripBuilderRouteInput),
+        offlineRoutePoints,
+        preparedRoadRoute,
+        outputSpine?.status ?? 'invalid',
+        preparedRoadRouteUnavailableReason,
+        offlineGuidanceItinerary,
       );
       const resupplyPoints = resupplyPointsFromPlan(plan);
       const exitPoints = exitPointsFromPlan(plan, getOfflinePrepRouteCoordinates(route));
       const itineraryForOfflinePrep = editableTripItinerary ?? selectedTripItinerary ?? null;
       saveOfflinePrepPackHandoff({
         route,
+        preparedRoadRoute,
+        preparedRoadRouteUnavailableReason,
         itinerary: itineraryForOfflinePrep,
         tripPlan: plan,
         smartResupplyPlan: plan.smartResupplyPlan,
@@ -6556,17 +7199,33 @@ export default function ExploreTripBuilderScreen() {
         resupplyPoints,
         emergencyPoints: resupplyPoints.filter((point) => point.category === 'medical' || point.category === 'repair'),
       }, 'trip_builder');
+      pushSingleFlight('/explore-offline-prep-pack');
+    } catch (offlineError) {
+      setPlanOutputError(
+        offlineError instanceof Error
+          ? offlineError.message
+          : 'The offline prep pack could not be staged.',
+      );
+    } finally {
+      if (planOutputGenerationRef.current === actionGeneration) {
+        planOutputBusyRef.current = null;
+        setPlanOutputBusy(null);
+      }
     }
-    hapticMicro();
-    pushSingleFlight('/explore-offline-prep-pack');
   }, [
     editableTripItinerary,
+    getPreparedTripPlanRoadRoute,
+    getTripPlanOutputSpine,
+    itineraryEditMode,
     plan,
+    prepareTripPlanRoadRoute,
     readinessReference,
     pushSingleFlight,
-    selectedPreparedRoutePoints,
     selectedRoute,
+    selectedRouteEndCoordinate,
+    selectedRouteStartCoordinate,
     selectedTripItinerary,
+    selectedTripOrigin,
     vehicleProfile,
   ]);
 
@@ -6579,19 +7238,12 @@ export default function ExploreTripBuilderScreen() {
     if (!plan) return [];
     const sections: TripBuilderResultSectionKey[] = [
       'plan_summary',
-      'camp_check',
-      'itinerary_confidence',
-      'itinerary_summary',
-      'active_trip',
-      'itinerary_review',
-      itineraryEditMode ? 'itinerary_editor' : 'suggested_stops',
-      'camp_candidates',
-      'exit_access',
+      itineraryEditMode ? 'itinerary_editor' : 'guidance_itinerary',
     ];
     if (plan.smartResupplyPlan) {
       sections.push('smart_resupply');
     }
-    sections.push('ecs_notes', 'items_to_verify', 'mission_command', 'offline_cta');
+    sections.push('items_to_verify', 'plan_actions');
     return sections;
   }, [itineraryEditMode, plan]);
 
@@ -6605,7 +7257,7 @@ export default function ExploreTripBuilderScreen() {
           <View style={[styles.sectionCard, styles.resultHeaderCard]}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>{plan.route.name}</Text>
-              <Text style={styles.sectionMeta}>PLAN</Text>
+              <Text style={styles.sectionMeta}>BUILT</Text>
             </View>
             <View style={styles.metricGrid}>
               <Metric label="Distance" value={formatMiles(plan.estimate.totalDistanceMiles)} />
@@ -6640,39 +7292,97 @@ export default function ExploreTripBuilderScreen() {
         );
       case 'itinerary_summary':
         return (
-          <ResultBlock title="Itinerary Sequence">
+          <ResultBlock
+            title="Your Itinerary"
+            onMapPress={tripPlanMapAvailability.itinerary ? () => openPlanMap('itinerary') : undefined}
+            onEditPress={itineraryEditMode ? undefined : handleStartItineraryEdit}
+          >
             <ItinerarySummaryPanel summary={itinerarySummary} />
           </ResultBlock>
         );
-      case 'active_trip':
+      case 'plan_actions':
         return (
-          <ResultBlock title="Active Trip Snapshot">
-            <View style={styles.activeTripActionCard}>
-              <View style={styles.activeTripActionCopy}>
-                <Text style={styles.activeTripActionTitle}>Active Trip Snapshot</Text>
-                <Text style={styles.activeTripActionText} numberOfLines={2}>
-                  Start a local, read-only operational trip from this itinerary and keep current warnings visible.
-                </Text>
-                {activeTripActivationError ? (
-                  <Text style={styles.activeTripActionError}>{activeTripActivationError}</Text>
-                ) : null}
-              </View>
+          <ResultBlock title="Trip Ready">
+            <Text style={styles.resultText}>
+              Your route and itinerary are built. Prepare it for offline use, save it to Route Command Center, or start guidance now.
+            </Text>
+            {itineraryEditMode ? (
+              <Text style={styles.resultSubtext} accessibilityLiveRegion="polite">
+                Save or cancel the itinerary edits to unlock trip actions.
+              </Text>
+            ) : null}
+            {planOutputMessage ? (
+              <Text style={styles.planOutputSuccess} accessibilityLiveRegion="polite">
+                {planOutputMessage}
+              </Text>
+            ) : null}
+            {planOutputError ? (
+              <Text style={styles.activeTripActionError} accessibilityLiveRegion="polite">
+                {planOutputError}
+              </Text>
+            ) : null}
+            <View style={styles.planOutputActions}>
               <TouchableOpacity
-                style={[styles.activeTripButton, activeTripActivating && styles.activeTripButtonDisabled]}
-                activeOpacity={activeTripActivating ? 1 : 0.84}
-                disabled={activeTripActivating}
-                onPress={handleActivateTrip}
+                style={[
+                  styles.planOutputSecondaryButton,
+                  (planOutputBusy != null || itineraryEditMode) && styles.activeTripButtonDisabled,
+                ]}
+                activeOpacity={planOutputBusy != null || itineraryEditMode ? 1 : 0.84}
+                disabled={planOutputBusy != null || itineraryEditMode}
+                onPress={handlePrepareOfflinePack}
                 accessibilityRole="button"
-                accessibilityLabel="Activate Trip"
-                testID="trip-builder-activate-trip"
+                accessibilityLabel="Prepare Offline Pack"
+                testID="trip-builder-prepare-offline-pack"
               >
-                {activeTripActivating ? (
+                {planOutputBusy === 'offline' ? (
+                  <ActivityIndicator size="small" color={TACTICAL.text} />
+                ) : (
+                  <Ionicons name="download-outline" size={15} color={TACTICAL.text} />
+                )}
+                <Text style={styles.planOutputSecondaryButtonText}>
+                  {planOutputBusy === 'offline' ? 'Preparing' : 'Offline'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.planOutputSecondaryButton,
+                  (planOutputBusy != null || itineraryEditMode) && styles.activeTripButtonDisabled,
+                ]}
+                activeOpacity={planOutputBusy != null || itineraryEditMode ? 1 : 0.84}
+                disabled={planOutputBusy != null || itineraryEditMode}
+                onPress={handleSaveTripPlanRoute}
+                accessibilityRole="button"
+                accessibilityLabel="Save Route"
+                testID="trip-builder-save-route"
+              >
+                {planOutputBusy === 'save' ? (
+                  <ActivityIndicator size="small" color={TACTICAL.text} />
+                ) : (
+                  <Ionicons name="bookmark-outline" size={15} color={TACTICAL.text} />
+                )}
+                <Text style={styles.planOutputSecondaryButtonText}>
+                  {planOutputBusy === 'save' ? 'Saving' : 'Save'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.activeTripButton,
+                  (planOutputBusy != null || itineraryEditMode) && styles.activeTripButtonDisabled,
+                ]}
+                activeOpacity={planOutputBusy != null || itineraryEditMode ? 1 : 0.84}
+                disabled={planOutputBusy != null || itineraryEditMode}
+                onPress={handleStartTripGuidance}
+                accessibilityRole="button"
+                accessibilityLabel="Start Guidance"
+                testID="trip-builder-start-guidance"
+              >
+                {planOutputBusy === 'navigate' ? (
                   <ActivityIndicator size="small" color="#081014" />
                 ) : (
-                  <Ionicons name="navigate-circle-outline" size={14} color="#081014" />
+                  <Ionicons name="navigate-circle-outline" size={15} color="#081014" />
                 )}
                 <Text style={styles.activeTripButtonText}>
-                  {activeTripActivating ? 'Starting' : 'Activate Trip'}
+                  {planOutputBusy === 'navigate' ? 'Opening' : 'Navigate'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -6773,10 +7483,27 @@ export default function ExploreTripBuilderScreen() {
             </View>
           </ResultBlock>
         );
-      case 'suggested_stops':
+      case 'guidance_itinerary':
         return (
-          <ResultBlock title="Suggested Stops">
-            {plan.suggestedStops.map((stop, index) => <StopRow key={stop.id} stop={stop} index={index} />)}
+          <ResultBlock title="Guidance Itinerary" onEditPress={handleStartItineraryEdit}>
+            <Text style={styles.resultSubtext}>
+              This is the ordered path Navigate will follow. Camp, bailout, scenic, and analysis references stay map annotations rather than route stops.
+            </Text>
+            {tripPlanGuidanceItinerary.length > 0 ? (
+              tripPlanGuidanceItinerary.map((point, index) => (
+                <View key={point.id} style={styles.stopRow} testID={`trip-builder-guidance-point-${point.role}`}>
+                  <View style={styles.stopIndex}>
+                    <Text style={styles.stopIndexText}>{index + 1}</Text>
+                  </View>
+                  <View style={styles.stopCopy}>
+                    <Text style={styles.stopTitle}>{point.title}</Text>
+                    <Text style={styles.stopMeta}>{guidanceItineraryRoleLabel(point.role)}</Text>
+                  </View>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.resultText}>No validated guidance points are available yet.</Text>
+            )}
           </ResultBlock>
         );
       case 'camp_candidates':
@@ -6920,31 +7647,14 @@ export default function ExploreTripBuilderScreen() {
             grow
           />
         );
-      case 'offline_cta':
-        return (
-          <TouchableOpacity
-            style={styles.offlineButton}
-            activeOpacity={0.84}
-            onPress={handlePrepareOfflinePack}
-            accessibilityRole="button"
-            accessibilityLabel="Prepare Offline Pack"
-            testID="trip-builder-prepare-offline-pack"
-          >
-            <Ionicons name="download-outline" size={14} color="#081014" />
-            <Text style={styles.offlineButtonText}>Prepare Offline Pack</Text>
-          </TouchableOpacity>
-        );
       default:
         return null;
     }
   }, [
-    activeTripActivating,
-    activeTripActivationError,
     cycleResupplyOverride,
     draftItineraryStops,
     draftTripItineraryEditSession,
     handleAcceptItineraryReviewItem,
-    handleActivateTrip,
     handleAddUserItineraryStop,
     handleAddUserTrailWaypoint,
     handleCancelItineraryEdit,
@@ -6955,9 +7665,11 @@ export default function ExploreTripBuilderScreen() {
     handleMoveItineraryReviewStop,
     handleOpenInsertSlot,
     handlePrepareOfflinePack,
+    handleSaveTripPlanRoute,
     handleSaveItineraryEdit,
     handleSelectItinerarySuggestion,
     handleStartItineraryEdit,
+    handleStartTripGuidance,
     handleToggleItineraryBailout,
     insertState,
     itineraryEditMode,
@@ -6969,8 +7681,12 @@ export default function ExploreTripBuilderScreen() {
     itinerarySummary,
     openPlanMap,
     plan,
+    planOutputBusy,
+    planOutputError,
+    planOutputMessage,
     resupplyOverrides,
     tripConfidenceSummary,
+    tripPlanGuidanceItinerary,
     tripPlanMapAvailability,
   ]);
 
@@ -7088,9 +7804,9 @@ export default function ExploreTripBuilderScreen() {
                     ) : null}
                     {routePreparationState.status === 'awaiting_trailhead_selection' ? (
                       <View style={styles.planningQuestion} testID="trip-builder-trailhead-selection">
-                        <Text style={styles.groupLabel}>Confirm Trailhead</Text>
+                        <Text style={styles.groupLabel}>Route Entry Needs Review</Text>
                         <Text style={styles.routePickerHint}>
-                          Choose the route entry point. ECS will orient the canonical route from this trailhead toward the trail end.
+                          ECS normally chooses the practical entry automatically. These endpoints are too close or equally plausible, so confirm the intended start before ECS orients the route.
                         </Text>
                         <View style={styles.planningChoiceRow}>
                           {routePreparationState.trailheadOptions.map((option) => (
@@ -7650,7 +8366,7 @@ export default function ExploreTripBuilderScreen() {
               <View style={styles.modalHeader}>
                 <View style={styles.modalHeaderCopy}>
                   <Text style={styles.eyebrow}>TRIP BUILDER</Text>
-                  <Text style={styles.modalTitle}>Trip Plan</Text>
+                  <Text style={styles.modalTitle}>Your Trip Plan</Text>
                 </View>
                 <TouchableOpacity
                   style={styles.modalCloseButton}
@@ -7685,7 +8401,7 @@ export default function ExploreTripBuilderScreen() {
               visible={!!planMapScope}
               scope={planMapScope}
               route={selectedRoute as unknown as TripBuilderRouteInput | null}
-              routePreviewPoints={selectedPreparedRoutePoints}
+              routePreviewPoints={selectedTripPlanOutputPoints}
               plan={plan}
               itinerarySaved={itinerarySaved}
               onClose={() => setPlanMapScope(null)}
@@ -7697,6 +8413,8 @@ export default function ExploreTripBuilderScreen() {
             route={selectedRoute as unknown as TripBuilderRouteInput | null}
             routePreviewPoints={selectedPreparedRoutePoints}
             mapboxToken={itinerarySearchToken}
+            mapStyle={planningMapStyle}
+            onMapStyleChange={setPlanningMapStyle}
             userLocation={liveTripBuilderUserLocation}
             pins={bailoutPlanPins}
             selectedPoint={selectedBailoutPoint}
@@ -7710,6 +8428,8 @@ export default function ExploreTripBuilderScreen() {
             route={selectedRoute as unknown as TripBuilderRouteInput | null}
             routePreviewPoints={selectedPreparedRoutePoints}
             mapboxToken={itinerarySearchToken}
+            mapStyle={planningMapStyle}
+            onMapStyleChange={setPlanningMapStyle}
             userLocation={liveTripBuilderUserLocation}
             pins={campPlanPins}
             suggestedEstablishedCampPins={suggestedEstablishedCampPins}
@@ -8603,8 +9323,43 @@ const styles = StyleSheet.create({
     lineHeight: 11,
     fontWeight: '800',
   },
+  planOutputSuccess: {
+    color: TACTICAL.successText,
+    fontSize: 9,
+    lineHeight: 13,
+    fontWeight: '800',
+  },
+  planOutputActions: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  planOutputSecondaryButton: {
+    minHeight: 44,
+    minWidth: 86,
+    flex: 1,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber + '45',
+    backgroundColor: TACTICAL.amber + '0D',
+    paddingHorizontal: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  planOutputSecondaryButtonText: {
+    color: TACTICAL.text,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
   activeTripButton: {
-    minHeight: 31,
+    minHeight: 44,
+    minWidth: 92,
+    flex: 1,
     borderRadius: 10,
     backgroundColor: TACTICAL.amber,
     paddingHorizontal: 9,
@@ -9501,6 +10256,63 @@ const styles = StyleSheet.create({
   tripMapHeaderCopy: { flex: 1, minWidth: 0 },
   tripMapTitle: { color: TACTICAL.text, fontSize: 16, fontWeight: '900' },
   tripMapSubtitle: { color: TACTICAL.textMuted, fontSize: 9, lineHeight: 13, fontWeight: '700' },
+  planningMapStyleControl: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    right: 8,
+    zIndex: 3,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
+    backgroundColor: 'rgba(4,10,12,0.88)',
+    padding: 6,
+    gap: 5,
+  },
+  planningMapStyleLabel: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  planningMapStyleSegments: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 6,
+  },
+  planningMapStyleSegment: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: ECS.stroke,
+    backgroundColor: 'rgba(255,255,255,0.025)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  planningMapStyleSegmentSelected: {
+    borderColor: TACTICAL.amber + '70',
+    backgroundColor: TACTICAL.amber + '18',
+  },
+  planningMapStyleSegmentDisabled: {
+    opacity: 0.48,
+  },
+  planningMapStyleSegmentText: {
+    color: TACTICAL.textMuted,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  planningMapStyleSegmentTextSelected: {
+    color: TACTICAL.amber,
+  },
+  planningMapStyleUnavailable: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '700',
+  },
   tripMapFrame: {
     flex: 1,
     minHeight: 220,

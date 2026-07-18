@@ -71,6 +71,12 @@ export type StitchedRouteGap = {
   reason: string;
 };
 
+export type StitchedRouteGeometrySourceState =
+  | 'canonical'
+  | 'mixed'
+  | 'limited_tile_geometry'
+  | 'unavailable';
+
 export type StitchedRouteDraft = {
   draftId: string;
   selectedSegmentIds: string[];
@@ -80,6 +86,7 @@ export type StitchedRouteDraft = {
   estimatedDurationSeconds: number | null;
   warnings: string[];
   unresolvedGaps: StitchedRouteGap[];
+  geometrySourceState?: StitchedRouteGeometrySourceState;
   createdAt: string;
   updatedAt: string;
 };
@@ -335,6 +342,16 @@ export function normalizeStitchedRouteDraft(value: unknown): StitchedRouteDraft 
   const createdAt = requiredText(record.createdAt ?? record.created_at);
   const updatedAt = requiredText(record.updatedAt ?? record.updated_at);
   const unresolvedGapsInput = record.unresolvedGaps ?? record.unresolved_gaps;
+  const rawGeometrySourceState = cleanText(
+    record.geometrySourceState ?? record.geometry_source_state,
+  );
+  const geometrySourceState: StitchedRouteGeometrySourceState | undefined =
+    rawGeometrySourceState === 'canonical' ||
+    rawGeometrySourceState === 'mixed' ||
+    rawGeometrySourceState === 'limited_tile_geometry' ||
+    rawGeometrySourceState === 'unavailable'
+      ? rawGeometrySourceState
+      : undefined;
   if (!draftId || !createdAt || !updatedAt) return null;
   return {
     draftId,
@@ -351,6 +368,7 @@ export function normalizeStitchedRouteDraft(value: unknown): StitchedRouteDraft 
           .map(normalizeStitchedRouteGap)
           .filter((gap): gap is StitchedRouteGap => !!gap)
       : [],
+    geometrySourceState,
     createdAt,
     updatedAt,
   };

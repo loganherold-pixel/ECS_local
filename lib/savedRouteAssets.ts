@@ -87,17 +87,26 @@ function countRoutePoints(route: ImportedRoute): number {
 function createRouteAsset(route: ImportedRoute): SavedRouteAsset {
   const isCustom = route.route_category === 'custom' || route.source_format === 'custom';
   const isExploreSavedRoute = route.source_app === 'ecs_explore_save';
+  const isEcsRouteCatalog = route.source_app === 'ecs_navigate_route_catalog';
   return {
     id: `route:${route.id}`,
     kind: isCustom ? 'custom' : 'imported',
     title: route.name || (isCustom ? 'Custom Route' : 'Imported Route'),
     subtitle: route.description,
-    sourceLabel: isExploreSavedRoute
-      ? 'EXPLORE SAVED ROUTE'
-      : isCustom
-        ? 'CUSTOM BUILT'
-        : formatSourceLabel(route.source_format),
-    badgeLabel: isExploreSavedRoute ? 'EXPLORE' : isCustom ? 'CUSTOM' : route.source_format.toUpperCase(),
+    sourceLabel: isEcsRouteCatalog
+      ? 'ECS ROUTE CATALOG'
+      : isExploreSavedRoute
+        ? 'EXPLORE SAVED ROUTE'
+        : isCustom
+          ? 'CUSTOM BUILT'
+          : formatSourceLabel(route.source_format),
+    badgeLabel: isEcsRouteCatalog
+      ? 'ECS ROUTE'
+      : isExploreSavedRoute
+        ? 'EXPLORE'
+        : isCustom
+          ? 'CUSTOM'
+          : route.source_format.toUpperCase(),
     distanceMiles: route.total_distance_miles,
     pointCount: countRoutePoints(route),
     segmentCount: route.segment_count,

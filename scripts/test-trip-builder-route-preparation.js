@@ -40,11 +40,13 @@ const {
   TRIP_BUILDER_CANONICAL_ROUTE_SESSION_VERSION,
   beginTripBuilderRoutePreparation,
   cancelTripBuilderRoutePreparation,
+  completeTripBuilderRoutePreparationFromPracticalEntry,
   completeTripBuilderRoutePreparation,
   continueTripBuilderRoutePreparation,
   createTripBuilderRoutePreparationState,
   getTripBuilderNavigationHandoffUnavailableReason,
   restoreTripBuilderRoutePreparation,
+  resolvePracticalTripBuilderTrailheadSelection,
   selectTripBuilderPreparationTrailhead,
   tripBuilderRoutePreparationToAsyncState,
   tripBuilderRouteFromImport,
@@ -160,6 +162,21 @@ function lineCoordinates(route) {
     awaiting.detailRoute.routeMetadata.tripBuilderSummaryTrailheadCandidate,
     { lat: 38.5002, lng: -109.6002 },
   );
+  assert.deepStrictEqual(
+    resolvePracticalTripBuilderTrailheadSelection(awaiting),
+    {
+      trailheadId: 'summary_trailhead',
+      reason: 'suggested_provider_trailhead',
+      requiresManualSelection: false,
+    },
+    'Explicit suggested provider trailhead evidence should resolve without an endpoint prompt.',
+  );
+  const practicalProviderReady = completeTripBuilderRoutePreparationFromPracticalEntry(
+    awaiting,
+    { now: 2500 },
+  );
+  assert.strictEqual(practicalProviderReady.status, 'ready');
+  assert.strictEqual(practicalProviderReady.selectedTrailheadId, 'summary_trailhead');
   const building = selectTripBuilderPreparationTrailhead(awaiting, suggestedTrailhead.id);
   assert.strictEqual(building.status, 'building');
   const ready = completeTripBuilderRoutePreparation(building, 3000);
@@ -561,6 +578,70 @@ function lineCoordinates(route) {
     { now: 6300 },
   );
   assert.strictEqual(importedAwaiting.status, 'awaiting_trailhead_selection');
+  assert.deepStrictEqual(
+    resolvePracticalTripBuilderTrailheadSelection(importedAwaiting),
+    {
+      trailheadId: 'route_start',
+      reason: 'imported_route_start_default',
+      requiresManualSelection: false,
+    },
+    'An imported route without a trip origin should preserve source order and use route_start.',
+  );
+  const practicalImportedReady = completeTripBuilderRoutePreparationFromPracticalEntry(
+    importedAwaiting,
+    { now: 6350 },
+  );
+  assert.strictEqual(practicalImportedReady.status, 'ready');
+  assert.strictEqual(practicalImportedReady.selectedTrailheadId, 'route_start');
+  assert.deepStrictEqual(
+    lineCoordinates(practicalImportedReady.canonicalRoute)[0],
+    lineCoordinates(importedRoute)[0],
+    'The imported/no-origin default must not reverse valid source geometry.',
+  );
+  const importedRouteStart = importedAwaiting.trailheadOptions.find((option) => option.id === 'route_start');
+  const importedRouteEndForOrigin = importedAwaiting.trailheadOptions.find((option) => option.id === 'route_end');
+  assert.ok(importedRouteStart && importedRouteEndForOrigin);
+  const nearestEndSelection = resolvePracticalTripBuilderTrailheadSelection(
+    importedAwaiting,
+    {
+      lat: importedRouteEndForOrigin.coordinate.lat + 0.0001,
+      lng: importedRouteEndForOrigin.coordinate.lng + 0.0001,
+    },
+  );
+  assert.strictEqual(nearestEndSelection.trailheadId, 'route_end');
+  assert.strictEqual(nearestEndSelection.reason, 'nearest_endpoint_to_origin');
+  const nearestEndReady = completeTripBuilderRoutePreparationFromPracticalEntry(
+    importedAwaiting,
+    {
+      origin: {
+        lat: importedRouteEndForOrigin.coordinate.lat + 0.0001,
+        lng: importedRouteEndForOrigin.coordinate.lng + 0.0001,
+      },
+      now: 6375,
+    },
+  );
+  assert.strictEqual(nearestEndReady.status, 'ready');
+  assert.deepStrictEqual(
+    lineCoordinates(nearestEndReady.canonicalRoute)[0].slice(0, 2),
+    [importedRouteEndForOrigin.coordinate.lng, importedRouteEndForOrigin.coordinate.lat],
+    'The endpoint nearest the supplied trip origin should orient the canonical route.',
+  );
+  const midpointOrigin = {
+    lat: (importedRouteStart.coordinate.lat + importedRouteEndForOrigin.coordinate.lat) / 2,
+    lng: (importedRouteStart.coordinate.lng + importedRouteEndForOrigin.coordinate.lng) / 2,
+  };
+  const ambiguousSelection = resolvePracticalTripBuilderTrailheadSelection(
+    importedAwaiting,
+    midpointOrigin,
+  );
+  assert.strictEqual(ambiguousSelection.trailheadId, 'route_start');
+  assert.strictEqual(ambiguousSelection.reason, 'imported_route_start_default');
+  assert.strictEqual(ambiguousSelection.requiresManualSelection, false);
+  assert.strictEqual(
+    completeTripBuilderRoutePreparationFromPracticalEntry(importedAwaiting, { origin: midpointOrigin }).status,
+    'ready',
+    'An equidistant or looped GPX should preserve its authored start instead of requiring an endpoint-reference prompt.',
+  );
   const importedBuilding = selectTripBuilderPreparationTrailhead(
     importedAwaiting,
     importedAwaiting.trailheadOptions[0].id,
