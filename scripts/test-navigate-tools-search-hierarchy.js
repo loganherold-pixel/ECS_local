@@ -9,6 +9,8 @@ const toolSurfacePath = path.join(process.cwd(), 'components/navigate/NavigateTo
 const toolSurfaceSource = fs.existsSync(toolSurfacePath)
   ? fs.readFileSync(toolSurfacePath, 'utf8').replace(/\r\n/g, '\n')
   : '';
+const offlineCacheModalPath = path.join(process.cwd(), 'components/navigate/OfflineCacheModal.tsx');
+const offlineCacheModalSource = fs.readFileSync(offlineCacheModalPath, 'utf8').replace(/\r\n/g, '\n');
 
 function assert(condition, message) {
   if (!condition) {
@@ -32,6 +34,28 @@ assert(savedRoutesPopupStart >= 0 && savedRoutesPopupEnd > savedRoutesPopupStart
 const savedRoutesPopupSource = source.slice(savedRoutesPopupStart, savedRoutesPopupEnd);
 const recommendRoutePopupStart = source.indexOf("renderMapPopup(\n    recommendRouteModalVisible");
 const recommendRoutePopupEnd = source.indexOf("renderMapPopup(\n  pinDrawerVisible", recommendRoutePopupStart);
+const offlineCacheVisibleIndex = source.indexOf('offlineCacheModalVisible,');
+const offlineCachePopupStart = source.lastIndexOf('renderMapPopup(', offlineCacheVisibleIndex);
+const storageDashboardVisibleIndex = source.indexOf('storageDashboardVisible,', offlineCacheVisibleIndex);
+const offlineCachePopupEnd = source.lastIndexOf('renderMapPopup(', storageDashboardVisibleIndex);
+assert(
+  offlineCacheVisibleIndex >= 0 &&
+    offlineCachePopupStart >= 0 &&
+    storageDashboardVisibleIndex > offlineCacheVisibleIndex &&
+    offlineCachePopupEnd > offlineCachePopupStart,
+  'Navigate should mount Offline Cache as a distinct Tools child popup before Storage.',
+);
+const offlineCachePopupSource = source.slice(offlineCachePopupStart, offlineCachePopupEnd);
+const offlineCacheEmbeddedStart = offlineCacheModalSource.indexOf('if (embedded) {');
+const offlineCacheEmbeddedEnd = offlineCacheModalSource.indexOf('\n  const content =', offlineCacheEmbeddedStart);
+assert(
+  offlineCacheEmbeddedStart >= 0 && offlineCacheEmbeddedEnd > offlineCacheEmbeddedStart,
+  'Offline Cache should expose a bounded embedded presentation for the mounted Navigate popup.',
+);
+const offlineCacheEmbeddedSource = offlineCacheModalSource.slice(
+  offlineCacheEmbeddedStart,
+  offlineCacheEmbeddedEnd,
+);
 
 assert(
   source.includes('const idleDestinationSearchVisible =') &&
@@ -170,6 +194,32 @@ assert(
   'Main Tools popup should be scroll-owned so lower Community Contributions actions remain reachable on mobile.',
 );
 
+const offlineCacheOuterScrollCount = (
+  offlineCachePopupSource.match(/<ScrollView\b/g) ?? []
+).length;
+assert(
+  offlineCacheOuterScrollCount === 1 &&
+    offlineCachePopupSource.includes('style={styles.mapPopupScroll}') &&
+    offlineCachePopupSource.includes('contentContainerStyle={styles.mapPopupScrollContent}'),
+  `Mounted Offline Cache should have exactly one outer ScrollView using the shared popup layout; found ${offlineCacheOuterScrollCount}.`,
+);
+
+assert(
+  !offlineCachePopupSource.includes('<NavigateToolHero') &&
+    !offlineCachePopupSource.includes('styles.mapPopupStaticContent'),
+  'Mounted Offline Cache should not duplicate its embedded hero or nest fixed-height static-content wrappers.',
+);
+
+assert(
+  offlineCacheEmbeddedSource.includes('renderDownloadedSyncsSection(true, false)') &&
+    offlineCacheModalSource.includes('scrollEnabled={scrollEnabled}') &&
+    offlineCacheModalSource.includes('nestedScrollEnabled={scrollEnabled}') &&
+    offlineCacheModalSource.includes(
+      'compact && scrollEnabled && downloadedSyncCards.length > 1 && styles.downloadedSyncsListScrollable',
+    ),
+  'Embedded Downloaded Syncs should disable its internal scroll/max-height cap and grow naturally inside the parent popup ScrollView.',
+);
+
 assert(
   toolsPopupSource.includes("placement: 'center'") &&
     toolsPopupSource.includes("fullBody: false") &&
@@ -213,9 +263,11 @@ assert(
   source.includes('const refreshSavedRouteAssets = useCallback(() => {') &&
     source.includes('setSavedRoutesRefreshKey((key) => key + 1);') &&
     source.includes('const unsubscribeRoutes = routeStore.subscribe(refreshSavedRouteAssets);') &&
+    source.includes('const unsubscribeRuns = runStore.subscribe(loadRuns);') &&
     source.includes('refreshSavedRouteAssets();') &&
-    source.includes('[refreshSavedRouteAssets]'),
-  'Route Command Center preview counts should subscribe to routeStore changes so imported/custom routes are counted before opening the center.',
+    source.includes('[refreshSavedRouteAssets]') &&
+    toolsPopupSource.includes('subtitle={formatSavedRouteAssetCountSummary(savedRouteAssetCounts)}'),
+  'Route Command Center preview should react to route/run changes and format the same complete inventory shown by the detail popup.',
 );
 
 const mapPresentationIndex = requireIndex(toolsPopupSource, 'MAP PRESENTATION', 'Tools should put the map presentation selector first.');

@@ -742,7 +742,7 @@ export default function OfflineCacheModal({
               ? `Opens road preview to ${route.routeIntent.destination.label}`
               : route.runDetail?.buildSnapshot?.vehicle_name
                 ? `${route.runDetail.buildSnapshot.vehicle_name} guidance`
-                : 'Route guidance ready',
+                : 'Route detail cached',
           cachedLabel: route.remoteCache?.enabled
             ? formatRemoteCacheLastVerified(route.remoteCache.lastUpdated)
             : formatAge(route.cachedAt),
@@ -776,7 +776,7 @@ export default function OfflineCacheModal({
     });
   }, [offlineRoutes, sortedRegions]);
 
-  const renderDownloadedSyncsSection = useCallback((compact = false) => (
+  const renderDownloadedSyncsSection = useCallback((compact = false, scrollEnabled = true) => (
     <View style={[styles.downloadedSyncsSection, compact && styles.downloadedSyncsSectionCompact]}>
       <View style={styles.downloadedSyncsHeader}>
         <View>
@@ -802,11 +802,12 @@ export default function OfflineCacheModal({
         <ScrollView
           style={[
             styles.downloadedSyncsList,
-            compact && downloadedSyncCards.length > 1 && styles.downloadedSyncsListScrollable,
+            compact && scrollEnabled && downloadedSyncCards.length > 1 && styles.downloadedSyncsListScrollable,
           ]}
           contentContainerStyle={styles.downloadedSyncsListContent}
-          nestedScrollEnabled
-          showsVerticalScrollIndicator={downloadedSyncCards.length > 1}
+          scrollEnabled={scrollEnabled}
+          nestedScrollEnabled={scrollEnabled}
+          showsVerticalScrollIndicator={scrollEnabled && downloadedSyncCards.length > 1}
         >
           {downloadedSyncCards.map((item) => {
             const accentColor = item.tone === 'route' ? TACTICAL.amber : '#66BB6A';
@@ -925,7 +926,7 @@ export default function OfflineCacheModal({
       <View style={styles.embeddedShell}>
         <View style={styles.embeddedHero}>
           <View style={styles.embeddedHeroCopy}>
-            <Text style={styles.embeddedEyebrow}>OFFLINE MAP READY</Text>
+            <Text style={styles.embeddedEyebrow}>OFFLINE MAP STATUS</Text>
             <Text style={styles.embeddedTitle}>
               {mapBounds ? 'Sync the current map view for offline use.' : 'Choose a map area to prepare offline.'}
             </Text>
@@ -1054,7 +1055,7 @@ export default function OfflineCacheModal({
           </Text>
         </TouchableOpacity>
 
-        {renderDownloadedSyncsSection(true)}
+        {renderDownloadedSyncsSection(true, false)}
       </View>
     );
   }
@@ -2248,16 +2249,18 @@ export default function OfflineCacheModal({
 
 const styles = StyleSheet.create({
   embeddedShell: {
-    gap: 12,
-    paddingTop: 6,
+    width: '100%',
+    maxWidth: 720,
+    alignSelf: 'center',
+    gap: 10,
   },
   embeddedHero: {
     borderRadius: 16,
     borderWidth: 1,
     borderColor: 'rgba(196,138,44,0.24)',
     backgroundColor: 'rgba(10,14,18,0.94)',
-    padding: 16,
-    gap: 12,
+    padding: 14,
+    gap: 10,
   },
   embeddedHeroCopy: {
     gap: 6,
@@ -2316,7 +2319,7 @@ const styles = StyleSheet.create({
   },
   embeddedSummaryCard: {
     flex: 1,
-    minHeight: 78,
+    minHeight: 64,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: 'rgba(196,138,44,0.16)',

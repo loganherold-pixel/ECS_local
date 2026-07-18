@@ -16,7 +16,14 @@
  */
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import React, {
+  useState,
+  useCallback,
+  useMemo,
+  useEffect,
+  useRef,
+  useSyncExternalStore,
+} from 'react';
 import {
   View,
   Text,
@@ -79,6 +86,7 @@ import { routeStore, waitForRouteStoreHydration, type ImportedRoute } from '../.
 import {
   calculateSavedRouteAssetCounts,
   filterSavedRouteAssets,
+  formatSavedRouteAssetCountSummary,
   getSavedRouteAssetEmptyState,
   getSavedRouteAssets,
   type SavedRouteAsset,
@@ -836,6 +844,7 @@ import {
   missionCommandProposalHandoffAdapter,
 } from '../../lib/dispatchMissionCommandProposal';
 import { createNavigateMissionCommandProposal } from '../../lib/dispatchMissionCommandSourceAdapters';
+import { resolveNavigateRouteCoordinationControl } from '../../lib/navigation/navigateRouteCoordination';
 import {
   isDispatchFeatureEnabled,
   resolveDispatchRolloutConfig,
@@ -3605,8 +3614,22 @@ const SAVED_ROUTE_FILTER_OPTIONS: { key: SavedRouteAssetFilter; label: string }[
   { key: 'imported', label: 'Imported' },
   { key: 'custom', label: 'Custom' },
   { key: 'stitched', label: 'Stitched' },
+  { key: 'recorded', label: 'Recorded' },
   { key: 'bookmarked', label: 'Saved' },
 ];
+
+function getNavigateRouteCoordinationSessionKey(): string {
+  const snapshot = navigateRouteSessionStore.getSnapshot();
+  return [
+    snapshot.routeId ?? 'none',
+    snapshot.lifecycle,
+    snapshot.routePoints.length > 1 ? 'geometry_ready' : 'geometry_incomplete',
+  ].join(':');
+}
+
+function subscribeNavigateRouteCoordination(listener: () => void): () => void {
+  return navigateRouteSessionStore.subscribe(() => listener());
+}
 
 function NavigateScreenInner() {
   recordECSPerformanceRender('navigate_map_first_meaningful_render', 'navigate_screen');
@@ -3614,7 +3637,7 @@ function NavigateScreenInner() {
   const { showToast, user, operatorInfo } = useApp();
   const { feedSpeed, dismissAutoDriving } = useTheme();
   const router = useRouter();
-  const { returnTo: returnSingleFlight } = useECSNavigation();
+  const { push: pushSingleFlight, returnTo: returnSingleFlight } = useECSNavigation();
 const adaptive = useAdaptiveLayout();
 const insets = useSafeAreaInsets();
 const expandedTopOffset = insets.top + 10;
@@ -3672,7 +3695,9 @@ const [savedRouteRenameValue, setSavedRouteRenameValue] = useState('');
 const [preflightRouteAssetId, setPreflightRouteAssetId] = useState<string | null>(null);
 const [preflightRunId, setPreflightRunId] = useState<string | null>(null);
 const [preflightPayload, setPreflightPayload] = useState<NavigationHandoffPayload | null>(null);
-const [preflightLaunchConfirmVisible, setPreflightLaunchConfirmVisible] = useState(false);
+  const [preflightLaunchConfirmVisible, setPreflightLaunchConfirmVisible] = useState(false);
+  const routeCoordinationInFlightRef = useRef(false);
+  const [routeCoordinationInFlight, setRouteCoordinationInFlight] = useState(false);
 const [expeditionSessionRevision, setExpeditionSessionRevision] = useState(0);
 const convoyTrackingSnapshot = useConvoyTrackingStore();
 const [activeConvoyContext, setActiveConvoyContext] = useState<ActiveConvoyContext | null>(null);
@@ -5129,6 +5154,32 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       mounted = false;
     };
   }, []);
+  const routeCoordinationSessionKey = useSyncExternalStore(
+    subscribeNavigateRouteCoordination,
+    getNavigateRouteCoordinationSessionKey,
+    () => 'none:inactive:geometry_incomplete',
+  );
+  const routeCoordinationSession = useMemo(() => {
+    void routeCoordinationSessionKey;
+    return navigateRouteSessionStore.getSnapshot();
+  }, [routeCoordinationSessionKey]);
+  const routeCoordinationControl = useMemo(
+    () => resolveNavigateRouteCoordinationControl({
+      missionCommandEnabled: MISSION_COMMAND_ENABLED,
+      hydrationStatus: navigateRouteHydrationSettled
+        ? navigateRouteSessionStore.getHydrationState().status
+        : 'loading',
+      routeSession: routeCoordinationSession,
+      inFlight: routeCoordinationInFlight,
+      hasActiveConvoy: !!activeConvoyContext,
+    }),
+    [
+      activeConvoyContext,
+      navigateRouteHydrationSettled,
+      routeCoordinationInFlight,
+      routeCoordinationSession,
+    ],
+  );
 
   const roadNavigation = useRoadNavigation({
     accessToken: mapToken || null,
@@ -18736,81 +18787,104 @@ const handleOpenBuildRoutePlan = useCallback(() => {
 }, [router]);
 
 const handleOpenRouteMissionCommand = useCallback(async () => {
-  const route = navigateRouteSessionStore.getSnapshot();
-  if (!route.routeId || route.lifecycle === 'inactive') {
-    showToast('STAGE OR START A ROUTE BEFORE OPENING ROUTE COORDINATION');
+  if (routeCoordinationInFlightRef.current || !routeCoordinationControl.enabled) {
+    if (!routeCoordinationInFlightRef.current && routeCoordinationControl.disabledReason) {
+      showToast(routeCoordinationControl.disabledReason.toUpperCase());
+    }
     return;
   }
-  const sourceTruth = {
-    id: `navigate-route-session:${route.routeId}`,
-    origin: 'cached' as const,
-    role: 'primary' as const,
-    policyKey: 'default' as const,
-    authority: 'ECS Navigate route session',
-    authorityKind: 'ecs' as const,
-    provider: route.source,
-    observedAt: route.updatedAt,
-    fetchedAt: null,
-    expiresAt: null,
-    confidence: route.routePoints.length > 1 ? 'medium' as const : 'low' as const,
-    coverage: route.routePoints.length > 1 ? 'complete' as const : 'partial' as const,
-    availability: route.routePoints.length > 1 ? 'usable' as const : 'degraded' as const,
-    conflictState: 'none' as const,
-    conflict: false,
-    warningCodes: route.routePoints.length > 1 ? [] : ['navigate_route_geometry_partial'],
-  };
-  const proposalResult = createNavigateMissionCommandProposal({
-    sourceEntityId: route.routeId,
-    expeditionId: activeExpeditionId,
-    operation: 'route_command',
-    title: `Coordinate route: ${route.routeTitle ?? 'Active route'}`,
-    summary: route.instruction ?? route.statusLabel,
-    sourceTruth: [sourceTruth],
-    linkedContext: {
-      id: route.routeId,
-      type: 'route',
-      title: route.routeTitle ?? 'Active route',
-      subtitle: `${route.lifecycle} / ${route.statusLabel}`,
-      sourceTruth,
-      sourceTruthPolicyKey: 'default',
-      observedAt: route.updatedAt ?? undefined,
-      metadata: {
-        routeSource: route.source,
-        routeLifecycle: route.lifecycle,
-        routeStatusKind: route.routeStatusKind,
+
+  routeCoordinationInFlightRef.current = true;
+  setRouteCoordinationInFlight(true);
+  try {
+    const route = navigateRouteSessionStore.getSnapshot();
+    if (!route.routeId || route.lifecycle === 'inactive' || route.routePoints.length < 2) {
+      showToast('STAGE OR START A ROUTE WITH VALID GEOMETRY FIRST');
+      return;
+    }
+    const sourceTruth = {
+      id: `navigate-route-session:${route.routeId}`,
+      origin: 'cached' as const,
+      role: 'primary' as const,
+      policyKey: 'default' as const,
+      authority: 'ECS Navigate route session',
+      authorityKind: 'ecs' as const,
+      provider: route.source,
+      observedAt: route.updatedAt,
+      fetchedAt: null,
+      expiresAt: null,
+      confidence: route.routePoints.length > 1 ? 'medium' as const : 'low' as const,
+      coverage: route.routePoints.length > 1 ? 'complete' as const : 'partial' as const,
+      availability: route.routePoints.length > 1 ? 'usable' as const : 'degraded' as const,
+      conflictState: 'none' as const,
+      conflict: false,
+      warningCodes: route.routePoints.length > 1 ? [] : ['navigate_route_geometry_partial'],
+    };
+    const proposalResult = createNavigateMissionCommandProposal({
+      sourceEntityId: route.routeId,
+      expeditionId: activeExpeditionId,
+      operation: 'route_command',
+      title: `Coordinate route: ${route.routeTitle ?? 'Active route'}`,
+      summary: route.instruction ?? route.statusLabel,
+      sourceTruth: [sourceTruth],
+      linkedContext: {
+        id: route.routeId,
+        type: 'route',
+        title: route.routeTitle ?? 'Active route',
+        subtitle: `${route.lifecycle} / ${route.statusLabel}`,
+        sourceTruth,
+        sourceTruthPolicyKey: 'default',
+        observedAt: route.updatedAt ?? undefined,
+        metadata: {
+          routeSource: route.source,
+          routeLifecycle: route.lifecycle,
+          routeStatusKind: route.routeStatusKind,
+        },
       },
-    },
-    action: 'create_command',
-    command: {
-      type: 'route',
-      priority: route.isOffRoute ? 'high' : 'normal',
-      title: `Review ${route.routeTitle ?? 'active route'}`,
-      instructions: route.isOffRoute
-        ? 'Review the current off-route state and agree on the next route action. Do not replace active guidance without confirmation.'
-        : 'Review the active route context and coordinate the next explicit team action.',
-    },
-    facts: [
-      { key: 'route_lifecycle', label: 'Guidance state', value: route.lifecycle },
-      { key: 'off_route', label: 'Off route', value: route.isOffRoute ? 'Yes' : 'No' },
-    ],
-    operatorRequested: true,
-    offline: navigateConnectivity.status === 'offline',
-    returnRoute: '/navigate',
-  });
-  if (!proposalResult.ok) {
-    showToast(proposalResult.reason.toUpperCase());
-    return;
+      action: 'create_command',
+      command: {
+        type: 'route',
+        priority: route.isOffRoute ? 'high' : 'normal',
+        title: `Review ${route.routeTitle ?? 'active route'}`,
+        instructions: route.isOffRoute
+          ? 'Review the current off-route state and agree on the next route action. Do not replace active guidance without confirmation.'
+          : 'Review the active route context and coordinate the next explicit team action.',
+      },
+      facts: [
+        { key: 'route_lifecycle', label: 'Guidance state', value: route.lifecycle },
+        { key: 'off_route', label: 'Off route', value: route.isOffRoute ? 'Yes' : 'No' },
+      ],
+      operatorRequested: true,
+      offline: navigateConnectivity.status === 'offline',
+      returnRoute: '/navigate',
+    });
+    if (!proposalResult.ok) {
+      showToast(proposalResult.reason.toUpperCase());
+      return;
+    }
+    const stageResult = await missionCommandProposalHandoffAdapter.stage(proposalResult.proposal);
+    if (stageResult.status === 'invalid') {
+      showToast(stageResult.reason.toUpperCase());
+      return;
+    }
+    hapticCommand();
+    setToolsMenuOpen(false);
+    removeNavigateLayer('tools');
+    pushSingleFlight('/alert');
+  } catch {
+    showToast('ROUTE COORDINATION COULD NOT OPEN');
+  } finally {
+    routeCoordinationInFlightRef.current = false;
+    if (mountedRef.current) setRouteCoordinationInFlight(false);
   }
-  const stageResult = await missionCommandProposalHandoffAdapter.stage(proposalResult.proposal);
-  if (stageResult.status === 'invalid') {
-    showToast(stageResult.reason.toUpperCase());
-    return;
-  }
-  hapticCommand();
-  setToolsMenuOpen(false);
-  removeNavigateLayer('tools');
-  router.push('/alert' as any);
-}, [activeExpeditionId, navigateConnectivity.status, removeNavigateLayer, router, showToast]);
+}, [
+  activeExpeditionId,
+  navigateConnectivity.status,
+  pushSingleFlight,
+  removeNavigateLayer,
+  routeCoordinationControl,
+  showToast,
+]);
 
 const getActiveTrailPackSubmissionRoute = useCallback((
   sourceEntryPoint: ECSTrailPackSubmissionRouteInput['sourceEntryPoint'],
@@ -25928,7 +26002,7 @@ const stableMapSurface = useMemo(() => {
         >
           <NavigateToolActionCard
             title="Route Command Center"
-            subtitle={`${savedRouteAssetCounts.imported} imported - ${savedRouteAssetCounts.custom} custom - ${savedRouteAssetCounts.stitched} stitched - ${savedRouteAssetCounts.bookmarked} saved`}
+            subtitle={formatSavedRouteAssetCountSummary(savedRouteAssetCounts)}
             icon="albums-outline"
             badge="OPEN"
             compact
@@ -25976,12 +26050,15 @@ const stableMapSurface = useMemo(() => {
             {MISSION_COMMAND_ENABLED ? (
               <NavigateToolActionCard
                 title="ROUTE COORDINATION"
+                subtitle={routeCoordinationControl.subtitle}
                 icon="radio-outline"
-                badge="MISSION"
+                badge={routeCoordinationControl.busy ? 'OPENING' : 'MISSION'}
                 compact
                 hideChevron
                 onPress={() => void handleOpenRouteMissionCommand()}
+                disabled={!routeCoordinationControl.enabled}
                 accessibilityLabel="Coordinate the active route in Mission Command"
+                accessibilityHint={routeCoordinationControl.subtitle}
                 style={styles.toolsDenseActionCard}
               />
             ) : null}
@@ -26569,12 +26646,14 @@ const stableMapSurface = useMemo(() => {
           eyebrow="ROUTE COMMAND CENTER"
           title="All route assets in one place"
           icon="albums-outline"
-          body="Review imported, custom-built, stitched, and bookmarked routes without hunting through separate route silos."
+          body="Review imported, custom-built, stitched, recorded, and bookmarked routes without hunting through separate route silos."
           badges={[
             `${savedRouteAssetCounts.all} ASSETS`,
             `${savedRouteAssetCounts.imported} IMPORTED`,
             `${savedRouteAssetCounts.custom} CUSTOM`,
             `${savedRouteAssetCounts.stitched} STITCHED`,
+            `${savedRouteAssetCounts.recorded} RECORDED`,
+            `${savedRouteAssetCounts.bookmarked} BOOKMARKED`,
           ]}
         />
 
@@ -27716,26 +27795,22 @@ const stableMapSurface = useMemo(() => {
   'OFFLINE CACHE',
   'cloud-download-outline',
   () => closeTopPopup('offlineCache'),
-  <View style={[styles.mapPopupStaticContent, styles.mapPopupSimpleStack]}>
-    <NavigateToolHero
-      eyebrow="MAP AND OFFLINE"
-      title="Prepare map cache coverage"
-      icon="cloud-download-outline"
-      body="Review current bounds, cache readiness, and downloaded map sync state before leaving live coverage."
-      badges={['MAP BOUNDS', 'CACHE', 'FIELD READY']}
+  <ScrollView
+    style={styles.mapPopupScroll}
+    contentContainerStyle={styles.mapPopupScrollContent}
+    showsVerticalScrollIndicator={false}
+    keyboardShouldPersistTaps="handled"
+  >
+    <OfflineCacheModal
+      embedded
+      mapBounds={mapBounds}
+      mapZoom={mapZoom}
+      mapStyle={mapStyle}
+      showToast={showToast}
+      onRequestMapBounds={handleRequestMapBounds}
+      onOpenDownloadedSync={handleOpenDownloadedSync}
     />
-    <View style={styles.mapPopupStaticContent}>
-      <OfflineCacheModal
-        embedded
-        mapBounds={mapBounds}
-        mapZoom={mapZoom}
-        mapStyle={mapStyle}
-        showToast={showToast}
-        onRequestMapBounds={handleRequestMapBounds}
-        onOpenDownloadedSync={handleOpenDownloadedSync}
-      />
-    </View>
-  </View>,
+  </ScrollView>,
   MAP_POPUP_WIDTH,
   { fullBody: true, showBackdrop: false }
 )}

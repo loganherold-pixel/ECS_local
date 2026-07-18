@@ -15,7 +15,13 @@ export type SavedRouteAssetKind =
   | 'recorded'
   | 'other';
 
-export type SavedRouteAssetFilter = 'all' | 'imported' | 'custom' | 'stitched' | 'bookmarked';
+export type SavedRouteAssetFilter =
+  | 'all'
+  | 'imported'
+  | 'custom'
+  | 'stitched'
+  | 'bookmarked'
+  | 'recorded';
 
 export type SavedRouteAssetAction = 'plan' | 'navigate' | 'stitch';
 
@@ -56,6 +62,8 @@ export interface SavedRouteAssetCounts {
   custom: number;
   stitched: number;
   bookmarked: number;
+  recorded: number;
+  other: number;
 }
 
 function formatSourceLabel(source: string | null | undefined): string {
@@ -298,14 +306,34 @@ export function calculateSavedRouteAssetCounts(assets: SavedRouteAsset[]): Saved
   return assets.reduce<SavedRouteAssetCounts>(
     (counts, asset) => {
       counts.all += 1;
-      if (asset.kind === 'imported') counts.imported += 1;
-      if (asset.kind === 'custom') counts.custom += 1;
-      if (asset.kind === 'stitched') counts.stitched += 1;
-      if (asset.kind === 'bookmarked') counts.bookmarked += 1;
+      counts[asset.kind] += 1;
       return counts;
     },
-    { all: 0, imported: 0, custom: 0, stitched: 0, bookmarked: 0 },
+    {
+      all: 0,
+      imported: 0,
+      custom: 0,
+      stitched: 0,
+      bookmarked: 0,
+      recorded: 0,
+      other: 0,
+    },
   );
+}
+
+export function formatSavedRouteAssetCountSummary(counts: SavedRouteAssetCounts): string {
+  const categories: Array<[number, string]> = [
+    [counts.imported, 'imported'],
+    [counts.custom, 'custom'],
+    [counts.stitched, 'stitched'],
+    [counts.bookmarked, 'bookmarked'],
+    [counts.recorded, 'recorded'],
+    [counts.other, 'other'],
+  ];
+  const visibleCategories = categories
+    .filter(([count]) => count > 0)
+    .map(([count, label]) => `${count} ${label}`);
+  return [`${counts.all} total`, ...visibleCategories].join(' · ');
 }
 
 function matchesFilter(asset: SavedRouteAsset, filter: SavedRouteAssetFilter): boolean {
@@ -353,6 +381,11 @@ export function getSavedRouteAssetEmptyState(filter: SavedRouteAssetFilter): {
       return {
         title: 'No saved trails',
         message: 'Bookmark trails from Explore to bring them into this command center.',
+      };
+    case 'recorded':
+      return {
+        title: 'No recorded routes',
+        message: 'Recorded trail runs will appear here after they contain a usable route line.',
       };
     default:
       return {

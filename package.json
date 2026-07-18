@@ -392,7 +392,7 @@
     "test:navigate-route-confidence": "node ./scripts/test-navigate-route-confidence.js",
     "test:navigate-readiness": "node ./scripts/test-navigate-readiness-integration.js",
     "test:navigate-compass-recenter-hint": "node ./scripts/test-navigate-compass-recenter-hint.js",
-    "test:navigate-tools-search-hierarchy": "node ./scripts/test-navigate-tools-search-hierarchy.js",
+    "test:navigate-tools-search-hierarchy": "node ./scripts/test-navigate-tools-search-hierarchy.js && node ./scripts/test-saved-route-assets.js && node ./scripts/test-navigate-route-coordination-control.js",
     "test:navigate-tools-search-route-flow": "node ./scripts/test-navigate-tools-search-route-flow.js",
     "test:navigate-explore-routes-overlay": "node ./scripts/test-navigate-explore-routes-overlay.js",
     "test:navigate-route-geometry-viewport": "node ./scripts/test-navigate-route-geometry-viewport-integration.js",

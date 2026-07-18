@@ -45,6 +45,7 @@ const { runStore } = require(path.join(root, 'lib', 'runStore.ts'));
 const { routeStore } = require(path.join(root, 'lib', 'routeStore.ts'));
 const {
   calculateSavedRouteAssetCounts,
+  formatSavedRouteAssetCountSummary,
   getSavedRouteAssets,
 } = require(path.join(root, 'lib', 'savedRouteAssets.ts'));
 
@@ -92,17 +93,68 @@ runStore.createFromParsedImport(
   'Stitched Chain',
 );
 
+runStore.createFromParsedImport(
+  {
+    name: 'Recorded Trail Run',
+    routePoints: [
+      { lat: 38.6, lng: -120.6, ele_m: null, time: null },
+      { lat: 38.7, lng: -120.5, ele_m: null, time: null },
+    ],
+    trackPoints: [],
+    primaryCoords: [],
+    waypoints: [],
+  },
+  undefined,
+  'trail',
+  'Recorded Trail Run',
+);
+
 const assets = getSavedRouteAssets();
 const counts = calculateSavedRouteAssetCounts(assets);
 
-assert.strictEqual(counts.all, 3, 'Saved route assets should include imported runs, custom routes, and stitched runs.');
+assert.strictEqual(counts.all, 4, 'Saved route assets should include imported, custom, stitched, and recorded routes.');
 assert.strictEqual(counts.imported, 1, 'Direct GPX/KML/GeoJSON imported runs should count as imported routes.');
 assert.strictEqual(counts.custom, 1, 'Custom route-store assets should count as custom routes.');
 assert.strictEqual(counts.stitched, 1, 'Stitched run-store assets should count as stitched routes.');
 assert.strictEqual(counts.bookmarked, 0, 'No bookmarked Explore routes were created in this fixture.');
+assert.strictEqual(counts.recorded, 1, 'Standalone trail/recorded runs should have an explicit recorded count.');
+assert.strictEqual(counts.other, 0, 'Known route asset kinds should not fall into the exhaustiveness count.');
 
 const importedRunAsset = assets.find((asset) => asset.title === 'Imported GPX Run');
 assert(importedRunAsset, 'Imported GPX run should appear in saved route assets.');
 assert.strictEqual(importedRunAsset.kind, 'imported', 'Imported GPX run asset should be classified as imported.');
+
+const recordedRunAsset = assets.find((asset) => asset.title === 'Recorded Trail Run');
+assert(recordedRunAsset, 'Recorded trail run should appear in saved route assets.');
+assert.strictEqual(recordedRunAsset.kind, 'recorded', 'Trail run asset should be classified as recorded.');
+
+const assetsWithOther = [
+  ...assets,
+  {
+    ...importedRunAsset,
+    id: 'other:future-route-kind',
+    kind: 'other',
+    title: 'Future Route Kind',
+  },
+];
+const exhaustiveCounts = calculateSavedRouteAssetCounts(assetsWithOther);
+assert.strictEqual(exhaustiveCounts.all, 5, 'The inventory total should include every visible asset.');
+assert.strictEqual(exhaustiveCounts.other, 1, 'Unrecognized/future asset kinds should remain visible in an explicit other count.');
+assert.strictEqual(
+  exhaustiveCounts.all,
+  exhaustiveCounts.imported +
+    exhaustiveCounts.custom +
+    exhaustiveCounts.stitched +
+    exhaustiveCounts.bookmarked +
+    exhaustiveCounts.recorded +
+    exhaustiveCounts.other,
+  'Typed Route Command Center counts should reconcile exactly to the visible inventory total.',
+);
+
+assert.strictEqual(
+  formatSavedRouteAssetCountSummary(exhaustiveCounts),
+  '5 total · 1 imported · 1 custom · 1 stitched · 1 recorded · 1 other',
+  'Compact Route Command Center summary should include every nonzero asset category and omit zero-value noise.',
+);
 
 console.log('Saved route asset count checks passed.');
