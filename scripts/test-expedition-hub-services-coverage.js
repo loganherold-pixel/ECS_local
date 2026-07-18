@@ -741,7 +741,11 @@ async function testReports() {
   assert(report.recapSummary);
   assert.strictEqual(report.mapSnapshotUri, null);
   assert(report.localUri, 'PDF/HTML-capable platform should return a local report URI.');
-  assert(writtenFiles.get(Array.from(writtenFiles.keys()).find((uri) => uri.endsWith('.html'))).includes('Map snapshot unavailable for this report.'));
+  assert(report.story && report.story.route.source === 'recorded');
+  const reportHtml = writtenFiles.get(Array.from(writtenFiles.keys()).find((uri) => uri.endsWith('.html')));
+  assert(reportHtml.includes('Route Story'));
+  assert(reportHtml.includes('<svg'), 'Recorded geometry should render as a location-redacted route story.');
+  assert(!reportHtml.includes('35.4') && !reportHtml.includes('-111.4'), 'Shared report should not expose exact route coordinates.');
   assert.strictEqual((await getReportForTrip(trip.id)).id, report.id);
   assert.strictEqual((await shareExpeditionReport(report.id)).ok, true);
   assert.strictEqual(sharedUri, report.localUri);

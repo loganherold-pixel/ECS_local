@@ -142,6 +142,39 @@ export {
 } from './expeditionRecapEngine';
 
 export {
+  buildExpeditionRecapRoutePresentation,
+} from './expeditionRecapRoutePresentation';
+
+export type {
+  ExpeditionRecapElevationExtremum,
+  ExpeditionRecapRoutePresentation,
+  ExpeditionRecapRoutePresentationInput,
+  ExpeditionRecapRouteSource,
+  ExpeditionRecapRouteStoryMoment,
+} from './expeditionRecapRoutePresentation';
+
+export {
+  buildExpeditionReportStory,
+  normalizeExpeditionReportStory,
+} from './expeditionReportStory';
+
+export type {
+  BuildExpeditionReportStoryInput,
+  ExpeditionReportStory,
+  ExpeditionReportStoryCategory,
+  ExpeditionReportStoryCoverage,
+  ExpeditionReportStoryCoverageStatus,
+  ExpeditionReportStoryElevationPoint,
+  ExpeditionReportStoryPlacementBasis,
+  ExpeditionReportStoryRoute,
+  ExpeditionReportStoryRoutePoint,
+  ExpeditionReportStorySection,
+  ExpeditionReportStorySignificance,
+  ExpeditionReportStoryTimelineEvent,
+  ExpeditionReportTrackedEventInput,
+} from './expeditionReportStory';
+
+export {
   cancelActiveTripRecordFromGuidanceEnd,
   createNewActiveTripRecord,
   ensureActiveTripRecordForGuidance,

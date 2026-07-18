@@ -1,4 +1,5 @@
 import type { ECSJourneyLinkage } from '../lifecycle/routeTripExpeditionLifecycle';
+import type { ExpeditionReportStory } from './expeditionReportStory';
 
 export type ExpeditionTripStatus = 'planned' | 'active' | 'completed' | 'cancelled' | 'archived';
 
@@ -385,6 +386,7 @@ export interface ExpeditionReport {
   elevationGainFt: number | null;
   recapHeadline: string | null;
   recapSummary: string | null;
+  story: ExpeditionReportStory | null;
   notableMoments: ExpeditionRecapNotableMoment[];
   badgesEarned: ExpeditionBadge[];
   routeBounds: ExpeditionTripBounds | null;
