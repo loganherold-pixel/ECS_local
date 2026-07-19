@@ -180,7 +180,9 @@ function ExploreTripBuilderWizardRouteCardComponent({
                       {candidate.guidanceReady
                         ? 'GUIDANCE READY'
                         : candidate.tripBuilderEligible
-                          ? 'DETAIL IN TRIP BUILDER'
+                          ? candidate.detailState === 'deferred'
+                            ? 'DETAIL IN TRIP BUILDER'
+                            : 'TRIP BUILDER READY'
                           : 'TRIP BUILDER BLOCKED'}
                     </Text>
                   </View>
@@ -221,7 +223,10 @@ function ExploreTripBuilderWizardRouteCardComponent({
           <>
             <Text style={styles.deferredDetailText}>
               {candidate.tripBuilderEligible
-                ? 'Summary available. Verified route geometry is prepared after you open Trip Builder.'
+                ? candidate.detailState === 'deferred'
+                  ? 'Summary available. Verified route geometry is prepared after you open Trip Builder.'
+                  : candidate.guidanceUnavailableReason ??
+                    'Trip Builder is available, but advanced guidance is not ready for this route.'
                 : candidate.tripBuilderUnavailableReason ?? 'This summary cannot open Trip Builder.'}
             </Text>
             <View style={styles.actionRow}>

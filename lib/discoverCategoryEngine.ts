@@ -23,7 +23,6 @@
 // ============================================================
 
 import {
-  MIN_DISCOVERY_ROUTE_MILES,
   isDiscoverableRoute,
   type ExpeditionOpportunity,
 } from './discoverEngine';
@@ -1061,7 +1060,6 @@ function computeVehicleTrailConfidence(
     vehicleTrailSignals.score * 0.32,
   );
 
-  if (!Number.isFinite(op.distanceMiles) || op.distanceMiles < MIN_DISCOVERY_ROUTE_MILES) confidenceScore -= 18;
   if (compat && compat.score < 40) confidenceScore -= 12;
   if ((op.popularityScore ?? 45) > POPULAR_TRAIL_MIN_POPULARITY) confidenceScore -= 8;
   if (AMBIGUOUS_ARTIFACT_KEYWORDS.some((keyword) => getRouteSearchableText(op).includes(keyword))) {
@@ -1112,11 +1110,8 @@ function isHiddenGemCandidate(
   void compat;
   void seasonStatus;
   void confidence;
-  const tooShort = !Number.isFinite(op.distanceMiles) || op.distanceMiles < MIN_DISCOVERY_ROUTE_MILES;
-
   if (!isRouteWithinRadius(op, radiusMiles)) return false;
   if (isPopularTrail(op)) return false;
-  if (tooShort) return false;
   if (!isVehicleAppropriateRoute(op)) return false;
   if (getExplicitExclusionClassification(op).classification != null) return false;
 
@@ -2224,12 +2219,10 @@ function buildHiddenGemResult(
   const disqualificationReasons: HiddenGemDisqualificationReason[] = [];
   const confidence = computeVehicleTrailConfidence(op, compat);
   const oversizedRoute = (op.distanceMiles ?? 0) > HIDDEN_GEM_MAX_FOOTPRINT_MILES || (op.estimatedDays ?? 1) > HIDDEN_GEM_MAX_DURATION_DAYS;
-  const tooShort = !Number.isFinite(op.distanceMiles) || op.distanceMiles < MIN_DISCOVERY_ROUTE_MILES;
   const lacksLocalDistinction = !isVehicleAppropriateRoute(op);
 
   if (!isRouteWithinRadius(op, radiusMiles)) disqualificationReasons.push('radius_exceeded');
   if (isPopular) disqualificationReasons.push('popular_trail');
-  if (tooShort) disqualificationReasons.push('too_short');
   if (seasonStatus === 'closed') disqualificationReasons.push('seasonal_closure');
   if (weatherStatus === 'blocked') disqualificationReasons.push('weather_risk');
   if (accessStatus === 'restricted') disqualificationReasons.push('access_restricted');
@@ -2273,7 +2266,6 @@ function buildHiddenGemResult(
   const coreDisqualificationReasons = new Set<HiddenGemDisqualificationReason>([
     'radius_exceeded',
     'popular_trail',
-    'too_short',
     'access_restricted',
     'excluded_hiking',
     'excluded_pedestrian',
@@ -2389,7 +2381,7 @@ function isStageEligibleHiddenGemCandidate(
 
   if (candidate.isPopular) return false;
   if (distanceFromUserMiles > radiusMiles) return false;
-  if (blockedReasons.has('radius_exceeded') || blockedReasons.has('popular_trail') || blockedReasons.has('too_short')) {
+  if (blockedReasons.has('radius_exceeded') || blockedReasons.has('popular_trail')) {
     return false;
   }
   if (

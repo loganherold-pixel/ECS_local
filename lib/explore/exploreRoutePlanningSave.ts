@@ -11,6 +11,7 @@ import {
 } from '../runStore';
 import { normalizeNavigationGuidanceGeometry } from '../navigationCatalogGuidanceGeometry';
 import type { RouteSegmentSourceMetadata } from '../map/dispersedCampingSegmentBuild';
+import { classifyExploreRouteAvailability } from './exploreGuidanceReadyInventory';
 import type { ExploreWizardRouteCandidate } from './exploreTripBuilderWizard';
 
 export type SaveExploreRouteForPlanningResult = {
@@ -124,8 +125,21 @@ export async function saveExploreRouteForPlanning(
   candidate: ExploreWizardRouteCandidate,
   options: SaveExploreRouteForPlanningOptions = {},
 ): Promise<SaveExploreRouteForPlanningResult> {
-  if (!candidate.guidanceReady || candidate.unavailableReason) {
-    throw new Error(candidate.unavailableReason ?? 'Explore route is not ready for active guidance.');
+  const availability = classifyExploreRouteAvailability(candidate.route);
+  const requiresPublicEligibility =
+    candidate.sourceKind !== 'saved_built' && candidate.sourceKind !== 'imported_stitched';
+  if (
+    !candidate.tripBuilderEligible ||
+    (requiresPublicEligibility && !availability.tripBuilder.eligible)
+  ) {
+    throw new Error(
+      candidate.tripBuilderUnavailableReason ??
+        availability.tripBuilder.reason ??
+        'Explore route is not eligible for Trip Builder.',
+    );
+  }
+  if (buildRouteCoordinates(candidate).length < 2) {
+    throw new Error('Explore route save requires verified route geometry.');
   }
 
   const favorite = addFavoriteTrail(candidate.route);

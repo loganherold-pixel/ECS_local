@@ -60,6 +60,7 @@ import {
   addUserTrailWaypoint,
   applyTripItineraryEditSession,
   APPROACH_RESUPPLY_POLICY,
+  assessApproachResupplySearchCoverage,
   buildApproachResupplyRouteFingerprint,
   buildApproachResupplyRerankEvidence,
   buildApproachResupplyStopPlan,
@@ -72,11 +73,11 @@ import {
   getTripItinerarySummary,
   getTripConfidenceSummary,
   isUsableRouteContext,
-  inferApproachRemoteEntry,
-  interleaveApproachSearchResults,
+  prioritizeApproachSearchResults,
   loadTripBuilderRouteHandoffAsync,
   saveTripBuilderRouteHandoff,
   loadTripBuilderPlanState,
+  resolveTripBuilderPlanRuntimeState,
   saveTripBuilderPlanState,
   mergeApproachResupplyRouteEvidence,
   mergeApproachResupplySafetyEvidence,
@@ -92,6 +93,7 @@ import {
   routeContextToTripBuilderItineraryContext,
   routeWithRouteContext,
   type ApproachResupplyCandidate,
+  type ApproachResupplyCategoryUsefulness,
   type ApproachResupplyRankedOption,
   type ApproachResupplyRemoteEntry,
   type ApproachResupplyRouteEvidenceState,
@@ -187,7 +189,9 @@ import {
   searchRoadDestinations,
   type RoadNavSearchSuggestion,
 } from '../lib/mapboxRoadNavigation';
-import { isLiveSmartResupplyPoiCandidate } from '../lib/tripBuilder/liveSmartResupplyPoiFilter';
+import {
+  classifyLiveSmartResupplyPoiCandidate,
+} from '../lib/tripBuilder/liveSmartResupplyPoiFilter';
 import {
   providerResupplyPlaceIdentity,
   retainEquivalentResupplyOptions,
@@ -203,19 +207,7 @@ import {
 } from '../lib/routeContext';
 import { fsReadFileFromPickerUri } from '../lib/fsCompat';
 
-let lastTripBuilderPlanState: {
-  selectedRouteId: string | null;
-  plan: TripPlan | null;
-  visible: boolean;
-  itinerarySaved: boolean;
-  itineraryEditSession: TripItineraryEditSession | null;
-} = {
-  selectedRouteId: null,
-  plan: null,
-  visible: false,
-  itinerarySaved: false,
-  itineraryEditSession: null,
-};
+let lastTripBuilderPlanState = resolveTripBuilderPlanRuntimeState(null);
 
 function updateLastTripBuilderPlanState(next: typeof lastTripBuilderPlanState): void {
   lastTripBuilderPlanState = next;
@@ -398,6 +390,7 @@ type SmartResupplyPoi = {
   remoteEntryEstimated: boolean;
   remoteEntryLabel: string;
   categoryCoverage: ('fuel' | 'food_supplies')[];
+  categoryUsefulness: ApproachResupplyCategoryUsefulness;
   operatingStatus: 'open' | 'closed' | 'temporarily_closed' | 'unknown';
   providerConfidence: TripBuilderConfidence;
   coordinateConfidence: TripBuilderConfidence | null;
@@ -437,6 +430,8 @@ type TripBuilderApproachRouteState = {
   status: 'idle' | 'loading' | 'ready' | 'unavailable';
   fingerprint: string | null;
   points: TripMapCoordinate[];
+  distanceM?: number | null;
+  durationS?: number | null;
 };
 type SmartResupplySearchBounds = {
   west: number;
@@ -508,19 +503,20 @@ const BAILOUT_PLAN_OPTIONS: { value: BailoutPlanPreference; label: string }[] = 
 ];
 const TRIP_BUILDER_PICKER_MAP_HEIGHT = 300;
 const TRIP_BUILDER_PICKER_ROUTE_PREVIEW_MAX_POINTS = 96;
-const SMART_RESUPPLY_FUEL_QUERY = 'gas station';
-const SMART_RESUPPLY_SUPPLY_QUERY = 'market';
-const SMART_RESUPPLY_OPTION_LIMIT = 5;
+const SMART_RESUPPLY_FUEL_QUERIES = ['gas station', 'fuel station', 'truck stop'] as const;
+const SMART_RESUPPLY_SUPPLY_QUERIES = ['grocery store', 'supermarket', 'convenience store', 'general store'] as const;
+const SMART_RESUPPLY_OPTION_LIMIT = 3;
 const SMART_RESUPPLY_OPTION_LIST_HEIGHT = 56;
 const TRIP_SETUP_BUILD_BUTTON_CLEARANCE = 108;
 const TRIP_SETUP_SAVED_PIN_SCROLL_CLEARANCE = 84;
-const SMART_RESUPPLY_SEARCH_LIMIT = 20;
-const SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES = [10, 20, 35, 60] as const;
-const SMART_RESUPPLY_SEARCH_MAX_ANCHORS = 4;
-const SMART_RESUPPLY_LOOKUP_TIMEOUT_MS = 8000;
+const SMART_RESUPPLY_SEARCH_LIMIT = 10;
+const SMART_RESUPPLY_SEARCH_RADIUS_MILES = 10;
+const SMART_RESUPPLY_SEARCH_MAX_ANCHORS = 12;
+const SMART_RESUPPLY_LOOKUP_TIMEOUT_MS = 20000;
 const SMART_RESUPPLY_RETRIEVE_TIMEOUT_MS = 2200;
-const SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET = 7;
-const SMART_RESUPPLY_RETRIEVE_REQUEST_BUDGET = 5;
+const SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET = 48;
+const SMART_RESUPPLY_RETRIEVE_REQUEST_BUDGET = 32;
+const SMART_RESUPPLY_ACCESS_VALIDATION_CONCURRENCY = 4;
 const SMART_RESUPPLY_LOOKUP_TIMEOUT_MESSAGE =
   'Live pre-trail POI lookup is taking too long; itinerary continuity is preserved with manual verification.';
 const IDLE_SMART_RESUPPLY_REQUEST: SmartResupplyRequestState = Object.freeze({ status: 'idle', error: null });
@@ -1079,6 +1075,28 @@ function OptionChip({
   );
 }
 
+function smartResupplyResourceLabel(option: SmartResupplyPoi): string {
+  if (smartResupplyOptionCoversFuelAndSupplies(option)) return 'Fuel + Groceries/Supplies';
+  if (option.category === 'fuel') return 'Fuel';
+  return option.categoryUsefulness === 'convenience_only'
+    ? 'Convenience Supplies'
+    : 'Groceries/Supplies';
+}
+
+function smartResupplySelectionMetricLine(option: SmartResupplyPoi): string {
+  return [
+    option.distanceFromApproachRouteMiles != null
+      ? `${option.distanceFromApproachRouteMiles.toFixed(2)} mi off route`
+      : 'Route offset unavailable',
+    option.detourDurationMinutes != null || option.routeDeviationMiles != null
+      ? `+${option.detourDurationMinutes?.toFixed(0) ?? '?'} min / +${option.routeDeviationMiles?.toFixed(1) ?? '?'} mi detour`
+      : 'Routed detour unavailable',
+    option.remainingApproachMilesToTrailhead != null
+      ? `${option.remainingApproachMilesToTrailhead.toFixed(1)} mi before trail entry`
+      : 'Trail-entry distance unavailable',
+  ].join(' • ');
+}
+
 const SmartResupplyOptionCard = React.memo(function SmartResupplyOptionCard({
   option,
   selected,
@@ -1117,35 +1135,11 @@ const SmartResupplyOptionCard = React.memo(function SmartResupplyOptionCard({
       </View>
       <View style={styles.smartResupplyOptionCopy}>
         <Text style={styles.smartResupplyOptionTitle} numberOfLines={1}>{option.title}</Text>
-        <Text style={styles.smartResupplyOptionMeta} numberOfLines={1}>
-          {option.fallbackState === 'trailhead_only'
-            ? option.distanceFromTrailheadMiles != null
-              ? `${option.distanceFromTrailheadMiles.toFixed(1)} mi from trailhead fallback`
-              : 'Trailhead fallback'
-            : option.remainingApproachMilesToTrailhead != null
-              ? `${option.remainingApproachMilesToTrailhead.toFixed(1)} mi before trail entry`
-              : 'On approach corridor'}
-          {option.routeEvidenceState === 'provider_route' && option.routeDeviationMiles != null
-            ? ` | ${option.routeDeviationMiles.toFixed(1)} mi${option.detourDurationMinutes != null ? ` / ${option.detourDurationMinutes.toFixed(0)} min` : ''} detour`
-            : option.distanceFromApproachRouteMiles != null
-              ? ` | ${option.distanceFromApproachRouteMiles.toFixed(1)} mi corridor offset est.`
-              : ''}
-          {option.subtitle ? ` | ${option.subtitle}` : ''}
-        </Text>
+        <Text style={styles.smartResupplyOptionMeta} numberOfLines={1}>{smartResupplyResourceLabel(option)}</Text>
         <Text style={styles.smartResupplyOptionMeta} numberOfLines={2}>
-          {option.distanceBeforeRemoteEntryMiles != null
-            ? `${option.distanceBeforeRemoteEntryMiles.toFixed(1)} mi before ${option.remoteEntryEstimated ? 'estimated ' : ''}service-loss entry`
-            : 'Service-loss distance unavailable'}
-          {` | provider ${option.providerConfidence}`}
-          {` | route fit ${option.routeAwareConfidence}${option.fallbackState === 'trailhead_only' ? ' (trailhead-only)' : ''}`}
-          {` | access ${option.accessStatus === 'unknown' ? 'unverified' : option.accessStatus}`}
-          {option.operatingStatus === 'unknown' ? ' | hours/availability unknown' : ` | ${option.operatingStatus.replace('_', ' ')}`}
-          {option.providerResultState === 'stale'
-            ? ' | cached/stale source'
-            : option.providerResultState === 'partial'
-              ? ' | partial source'
-              : ''}
+          {smartResupplySelectionMetricLine(option)}
         </Text>
+        {option.subtitle ? <Text style={styles.smartResupplyOptionMeta} numberOfLines={1}>{option.subtitle}</Text> : null}
         {option.warnings[0] ? (
           <Text style={styles.smartResupplyOptionMeta} numberOfLines={2}>{option.warnings[0]}</Text>
         ) : null}
@@ -1159,7 +1153,7 @@ const SmartResupplyOptionCard = React.memo(function SmartResupplyOptionCard({
           {smartResupplyOptionCoversFuelAndSupplies(option) ? (
             <View style={styles.smartResupplyPill}>
               <Ionicons name="bag-outline" size={9} color={TACTICAL.amber} />
-              <Text style={styles.smartResupplyPillText}>FUEL + GROCERIES</Text>
+              <Text style={styles.smartResupplyPillText}>FUEL + GROCERIES/SUPPLIES</Text>
             </View>
           ) : null}
         </View>
@@ -1981,24 +1975,19 @@ function campPlanOptionDetail(value: CampPlanPreference, pinCount: number): stri
   return 'Drop reference camp pins.';
 }
 
-function remoteEntryForResupply(route: TripBuilderRouteInput | null): ApproachResupplyRemoteEntry {
-  const metadata = route?.routeMetadata ?? null;
-  const knownCoordinate = coordinateFromRouteValue(
-    metadata?.remoteEntryCoordinate ??
-    metadata?.serviceLossEntryCoordinate ??
-    metadata?.noServiceEntryCoordinate ??
-    null,
-  );
-  const knownProgressRatio = finiteCoordinateNumber(
-    metadata?.approachRemoteEntryProgressRatio ?? metadata?.approachServiceLossEntryProgressRatio,
-  );
-  return inferApproachRemoteEntry({
-    knownCoordinate,
-    knownProgressRatio,
-    source: knownCoordinate || knownProgressRatio != null ? 'route_metadata' : undefined,
-    confidence: knownCoordinate || knownProgressRatio != null ? 'medium' : undefined,
-    remotenessScore: finiteCoordinateNumber(route?.remotenessScore),
-  });
+function remoteEntryForResupply(
+  practicalTrailEntry: TripMapCoordinate | null,
+): ApproachResupplyRemoteEntry {
+  return {
+    coordinate: practicalTrailEntry,
+    progressRatio: 1,
+    source: 'practical_trail_entry',
+    confidence: practicalTrailEntry ? 'high' : 'unknown',
+    estimated: false,
+    label: practicalTrailEntry
+      ? 'Resolved practical trail entry'
+      : 'Practical trail entry unavailable',
+  };
 }
 
 function coordinateFromRouteValue(value: unknown): TripMapCoordinate | null {
@@ -2367,7 +2356,8 @@ function smartResupplyPoiFromDestination(
   };
   if (!isValidMapCoordinate(coordinate)) return null;
   const text = smartResupplySearchText(suggestion, destination);
-  if (!isLiveSmartResupplyPoiCandidate({ category, suggestion, destination })) return null;
+  const classification = classifyLiveSmartResupplyPoiCandidate({ suggestion, destination });
+  if (!classification?.categoryCoverage.includes(category)) return null;
   return {
     id: String(destination.id || suggestion.id),
     title: destination.title || suggestion.title,
@@ -2393,8 +2383,11 @@ function smartResupplyPoiFromDestination(
     remoteEntrySource: 'unavailable',
     remoteEntryConfidence: 'unknown',
     remoteEntryEstimated: false,
-    remoteEntryLabel: 'Service-loss entry unavailable',
-    categoryCoverage: [category],
+    remoteEntryLabel: 'Practical trail entry unavailable',
+    categoryCoverage: classification.categoryCoverage,
+    categoryUsefulness: classification.usefulness === 'category_specific'
+      ? 'category_match'
+      : classification.usefulness,
     operatingStatus: 'unknown',
     providerConfidence: 'medium',
     coordinateConfidence: null,
@@ -2650,6 +2643,36 @@ function routeContextCoordinateConfidence(
   return 'unknown';
 }
 
+function routeContextSmartResupplyCategoryEvidence(
+  metadata: Record<string, unknown> | null | undefined,
+): Pick<SmartResupplyPoi, 'categoryCoverage' | 'categoryUsefulness'> | null {
+  if (!metadata) return null;
+  const records: Record<string, unknown>[] = [];
+  const appendRecord = (value: unknown) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      records.push(value as Record<string, unknown>);
+    }
+  };
+  appendRecord(metadata);
+  appendRecord(metadata.placeProviderMetadata);
+  appendRecord(metadata.providerMetadata);
+  records.slice().forEach((record) => appendRecord(record.providerMetadata));
+  const evidence = records.find((record) => Array.isArray(record.smartResupplyCategoryCoverage));
+  if (!evidence) return null;
+  const categoryCoverage = Array.from(new Set(
+    (evidence.smartResupplyCategoryCoverage as unknown[])
+      .filter((value): value is SmartResupplyPoi['category'] => value === 'fuel' || value === 'food_supplies'),
+  ));
+  if (categoryCoverage.length === 0) return null;
+  const rawUsefulness = evidence.smartResupplyCategoryUsefulness;
+  const categoryUsefulness: SmartResupplyPoi['categoryUsefulness'] = rawUsefulness === 'combined'
+    ? 'combined'
+    : rawUsefulness === 'convenience_only'
+      ? 'convenience_only'
+      : 'category_match';
+  return { categoryCoverage, categoryUsefulness };
+}
+
 function smartResupplyPoiFromRouteContextCandidate(
   candidate: SupplyCandidate,
   category: SmartResupplyPoi['category'],
@@ -2677,6 +2700,7 @@ function smartResupplyPoiFromRouteContextCandidate(
     },
   };
   const providerResultState = routeContextEvidenceState({ status: contextStatus });
+  const categoryEvidence = routeContextSmartResupplyCategoryEvidence(candidate.providerMetadata);
   return {
     id: `route-context-${candidate.id}`,
     title: candidate.name,
@@ -2690,9 +2714,9 @@ function smartResupplyPoiFromRouteContextCandidate(
     distanceFromTrailheadMiles: candidate.driveDistanceToTrailheadMeters != null
       ? Math.round((candidate.driveDistanceToTrailheadMeters / 1609.344) * 10) / 10
       : Math.round(tripMapCoordinateDistanceMiles(fallbackAnchor, coordinate) * 10) / 10,
-    distanceFromApproachRouteMiles: candidate.detourDistanceMeters != null
-      ? Math.round((candidate.detourDistanceMeters / 1609.344) * 10) / 10
-      : null,
+    // Route Context detour evidence is routed distance, not lateral corridor offset.
+    // The planner computes corridor offset from the canonical approach geometry.
+    distanceFromApproachRouteMiles: null,
     routeDeviationMiles: candidate.detourDistanceMeters != null
       ? Math.round((candidate.detourDistanceMeters / 1609.344) * 10) / 10
       : null,
@@ -2712,8 +2736,9 @@ function smartResupplyPoiFromRouteContextCandidate(
     remoteEntrySource: 'unavailable',
     remoteEntryConfidence: 'unknown',
     remoteEntryEstimated: false,
-    remoteEntryLabel: 'Service-loss entry unavailable',
-    categoryCoverage: [category],
+    remoteEntryLabel: 'Practical trail entry unavailable',
+    categoryCoverage: categoryEvidence?.categoryCoverage ?? [category],
+    categoryUsefulness: categoryEvidence?.categoryUsefulness ?? 'category_match',
     operatingStatus: candidate.openStatus === 'open' || candidate.openStatus === 'closed' || candidate.openStatus === 'temporarily_closed'
       ? candidate.openStatus
       : 'unknown',
@@ -2822,6 +2847,16 @@ function smartResupplyPhysicalIdentity(option: SmartResupplyPoi): string {
   ].join(':');
 }
 
+function sameSmartResupplyPhysicalPlace(left: SmartResupplyPoi, right: SmartResupplyPoi): boolean {
+  if (smartResupplyPhysicalIdentity(left) === smartResupplyPhysicalIdentity(right)) return true;
+  const sameNormalizedCoordinate =
+    left.coordinate.latitude.toFixed(5) === right.coordinate.latitude.toFixed(5) &&
+    left.coordinate.longitude.toFixed(5) === right.coordinate.longitude.toFixed(5);
+  if (sameNormalizedCoordinate) return true;
+  return normalizeSmartResupplyKeyPart(left.title) === normalizeSmartResupplyKeyPart(right.title) &&
+    tripMapCoordinateDistanceMiles(left.coordinate, right.coordinate) <= 0.05;
+}
+
 function smartResupplyCoordinateSignature(point: TripMapCoordinate): string {
   return [
     point.latitude.toFixed(SMART_RESUPPLY_APPROACH_SIGNATURE_DECIMALS),
@@ -2841,6 +2876,8 @@ function smartResupplySearchSignature(
   selectionKey: string | null = null,
   remoteEntry: ApproachResupplyRemoteEntry | null = null,
   origin: TripMapCoordinate | null = null,
+  baselineDistanceM: number | null = null,
+  baselineDurationS: number | null = null,
 ): string {
   const approachSignature = smartResupplyApproachSignature(approachRoute);
   return [
@@ -2854,15 +2891,16 @@ function smartResupplySearchSignature(
       : `remote-entry:${remoteEntry.source}:${remoteEntry.progressRatio?.toFixed(3) ?? 'no-progress'}:${
           remoteEntry.coordinate ? smartResupplyCoordinateSignature(remoteEntry.coordinate) : 'no-coordinate'
         }`,
+    `baseline:${baselineDistanceM?.toFixed(0) ?? 'unknown'}:${baselineDurationS?.toFixed(0) ?? 'unknown'}`,
     selectionKey ?? 'none',
   ].join(':');
 }
 
 function isSmartResupplyOptionRouteAware(option: SmartResupplyPoi): boolean {
-  if (option.routeDeviationMiles != null) {
-    return option.routeDeviationMiles <= APPROACH_RESUPPLY_POLICY.maximumRouteDetourMiles;
-  }
-  return true;
+  return isValidMapCoordinate(option.coordinate) &&
+    option.accessStatus !== 'inaccessible' &&
+    option.operatingStatus !== 'closed' &&
+    option.operatingStatus !== 'temporarily_closed';
 }
 
 function smartResupplyOptionCoversFuelAndSupplies(option: SmartResupplyPoi): boolean {
@@ -2872,20 +2910,29 @@ function smartResupplyOptionCoversFuelAndSupplies(option: SmartResupplyPoi): boo
 function compareSmartResupplyOptionsByApproach(left: SmartResupplyPoi, right: SmartResupplyPoi): number {
   const rankDelta = (left.rank ?? Number.POSITIVE_INFINITY) - (right.rank ?? Number.POSITIVE_INFINITY);
   if (rankDelta !== 0) return rankDelta;
-  const approachDelta =
-    (right.approachScore ?? Number.NEGATIVE_INFINITY) -
-    (left.approachScore ?? Number.NEGATIVE_INFINITY);
-  if (Math.abs(approachDelta) > 0.001) return approachDelta;
-  const leftFallback = left.fallbackState === 'approach_route' ? 0 : 1;
-  const rightFallback = right.fallbackState === 'approach_route' ? 0 : 1;
-  if (leftFallback !== rightFallback) return leftFallback - rightFallback;
-  const leftRouteContext = left.sourceType === 'route_context_engine' ? 0 : 1;
-  const rightRouteContext = right.sourceType === 'route_context_engine' ? 0 : 1;
-  if (leftRouteContext !== rightRouteContext) return leftRouteContext - rightRouteContext;
   const distanceDelta =
     (left.remainingApproachMilesToTrailhead ?? left.distanceFromRouteStartMiles ?? Number.POSITIVE_INFINITY) -
     (right.remainingApproachMilesToTrailhead ?? right.distanceFromRouteStartMiles ?? Number.POSITIVE_INFINITY);
   if (Math.abs(distanceDelta) > 0.001) return distanceDelta;
+  const corridorTierDelta =
+    ((left.distanceFromApproachRouteMiles ?? Number.POSITIVE_INFINITY) <= APPROACH_RESUPPLY_POLICY.preferredCorridorOffsetMiles ? 0 : 1) -
+    ((right.distanceFromApproachRouteMiles ?? Number.POSITIVE_INFINITY) <= APPROACH_RESUPPLY_POLICY.preferredCorridorOffsetMiles ? 0 : 1);
+  if (corridorTierDelta !== 0) return corridorTierDelta;
+  const detourTimeDelta =
+    (left.detourDurationMinutes ?? Number.POSITIVE_INFINITY) -
+    (right.detourDurationMinutes ?? Number.POSITIVE_INFINITY);
+  if (Math.abs(detourTimeDelta) > 0.001) return detourTimeDelta;
+  const detourDistanceDelta =
+    (left.routeDeviationMiles ?? Number.POSITIVE_INFINITY) -
+    (right.routeDeviationMiles ?? Number.POSITIVE_INFINITY);
+  if (Math.abs(detourDistanceDelta) > 0.001) return detourDistanceDelta;
+  const usefulnessRank = (option: SmartResupplyPoi) => option.categoryUsefulness === 'combined'
+    ? 0
+    : option.categoryUsefulness === 'category_match'
+      ? 1
+      : 2;
+  const usefulnessDelta = usefulnessRank(left) - usefulnessRank(right);
+  if (usefulnessDelta !== 0) return usefulnessDelta;
   return left.title.localeCompare(right.title);
 }
 
@@ -2909,11 +2956,25 @@ function preferredSmartResupplyOption(current: SmartResupplyPoi, candidate: Smar
   else if (!current.subtitle && candidate.subtitle) preferred = candidate;
   const safetyEvidence = mergeApproachResupplySafetyEvidence([current, candidate]);
   const routeEvidence = mergeApproachResupplyRouteEvidence([current, candidate]);
+  const categoryCoverage = Array.from(new Set([
+    ...current.categoryCoverage,
+    ...candidate.categoryCoverage,
+  ]));
+  const categoryUsefulness: SmartResupplyPoi['categoryUsefulness'] =
+    current.categoryUsefulness === 'combined' || candidate.categoryUsefulness === 'combined'
+      ? 'combined'
+      : categoryCoverage.includes('fuel') &&
+          categoryCoverage.includes('food_supplies') &&
+          (current.categoryUsefulness === 'convenience_only' || candidate.categoryUsefulness === 'convenience_only')
+        ? 'convenience_only'
+        : 'category_match';
   const warnings = Array.from(new Set([...current.warnings, ...candidate.warnings]));
   return {
     ...preferred,
     ...safetyEvidence,
     ...routeEvidence,
+    categoryCoverage,
+    categoryUsefulness,
     warnings: smartResupplyProviderFreshnessRank(preferred) === 0
       ? warnings.filter((warning) => !/^Route Context evidence is (?:cached\/stale|partial);/i.test(warning))
       : warnings,
@@ -2938,6 +2999,7 @@ function approachCandidateFromSmartResupplyOption(option: SmartResupplyPoi): App
     coordinateConfidence: option.coordinateConfidence,
     ...rerankEvidence,
     categoryCoverage: option.categoryCoverage,
+    categoryUsefulness: option.categoryUsefulness,
     accessStatus: option.accessStatus,
     beforeTrailEntry: option.beforeTrailEntry,
     distanceFromTrailheadMiles: option.distanceFromTrailheadMiles,
@@ -2955,6 +3017,7 @@ function applyApproachRankingToSmartResupplyOptions(params: {
   origin?: TripMapCoordinate | null;
   limit?: number;
   remoteEntry?: ApproachResupplyRemoteEntry | null;
+  requireRoutedAccess?: boolean;
 }): SmartResupplyPoi[] {
   const byKey = new Map(params.options.map((option) => [smartResupplyOptionStableKey(option), option]));
   return rankApproachResupplyOptions({
@@ -2965,6 +3028,9 @@ function applyApproachRankingToSmartResupplyOptions(params: {
     candidates: params.options.map(approachCandidateFromSmartResupplyOption),
     preferredRouteBufferMiles: APPROACH_RESUPPLY_POLICY.preferredRouteBufferMiles,
     maxRouteDeviationMiles: APPROACH_RESUPPLY_POLICY.maximumRouteDetourMiles,
+    maxCorridorOffsetMiles: APPROACH_RESUPPLY_POLICY.maximumCorridorOffsetMiles,
+    preferredCorridorOffsetMiles: APPROACH_RESUPPLY_POLICY.preferredCorridorOffsetMiles,
+    requireRoutedAccess: params.requireRoutedAccess ?? true,
     remoteEntry: params.remoteEntry,
     limit: params.limit ?? params.options.length,
   }).flatMap((ranked): SmartResupplyPoi[] => {
@@ -2993,6 +3059,7 @@ function applyApproachRankingToSmartResupplyOptions(params: {
       remoteEntryEstimated: ranked.remoteEntryEstimated,
       remoteEntryLabel: ranked.remoteEntryLabel,
       categoryCoverage: ranked.categoryCoverage,
+      categoryUsefulness: ranked.categoryUsefulness,
       operatingStatus: ranked.operatingStatus,
       warnings: ranked.warnings,
     }];
@@ -3054,7 +3121,9 @@ function mergeSmartResupplyOptions(
   const merged = new Map<string, SmartResupplyPoi>();
   [...previous, ...primary, ...secondary].forEach((option) => {
     if (!isSmartResupplyOptionRouteAware(option)) return;
-    const key = smartResupplyOptionStableKey(option);
+    const duplicateEntry = Array.from(merged.entries())
+      .find(([, current]) => sameSmartResupplyPhysicalPlace(current, option));
+    const key = duplicateEntry?.[0] ?? smartResupplyOptionStableKey(option);
     const current = merged.get(key);
     merged.set(key, current ? preferredSmartResupplyOption(current, option) : option);
   });
@@ -3228,25 +3297,118 @@ function assertSmartResupplyLookupBudget(startedAtMs: number): void {
 
 function smartResupplyAnchorSearchOrder(
   anchors: ApproachResupplySearchAnchor[],
-  radiusTierIndex: number,
 ): number[] {
-  const ordered = anchors.map((_, index) => index);
-  if (radiusTierIndex === 0) return ordered;
-  const corridorAnchors = ordered.filter((index) => anchors[index]?.basis === 'approach_corridor');
-  return (corridorAnchors.length > 0 ? corridorAnchors : ordered).slice(0, 1);
+  return anchors
+    .map((anchor, index) => ({ anchor, index }))
+    .sort((left, right) => (
+      (right.anchor.progressRatio ?? Number.NEGATIVE_INFINITY) -
+        (left.anchor.progressRatio ?? Number.NEGATIVE_INFINITY) ||
+      left.index - right.index
+    ))
+    .map(({ index }) => index);
 }
 
 type SmartResupplyLookupParams = {
   accessToken: string;
   sessionToken: string;
-  query: string;
+  queries: readonly string[];
   category: SmartResupplyPoi['category'];
   routeStart: TripMapCoordinate;
   approachRoute: TripMapCoordinate[];
   origin?: TripMapCoordinate | null;
   fallbackAnchor?: TripMapCoordinate | null;
   remoteEntry?: ApproachResupplyRemoteEntry | null;
+  baselineDistanceM?: number | null;
+  baselineDurationS?: number | null;
 };
+
+async function validateSmartResupplyRoutedAccess(
+  params: SmartResupplyLookupParams,
+  options: SmartResupplyPoi[],
+  lookupStartedAt: number,
+): Promise<{ options: SmartResupplyPoi[]; failedCount: number }> {
+  const origin = params.origin;
+  const baselineDistanceM = finiteCoordinateNumber(params.baselineDistanceM);
+  const baselineDurationS = finiteCoordinateNumber(params.baselineDurationS);
+  if (!origin || baselineDistanceM == null || baselineDurationS == null) {
+    return {
+      options: options.map((option) => ({
+        ...option,
+        accessStatus: 'unknown',
+        warnings: Array.from(new Set([
+          ...option.warnings,
+          'Routed access and continuation to the practical trail entry could not be validated.',
+        ])),
+      })),
+      failedCount: options.length,
+    };
+  }
+
+  let failedCount = 0;
+  const validateOption = async (option: SmartResupplyPoi): Promise<SmartResupplyPoi> => {
+    try {
+      const route = await fetchRoadRoute({
+        accessToken: params.accessToken,
+        origin: { lat: origin.latitude, lng: origin.longitude },
+        waypoints: [{
+          id: `smart-resupply-access-${option.id}`,
+          title: option.title,
+          subtitle: option.subtitle,
+          coordinate: { lat: option.coordinate.latitude, lng: option.coordinate.longitude },
+          role: 'resupply',
+        }],
+        destination: {
+          id: 'smart-resupply-practical-trail-entry',
+          title: 'Resolved practical trail entry',
+          subtitle: 'Continue from the resupply stop toward trail entry.',
+          coordinate: { lat: params.routeStart.latitude, lng: params.routeStart.longitude },
+          sourceType: 'explore_handoff',
+        },
+      });
+      return {
+        ...option,
+        accessStatus: 'accessible' as const,
+        routeEvidenceState: 'provider_route' as const,
+        routeDeviationMiles: Math.max(0, route.distanceM - baselineDistanceM) / 1609.344,
+        detourDurationMinutes: Math.max(0, route.durationS - baselineDurationS) / 60,
+        routeAwareConfidence: 'high' as const,
+        warnings: option.warnings.filter((warning) => !/routed access|routed detour/i.test(warning)),
+      };
+    } catch {
+      failedCount += 1;
+      return {
+        ...option,
+        accessStatus: 'unknown' as const,
+        warnings: Array.from(new Set([
+          ...option.warnings,
+          'The active driving profile could not validate access through this stop and onward to trail entry.',
+        ])),
+      };
+    }
+  };
+  const validated: SmartResupplyPoi[] = [];
+  for (let offset = 0; offset < options.length; offset += SMART_RESUPPLY_ACCESS_VALIDATION_CONCURRENCY) {
+    if (smartResupplyLookupTimedOut(lookupStartedAt)) {
+      const unverified = options.slice(offset).map((option) => ({
+        ...option,
+        accessStatus: 'unknown' as const,
+        warnings: Array.from(new Set([
+          ...option.warnings,
+          'Routed access validation timed out before this stop could be checked.',
+        ])),
+      }));
+      failedCount += unverified.length;
+      validated.push(...unverified);
+      break;
+    }
+    validated.push(...await Promise.all(
+      options
+        .slice(offset, offset + SMART_RESUPPLY_ACCESS_VALIDATION_CONCURRENCY)
+        .map(validateOption),
+    ));
+  }
+  return { options: validated, failedCount };
+}
 
 const smartResupplyLookupInFlight = new Map<string, Promise<SmartResupplyPoi[]>>();
 
@@ -3259,6 +3421,14 @@ async function loadSmartResupplyOptions(params: SmartResupplyLookupParams): Prom
     fallbackAnchor: params.fallbackAnchor ?? params.routeStart,
     remoteEntry: params.remoteEntry,
     maxAnchors: SMART_RESUPPLY_SEARCH_MAX_ANCHORS,
+    searchRadiusMiles: SMART_RESUPPLY_SEARCH_RADIUS_MILES,
+  });
+  const searchCoverage = assessApproachResupplySearchCoverage({
+    origin: params.origin ?? null,
+    trailhead: params.routeStart,
+    approachRoute: params.approachRoute,
+    anchors: searchAnchors,
+    searchRadiusMiles: SMART_RESUPPLY_SEARCH_RADIUS_MILES,
   });
   const suggestionMap = new Map<string, RoadNavSearchSuggestion>();
   const suggestionsByAnchor = new Map<number, RoadNavSearchSuggestion[]>();
@@ -3278,59 +3448,60 @@ async function loadSmartResupplyOptions(params: SmartResupplyLookupParams): Prom
   let suggestRequestCount = 0;
   let retrieveRequestCount = 0;
   let failedSuggestCount = 0;
+  let failedSupplementalSuggestCount = 0;
   const collectSearchPass = async (
     anchor: TripMapCoordinate,
     anchorIndex: number,
-    bbox?: SmartResupplySearchBounds,
-    allowForwardGeocodeFallback = false,
+    query: string,
+    countsTowardCoverage: boolean,
   ) => {
     assertSmartResupplyLookupBudget(lookupStartedAt);
     const suggestions = await searchRoadDestinations({
       accessToken: params.accessToken,
-      query: params.query,
+      query,
       sessionToken: params.sessionToken,
       proximity: { lat: anchor.latitude, lng: anchor.longitude },
-      bbox,
+      bbox: smartResupplySearchBounds(anchor, SMART_RESUPPLY_SEARCH_RADIUS_MILES),
       limit: SMART_RESUPPLY_SEARCH_LIMIT,
-      forwardGeocodeFallback: allowForwardGeocodeFallback,
-      throwOnSearchboxError: !allowForwardGeocodeFallback,
+      forwardGeocodeFallback: false,
+      throwOnSearchboxError: true,
       billingContext: {
         flow: 'trip_builder_smart_resupply',
         surface: 'Trip Builder',
         operatorAction: `${params.category} approach resupply suggest`,
       },
     });
-    coveredAnchorKeys.add(anchorIndex);
+    if (countsTowardCoverage) coveredAnchorKeys.add(anchorIndex);
     collectSuggestions(suggestions, anchorIndex);
   };
 
-  searchLoop:
-  for (let radiusTierIndex = 0; radiusTierIndex < SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES.length; radiusTierIndex += 1) {
-    const radiusMiles = SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES[radiusTierIndex];
-    for (const anchorIndex of smartResupplyAnchorSearchOrder(searchAnchors, radiusTierIndex)) {
-      if (suggestRequestCount >= SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET) break searchLoop;
-      const anchor = searchAnchors[anchorIndex];
+  const anchorOrder = smartResupplyAnchorSearchOrder(searchAnchors);
+  const primaryQuery = params.queries[0]?.trim();
+  if (!primaryQuery) throw new Error('Smart Resupply has no configured provider query.');
+  for (const anchorIndex of anchorOrder) {
+    if (suggestRequestCount >= SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET) break;
+    const anchor = searchAnchors[anchorIndex];
+    try {
+      suggestRequestCount += 1;
+      await collectSearchPass(anchor.coordinate, anchorIndex, primaryQuery, true);
+    } catch {
+      failedSuggestCount += 1;
+    }
+  }
+  supplementalSearch:
+  for (const query of params.queries.slice(1)) {
+    for (const anchorIndex of anchorOrder) {
+      if (suggestRequestCount >= SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET) break supplementalSearch;
       try {
         suggestRequestCount += 1;
-        await collectSearchPass(
-          anchor.coordinate,
-          anchorIndex,
-          smartResupplySearchBounds(anchor.coordinate, radiusMiles),
-          radiusTierIndex === SMART_RESUPPLY_SEARCH_RADIUS_TIERS_MILES.length - 1,
-        );
+        await collectSearchPass(searchAnchors[anchorIndex].coordinate, anchorIndex, query, false);
       } catch {
-        failedSuggestCount += 1;
-      }
-      if (smartResupplyLookupTimedOut(lookupStartedAt) && suggestionMap.size === 0) {
-        throw new Error(SMART_RESUPPLY_LOOKUP_TIMEOUT_MESSAGE);
+        failedSupplementalSuggestCount += 1;
       }
     }
-    if (
-      suggestionMap.size >= SMART_RESUPPLY_OPTION_LIMIT * 3 &&
-      coveredAnchorKeys.size >= minimumAnchorCoverageCount
-    ) {
-      break;
-    }
+  }
+  if (smartResupplyLookupTimedOut(lookupStartedAt) && suggestionMap.size === 0) {
+    throw new Error(SMART_RESUPPLY_LOOKUP_TIMEOUT_MESSAGE);
   }
 
   const providerCoverageState = classifyApproachResupplyProviderCoverage({
@@ -3338,19 +3509,23 @@ async function loadSmartResupplyOptions(params: SmartResupplyLookupParams): Prom
     coveredAnchorCount: coveredAnchorKeys.size,
     failedAnchorCount: failedSuggestCount,
     resultCount: suggestionMap.size,
+    routeCoverageComplete: searchCoverage.complete,
   });
   if (providerCoverageState === 'retryable_error') {
     throw new Error('Live resupply provider coverage was incomplete. No-results was not assumed; retry or verify stops manually.');
   }
   const options: SmartResupplyPoi[] = [];
-  const seen = new Set<string>();
+  const seenProviderIds = new Set<string>();
+  const seenCoordinates = new Set<string>();
   const fallbackAnchor = params.fallbackAnchor ?? params.routeStart;
-  const anchorOrder = smartResupplyAnchorSearchOrder(searchAnchors, 0);
-  const interleavedSuggestions = interleaveApproachSearchResults(
-    anchorOrder.map((anchorIndex) => suggestionsByAnchor.get(anchorIndex) ?? []),
-  );
+  const prioritizedSuggestions = prioritizeApproachSearchResults({
+    anchors: searchAnchors,
+    buckets: searchAnchors.map((_, anchorIndex) => suggestionsByAnchor.get(anchorIndex) ?? []),
+    finalApproachProgressRatio: 0.75,
+    reservedPerFinalAnchor: SMART_RESUPPLY_SEARCH_LIMIT,
+  });
   let failedRetrieveCount = 0;
-  for (const suggestion of interleavedSuggestions) {
+  for (const suggestion of prioritizedSuggestions) {
     if (retrieveRequestCount >= SMART_RESUPPLY_RETRIEVE_REQUEST_BUDGET) break;
     if (smartResupplyLookupTimedOut(lookupStartedAt)) {
       if (options.length === 0) throw new Error(SMART_RESUPPLY_LOOKUP_TIMEOUT_MESSAGE);
@@ -3371,9 +3546,14 @@ async function loadSmartResupplyOptions(params: SmartResupplyLookupParams): Prom
       });
       const option = smartResupplyPoiFromDestination(suggestion, destination, params.category, fallbackAnchor);
       if (!option) continue;
-      const key = `${option.title.toLowerCase()}:${option.coordinate.latitude.toFixed(4)}:${option.coordinate.longitude.toFixed(4)}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+      const providerIdentity = providerResupplyPlaceIdentity(option.suggestion.mapboxId, option.providerId);
+      const coordinateIdentity = `${option.coordinate.latitude.toFixed(5)}:${option.coordinate.longitude.toFixed(5)}`;
+      if (
+        (providerIdentity && seenProviderIds.has(providerIdentity)) ||
+        seenCoordinates.has(coordinateIdentity)
+      ) continue;
+      if (providerIdentity) seenProviderIds.add(providerIdentity);
+      seenCoordinates.add(coordinateIdentity);
       options.push(option);
     } catch {
       failedRetrieveCount += 1;
@@ -3382,20 +3562,35 @@ async function loadSmartResupplyOptions(params: SmartResupplyLookupParams): Prom
   if (options.length === 0 && failedRetrieveCount > 0) {
     throw new Error('Resupply place details are temporarily unavailable; retry before relying on this plan.');
   }
-  const rankedOptions = applyApproachRankingToSmartResupplyOptions({
+  const onCorridorOptions = applyApproachRankingToSmartResupplyOptions({
     options,
     category: params.category,
     trailhead: params.routeStart,
     approachRoute: params.approachRoute,
     origin: params.origin ?? null,
     remoteEntry: params.remoteEntry,
-    limit: SMART_RESUPPLY_OPTION_LIMIT * 2,
+    requireRoutedAccess: false,
+    limit: options.length,
+  });
+  const accessValidation = await validateSmartResupplyRoutedAccess(params, onCorridorOptions, lookupStartedAt);
+  const rankedOptions = applyApproachRankingToSmartResupplyOptions({
+    options: accessValidation.options,
+    category: params.category,
+    trailhead: params.routeStart,
+    approachRoute: params.approachRoute,
+    origin: params.origin ?? null,
+    remoteEntry: params.remoteEntry,
+    requireRoutedAccess: true,
+    limit: SMART_RESUPPLY_OPTION_LIMIT,
   });
   const acceptedOptions = rankedOptions
     .filter(isSmartResupplyOptionRouteAware)
     .sort(compareSmartResupplyOptionsByApproach)
     .slice(0, SMART_RESUPPLY_OPTION_LIMIT);
-  const providerEvidenceIncomplete = providerCoverageState === 'partial_results' || failedRetrieveCount > 0;
+  const providerEvidenceIncomplete = providerCoverageState === 'partial_results' ||
+    failedRetrieveCount > 0 ||
+    failedSupplementalSuggestCount > 0 ||
+    accessValidation.failedCount > 0;
   if (acceptedOptions.length === 0 && providerEvidenceIncomplete) {
     throw new Error('Live resupply provider evidence was incomplete. No-results was not assumed; retry or verify stops manually.');
   }
@@ -3410,6 +3605,9 @@ async function loadSmartResupplyOptions(params: SmartResupplyLookupParams): Prom
         : null,
       failedRetrieveCount > 0
         ? 'Some provider place details could not be resolved; available options are partial.'
+        : null,
+      accessValidation.failedCount > 0
+        ? 'Some on-corridor places could not be routed through and onward to trail entry.'
         : null,
     ].filter((warning): warning is string => !!warning))),
   }));
@@ -4673,15 +4871,7 @@ export default function ExploreTripBuilderScreen() {
           waitForRunStoreHydration(),
         ]);
         if (cancelled) return;
-        if (persistedPlanState) {
-          lastTripBuilderPlanState = {
-            selectedRouteId: persistedPlanState.selectedRouteId,
-            plan: persistedPlanState.plan,
-            visible: persistedPlanState.visible,
-            itinerarySaved: persistedPlanState.itinerarySaved,
-            itineraryEditSession: persistedPlanState.itineraryEditSession,
-          };
-        }
+        lastTripBuilderPlanState = resolveTripBuilderPlanRuntimeState(persistedPlanState);
         const suggestedRoutes = (exploreContext?.routes ?? []) as unknown as ExpeditionOpportunity[];
         const handoffDraftItinerary = handoff?.draftItinerary ?? null;
         const handoffRoute = handoff?.route
@@ -4955,10 +5145,6 @@ export default function ExploreTripBuilderScreen() {
   useEffect(() => {
     latestSelectedPlanningRouteRef.current = selectedRoute;
   }, [selectedRoute]);
-  const selectedRouteRemoteEntry = useMemo(
-    () => remoteEntryForResupply(selectedRoute as unknown as TripBuilderRouteInput | null),
-    [selectedRoute],
-  );
   const selectedRouteDisplayName = useMemo(
     () => tripBuilderRouteDisplayName(selectedRoute),
     [selectedRoute],
@@ -5061,6 +5247,10 @@ export default function ExploreTripBuilderScreen() {
       : null,
     [selectedTrailheadResupplyAnchorLatitude, selectedTrailheadResupplyAnchorLongitude],
   );
+  const selectedRouteRemoteEntry = useMemo(
+    () => remoteEntryForResupply(selectedTrailheadResupplyAnchorCoordinate),
+    [selectedTrailheadResupplyAnchorCoordinate],
+  );
   const selectedSmartFuelStableKey = selectedSmartFuel ? smartResupplyOptionStableKey(selectedSmartFuel) : null;
   const selectedSmartFuelCoversSupplies = selectedSmartFuel != null &&
     smartResupplyOptionCoversFuelAndSupplies(selectedSmartFuel);
@@ -5092,6 +5282,12 @@ export default function ExploreTripBuilderScreen() {
       : [],
     [liveApproachRouteMatchesRequest, liveApproachRouteState.points, liveApproachRouteState.status],
   );
+  const liveApproachRouteDistanceM = liveApproachRouteMatchesRequest && liveApproachRouteState.status === 'ready'
+    ? liveApproachRouteState.distanceM ?? null
+    : null;
+  const liveApproachRouteDurationS = liveApproachRouteMatchesRequest && liveApproachRouteState.status === 'ready'
+    ? liveApproachRouteState.durationS ?? null
+    : null;
 
   const selectedRouteEndCoordinate = useMemo(() => {
     if (!selectedRoute) return null;
@@ -5361,6 +5557,8 @@ export default function ExploreTripBuilderScreen() {
           { latitude: origin.lat, longitude: origin.lng },
           selectedRouteStartCoordinate,
         ],
+        distanceM: 0,
+        durationS: 0,
       });
       return;
     }
@@ -5385,6 +5583,8 @@ export default function ExploreTripBuilderScreen() {
           status: routePoints.length >= 2 ? 'ready' : 'unavailable',
           fingerprint: liveApproachRouteFingerprint,
           points: routePoints.length >= 2 ? routePoints : [],
+          distanceM: routePoints.length >= 2 ? roadRoute.distanceM : null,
+          durationS: routePoints.length >= 2 ? roadRoute.durationS : null,
         });
       })
       .catch(() => {
@@ -5557,7 +5757,7 @@ export default function ExploreTripBuilderScreen() {
     const missingAnchor = preTrailDraftResolution.bucketSummaries.some((summary) => summary.status === 'missing_anchor');
     if (missingAnchor) return 'Trailhead start is unavailable, so ECS cannot rank pre-trail fuel or supply stops.';
     const providerUnavailable = preTrailDraftResolution.bucketSummaries.some((summary) => summary.status === 'provider_unavailable');
-    if (providerUnavailable && !preTrailStopCandidatesForDraft) {
+    if (providerUnavailable && preTrailStopCandidatesForDraft == null) {
       return 'Live pre-trail POI lookup is unavailable; itinerary continuity is preserved with manual verification.';
     }
     const noResults = preTrailDraftResolution.bucketSummaries.some((summary) => summary.status === 'no_results');
@@ -5906,6 +6106,8 @@ export default function ExploreTripBuilderScreen() {
       null,
       selectedRouteRemoteEntry,
       selectedTripOrigin,
+      liveApproachRouteDistanceM,
+      liveApproachRouteDurationS,
     );
     const sameSearchFingerprint = smartResupplyFuelSearchSignatureRef.current === searchSignature;
     const providerOptions = smartResupplyFuelProviderRef.current?.fingerprint === searchSignature
@@ -5977,12 +6179,14 @@ export default function ExploreTripBuilderScreen() {
           const options = await loadSmartResupplyOptionsSingleFlight(searchSignature, {
             accessToken: token,
             sessionToken: roadSearchSessionTokenRef.current,
-            query: SMART_RESUPPLY_FUEL_QUERY,
+            queries: SMART_RESUPPLY_FUEL_QUERIES,
             category: 'fuel',
             routeStart: selectedTrailheadResupplyAnchorCoordinate,
             approachRoute: liveApproachRoutePoints,
             origin: selectedTripOrigin,
             remoteEntry: selectedRouteRemoteEntry,
+            baselineDistanceM: liveApproachRouteDistanceM,
+            baselineDurationS: liveApproachRouteDurationS,
           });
           if (cancelled || requestId !== smartResupplyFuelRequestRef.current) return;
           smartResupplyFuelProviderRef.current = {
@@ -6054,6 +6258,8 @@ export default function ExploreTripBuilderScreen() {
     commitSmartResupplyFuelOptions,
     itinerarySearchToken,
     routeContextFuelOptions,
+    liveApproachRouteDistanceM,
+    liveApproachRouteDurationS,
     liveApproachRoutePoints,
     liveApproachRouteStatus,
     selectedTripOrigin,
@@ -6063,6 +6269,27 @@ export default function ExploreTripBuilderScreen() {
     smartResupplyFuelRetryGeneration,
     tripSetupStarted,
   ]);
+
+  useEffect(() => {
+    if (
+      smartResupplyPreference !== 'fuel_supplies' ||
+      !selectedSmartFuel ||
+      smartResupplyOptionCoversFuelAndSupplies(selectedSmartFuel)
+    ) return;
+    const matchingSupply = smartResupplySupplyOptions.find((option) => (
+      sameSmartResupplyPhysicalPlace(option, selectedSmartFuel)
+    ));
+    if (!matchingSupply) return;
+    setSelectedSmartFuel((current) => current ? {
+      ...current,
+      categoryCoverage: ['fuel', 'food_supplies'],
+      categoryUsefulness: matchingSupply.categoryUsefulness === 'convenience_only'
+        ? 'convenience_only'
+        : 'combined',
+      warnings: Array.from(new Set([...current.warnings, ...matchingSupply.warnings])),
+    } : current);
+    setSelectedSmartSupply(null);
+  }, [selectedSmartFuel, smartResupplyPreference, smartResupplySupplyOptions]);
 
   useEffect(() => {
     if (
@@ -6106,6 +6333,8 @@ export default function ExploreTripBuilderScreen() {
       selectedSmartFuelStableKey,
       selectedRouteRemoteEntry,
       selectedTripOrigin,
+      liveApproachRouteDistanceM,
+      liveApproachRouteDurationS,
     );
     const sameSearchFingerprint = smartResupplySupplySearchSignatureRef.current === searchSignature;
     const providerOptions = smartResupplySupplyProviderRef.current?.fingerprint === searchSignature
@@ -6177,13 +6406,15 @@ export default function ExploreTripBuilderScreen() {
           const options = await loadSmartResupplyOptionsSingleFlight(searchSignature, {
             accessToken: token,
             sessionToken: roadSearchSessionTokenRef.current,
-            query: SMART_RESUPPLY_SUPPLY_QUERY,
+            queries: SMART_RESUPPLY_SUPPLY_QUERIES,
             category: 'food_supplies',
             routeStart: selectedTrailheadResupplyAnchorCoordinate ?? selectedPreTrailSupplyAnchorCoordinate,
             approachRoute: liveApproachRoutePoints,
             origin: selectedTripOrigin,
             fallbackAnchor: selectedPreTrailSupplyAnchorCoordinate,
             remoteEntry: selectedRouteRemoteEntry,
+            baselineDistanceM: liveApproachRouteDistanceM,
+            baselineDurationS: liveApproachRouteDurationS,
           });
           if (cancelled || requestId !== smartResupplySupplyRequestRef.current) return;
           smartResupplySupplyProviderRef.current = {
@@ -6255,6 +6486,8 @@ export default function ExploreTripBuilderScreen() {
     commitSmartResupplySupplyOptions,
     itinerarySearchToken,
     routeContextSupplyOptions,
+    liveApproachRouteDistanceM,
+    liveApproachRouteDurationS,
     liveApproachRoutePoints,
     liveApproachRouteStatus,
     selectedTripOrigin,
@@ -7985,11 +8218,11 @@ export default function ExploreTripBuilderScreen() {
                       {smartResupplyPreference !== 'no' ? (
                         <View style={styles.smartResupplyPicker} testID="trip-builder-smart-resupply-picker">
                           <View style={styles.smartResupplyPickerHeader}>
-                            <Text style={styles.smartResupplyPickerTitle}>Last Practical Fuel Before Remote Entry</Text>
-                            <Text style={styles.smartResupplyPickerMeta}>PICK 1 OF UP TO 5</Text>
+                            <Text style={styles.smartResupplyPickerTitle}>Last Practical Resupply Before Trail Entry</Text>
+                            <Text style={styles.smartResupplyPickerMeta}>BEST + 2 ALTERNATIVES</Text>
                           </View>
                           <Text style={styles.smartResupplyPickerHint}>
-                            ECS ranks viable stops along the selected origin-to-trailhead approach. Service-loss boundaries inferred from remoteness are labeled estimates.
+                            ECS first finds the last reachable stop on the origin-to-entry driving route, then compares corridor tier and actual routed detour.
                           </Text>
                           {smartResupplyFuelRequest.status === 'deferred' && liveApproachRouteStatus === 'loading' ? (
                             <Text style={styles.smartResupplyPickerHint}>Preparing the origin-to-trailhead approach before searching for fuel...</Text>
@@ -8009,8 +8242,8 @@ export default function ExploreTripBuilderScreen() {
                           {smartResupplyFuelRequest.status === 'empty' && smartResupplyFuelOptions.length === 0 ? (
                             <Text style={styles.smartResupplyErrorText}>
                               {liveApproachRouteStatus === 'unavailable'
-                                ? 'The approach route was unavailable and the trailhead-only fallback found no fuel options. Route order and detour remain unknown; verify fuel manually.'
-                                : 'No viable fuel stop was found before the service-loss boundary within the configured corridor limit. Verify fuel manually.'}
+                                ? 'The origin-to-entry driving route is unavailable, so ECS cannot verify an on-corridor fuel stop. Verify fuel manually.'
+                                : 'No on-corridor fuel stop was found within 0.20 miles of the driving approach. ECS did not silently widen the limit; verify fuel manually.'}
                             </Text>
                           ) : null}
                           {smartResupplyFuelOptions.length > 0 ? (
@@ -8020,13 +8253,13 @@ export default function ExploreTripBuilderScreen() {
                               nestedScrollEnabled
                               showsVerticalScrollIndicator={smartResupplyFuelOptions.length > 3}
                             >
-                              {smartResupplyFuelOptions.map((option) => (
+                              {smartResupplyFuelOptions.map((option, index) => (
                                 <SmartResupplyOptionCard
                                   key={smartResupplyOptionStableKey(option)}
                                   option={option}
                                   selected={selectedSmartFuel ? smartResupplyOptionStableKey(selectedSmartFuel) === smartResupplyOptionStableKey(option) : false}
                                   disabled={smartResupplyFuelRequest.status === 'loading' || smartResupplyFuelRequest.status === 'deferred'}
-                                  markerLabel="A"
+                                  markerLabel={String(option.rank ?? index + 1)}
                                   onSelect={handleSelectSmartFuel}
                                 />
                               ))}
@@ -8046,10 +8279,10 @@ export default function ExploreTripBuilderScreen() {
                             <View style={styles.smartResupplySupplyBlock} testID="trip-builder-smart-resupply-supply-step">
                               <View style={styles.smartResupplyPickerHeader}>
                                 <Text style={styles.smartResupplyPickerTitle}>Groceries / Supplies Along Approach</Text>
-                                <Text style={styles.smartResupplyPickerMeta}>NEXT STOP B</Text>
+                                <Text style={styles.smartResupplyPickerMeta}>BEST + 2 ALTERNATIVES</Text>
                               </View>
                               <Text style={styles.smartResupplyPickerHint}>
-                                ECS keeps supplies before the same remote-entry boundary and uses provider-routed detour evidence when available.
+                                Every normal option is before the same resolved trail entry, within 0.20 miles of the driving approach, and routed through to the entry.
                               </Text>
                               {smartResupplySupplyRequest.status === 'deferred' && liveApproachRouteStatus === 'loading' ? (
                                 <Text style={styles.smartResupplyPickerHint}>Waiting for the canonical approach before searching for supplies...</Text>
@@ -8069,8 +8302,8 @@ export default function ExploreTripBuilderScreen() {
                               {smartResupplySupplyRequest.status === 'empty' && smartResupplySupplyOptions.length === 0 ? (
                                 <Text style={styles.smartResupplyErrorText}>
                                   {liveApproachRouteStatus === 'unavailable'
-                                    ? 'The trailhead-only fallback found no grocery or supply option; route order and detour are unavailable.'
-                                    : 'No viable grocery or supply stop was found before the service-loss boundary. Verify supplies manually.'}
+                                    ? 'The origin-to-entry driving route is unavailable, so ECS cannot verify an on-corridor grocery or supply stop.'
+                                    : 'No on-corridor grocery or supply stop was found within 0.20 miles of the driving approach. ECS did not silently widen the limit.'}
                                 </Text>
                               ) : null}
                               {smartResupplySupplyOptions.length > 0 ? (
@@ -8080,13 +8313,13 @@ export default function ExploreTripBuilderScreen() {
                                   nestedScrollEnabled
                                   showsVerticalScrollIndicator={smartResupplySupplyOptions.length > 3}
                                 >
-                                  {smartResupplySupplyOptions.map((option) => (
+                                  {smartResupplySupplyOptions.map((option, index) => (
                                     <SmartResupplyOptionCard
                                       key={smartResupplyOptionStableKey(option)}
                                       option={option}
                                       selected={selectedSmartSupply ? smartResupplyOptionStableKey(selectedSmartSupply) === smartResupplyOptionStableKey(option) : false}
                                       disabled={smartResupplySupplyRequest.status === 'loading' || smartResupplySupplyRequest.status === 'deferred'}
-                                      markerLabel="B"
+                                      markerLabel={String(option.rank ?? index + 1)}
                                       onSelect={handleSelectSmartSupply}
                                     />
                                   ))}
@@ -8121,7 +8354,10 @@ export default function ExploreTripBuilderScreen() {
                               </TouchableOpacity>
                             </View>
                           ) : null}
-                          {!smartResupplyError && preTrailDraftStatusMessage ? (
+                          {!smartResupplyError &&
+                          smartResupplyFuelRequest.status !== 'empty' &&
+                          smartResupplySupplyRequest.status !== 'empty' &&
+                          preTrailDraftStatusMessage ? (
                             <Text style={styles.smartResupplyErrorText}>{preTrailDraftStatusMessage}</Text>
                           ) : null}
                         </View>

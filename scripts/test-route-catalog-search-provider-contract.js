@@ -41,12 +41,18 @@ const verifiedRoutesSourceVersionMigrationPath = path.join(
   'migrations',
   '20260715143000_verified_routes_source_version_trigger.sql',
 );
+const providerSource = fs.readFileSync(providerContractPath, 'utf8');
 
 const {
   buildSafeRouteCatalogDiagnostic,
+  decodeRouteCatalogPageCursor,
+  encodeRouteCatalogPageCursor,
+  expandRouteCatalogCandidateLimit,
   hasRestrictedRouteCatalogSource,
   normalizeRouteCatalogPagination,
+  partitionRouteCatalogRecordsForPage,
   partitionRestrictedRouteCatalogRecords,
+  routeCatalogCursorFingerprint,
 } = require(providerContractPath);
 
 const restrictedCoordinate = [-120.781234, 38.921234];
@@ -98,6 +104,37 @@ assert.deepStrictEqual(partition.records, [officialRecord]);
 assert.strictEqual(partition.diagnosticRecords.length, 1);
 assert.strictEqual(partition.diagnosticRecords[0].routeId, 'restricted-route-id');
 assert.deepStrictEqual(partition.diagnosticRecords[0].exclusionReasons, ['source_restricted']);
+
+const paginatedOfficials = Array.from({ length: 51 }, (_, index) => ({
+  ...officialRecord,
+  id: `official-route-${String(index).padStart(2, '0')}`,
+  public_id: `official-route-public-${String(index).padStart(2, '0')}`,
+}));
+const interleavedProviderRecords = [
+  ...paginatedOfficials.slice(0, 25),
+  restrictedRecord,
+  ...paginatedOfficials.slice(25),
+];
+const revealablePageOne = partitionRouteCatalogRecordsForPage(interleavedProviderRecords, {
+  offset: 0,
+  pageSize: 50,
+});
+const revealablePageTwo = partitionRouteCatalogRecordsForPage(interleavedProviderRecords, {
+  offset: 50,
+  pageSize: 50,
+});
+assert.strictEqual(revealablePageOne.records.length, 50);
+assert.strictEqual(revealablePageOne.diagnosticRecords.length, 1);
+assert.strictEqual(revealablePageOne.hasMoreRevealable, true);
+assert.strictEqual(revealablePageTwo.records.length, 1);
+assert.strictEqual(revealablePageTwo.records[0].id, paginatedOfficials[50].id);
+assert.strictEqual(
+  new Set([...revealablePageOne.records, ...revealablePageTwo.records].map((record) => record.id)).size,
+  51,
+  'Restricted diagnostics must not consume revealable route slots or create cross-page duplicates.',
+);
+assert.strictEqual(expandRouteCatalogCandidateLimit(51, 50), 102);
+assert.strictEqual(expandRouteCatalogCandidateLimit(1500, 50), 2000);
 
 const serializedProviderBoundary = JSON.stringify({
   records: partition.records,
@@ -191,19 +228,43 @@ assert.deepStrictEqual(
 assert(
   edgeSource.includes("from './providerContract.ts'") &&
     edgeSource.includes("'route_catalog_nearby_route_ids'") &&
+    edgeSource.includes("'route_catalog_nearby_public_route_page'") &&
+    edgeSource.includes("'route_catalog_nearby_public_route_cursor_page'") &&
+    edgeSource.includes('p_offset: Math.max(0, Math.floor(args.offset ?? 0))') &&
+    edgeSource.includes('p_cursor_route_id: args.continuationCursor?.routeId ?? null') &&
+    edgeSource.includes('publicPage: true') &&
+    edgeSource.includes('cursorPage: useCursorPage') &&
+    edgeSource.includes('offset: hasRadiusCriteria ? 0 : offset') &&
     edgeSource.includes("'ROUTE_CATALOG_INVALID_SEARCH_AREA'") &&
+    edgeSource.includes("'ROUTE_CATALOG_INVALID_CONTINUATION'") &&
+    edgeSource.includes("'ROUTE_CATALOG_CONTINUATION_REQUIRED'") &&
+    edgeSource.includes('requestsCursorContract') &&
     edgeSource.includes('spatialIndexFilterApplied: hasRadiusCriteria') &&
     edgeSource.includes('coverageDiagnosticsUnavailable = true') &&
     edgeSource.includes('if (!skipCoverageDiagnostics && limitedRecords.length === 0)') &&
-    edgeSource.includes('partitionRestrictedRouteCatalogRecords(conditionAwareRecords)') &&
+    edgeSource.includes('partitionRouteCatalogRecordsForPage(') &&
+    edgeSource.includes('expandRouteCatalogCandidateLimit(queryLimit, pageSize)') &&
+    edgeSource.includes('revealablePage.hasMoreRevealable') &&
+    edgeSource.includes('offset + nearbyLookupCount') &&
+    edgeSource.includes("'route_catalog_public_cursor_page_v2'") &&
+    edgeSource.includes("'route_catalog_public_page_v1'") &&
+    edgeSource.includes('nearbyRouteRpcUsed: hasRadiusCriteria') &&
+    edgeSource.includes("? 'route_catalog_nearby_public_route_cursor_page'") &&
+    edgeSource.includes('fallbackQueryUsed: !hasRadiusCriteria') &&
+    edgeSource.includes('annotateIndexedRadiusPage(candidates') &&
     edgeSource.includes('diagnosticRecords,') &&
     edgeSource.includes('normalizeRouteCatalogPagination(params)') &&
-    edgeSource.includes('sourceMatchedRecords.slice(offset, windowEnd)') &&
-    edgeSource.includes('radiusFiltered.records.slice(offset, windowEnd)') &&
+    !edgeSource.includes('sourceMatchedRecords.slice(offset, windowEnd)') &&
+    !edgeSource.includes('radiusFiltered.records.slice(offset, windowEnd)') &&
     edgeSource.includes('cleanText(a.id).localeCompare(cleanText(b.id))') &&
     edgeSource.includes('totalMatchedCount: matchedCount') &&
-    edgeSource.includes('nextPage: hasMore ? page + 1 : null'),
-  'The executed provider contract must use radius-first lookup, fail-soft diagnostics, restricted-source partitioning, and bounded pagination.',
+    edgeSource.includes('nextPage: hasMore ? page + 1 : null') &&
+    edgeSource.includes('nextCursor: hasMore ? nextCursor : null') &&
+    edgeSource.includes('await routeCatalogCursorFingerprint([') &&
+    providerSource.includes("crypto.subtle.digest('SHA-256', input)") &&
+    providerSource.includes("{ name: 'HMAC', hash: 'SHA-256' }") &&
+    providerSource.includes("crypto.subtle.verify("),
+  'The executed provider contract must use radius-first lookup, fail-soft diagnostics, restricted-source partitioning, legacy bounds, and criteria-bound signed cursor pagination.',
 );
 
 const sourceVersionMigration = fs.readFileSync(verifiedRoutesSourceVersionMigrationPath, 'utf8');
@@ -214,8 +275,67 @@ assert(
   'Verified route updates must advance the source version used by detail-cache keys and catalog ordering.',
 );
 
-console.log('Route catalog search provider contract checks passed.');
+async function verifyOpaqueCursorContract() {
+  if (!globalThis.crypto?.subtle) {
+    Object.defineProperty(globalThis, 'crypto', {
+      configurable: true,
+      value: require('crypto').webcrypto,
+    });
+  }
+  const criteria = ['privacy-safe-location-bucket', 500, true, 'full_size_4x4'];
+  const fingerprint = await routeCatalogCursorFingerprint(criteria);
+  const repeatedFingerprint = await routeCatalogCursorFingerprint(criteria);
+  const changedFingerprint = await routeCatalogCursorFingerprint([
+    'privacy-safe-location-bucket',
+    499,
+    true,
+    'full_size_4x4',
+  ]);
+  assert.strictEqual(fingerprint, repeatedFingerprint);
+  assert.notStrictEqual(fingerprint, changedFingerprint);
+  assert.match(fingerprint, /^[0-9a-f]{32}$/);
 
-// Keep the radius-first database behavior in the established provider-contract
-// lane so the regression cannot be skipped by running only package scripts.
-require('./test-route-catalog-nearby-route-ids-rpc.js');
+  const routeId = '00000000-0000-4000-8000-000000000051';
+  const signingSecret = 'unit-test-only-cursor-signing-secret';
+  const cursor = await encodeRouteCatalogPageCursor({ routeId }, fingerprint, signingSecret);
+  assert.deepStrictEqual(
+    await decodeRouteCatalogPageCursor(cursor, fingerprint, signingSecret),
+    { routeId },
+  );
+  assert.strictEqual(
+    await decodeRouteCatalogPageCursor(cursor, changedFingerprint, signingSecret),
+    null,
+  );
+  const tamperedCursor = `${cursor.slice(0, -1)}${cursor.endsWith('A') ? 'B' : 'A'}`;
+  assert.strictEqual(
+    await decodeRouteCatalogPageCursor(tamperedCursor, fingerprint, signingSecret),
+    null,
+  );
+
+  const decodedPayload = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+  assert.deepStrictEqual(Object.keys(decodedPayload).sort(), ['f', 'r', 's', 'v']);
+  assert.strictEqual(JSON.stringify(decodedPayload).includes('latitude'), false);
+  assert.strictEqual(JSON.stringify(decodedPayload).includes('longitude'), false);
+  assert.strictEqual(JSON.stringify(decodedPayload).includes('radius'), false);
+  const forgedPayload = {
+    ...decodedPayload,
+    r: '00000000-0000-4000-8000-000000000099',
+  };
+  const forgedCursor = Buffer.from(JSON.stringify(forgedPayload)).toString('base64url');
+  assert.strictEqual(
+    await decodeRouteCatalogPageCursor(forgedCursor, fingerprint, signingSecret),
+    null,
+    'Changing the route continuation without the server-only HMAC must be rejected.',
+  );
+
+  console.log('Route catalog search provider contract checks passed.');
+
+  // Keep the radius-first database behavior in the established provider-contract
+  // lane so the regression cannot be skipped by running only package scripts.
+  require('./test-route-catalog-nearby-route-ids-rpc.js');
+}
+
+verifyOpaqueCursorContract().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

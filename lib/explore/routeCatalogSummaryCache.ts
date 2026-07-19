@@ -1,6 +1,6 @@
 import type { RouteCatalogSummary } from '../routeDataContracts';
 
-export const EXPLORE_CATALOG_SUMMARY_CACHE_KEY = 'explore.catalog.summary.v1';
+export const EXPLORE_CATALOG_SUMMARY_CACHE_KEY = 'explore.catalog.summary.v2';
 export const EXPLORE_CATALOG_SUMMARY_CACHE_TTL_MS = 15 * 60 * 1000;
 export const EXPLORE_CATALOG_SUMMARY_CACHE_STALE_MS = 6 * 60 * 60 * 1000;
 
@@ -44,7 +44,7 @@ function normalizeRegionId(regionId: string): string {
 }
 
 export function exploreCatalogRegionCacheKey(regionId: string): string {
-  return `explore.catalog.region.${normalizeRegionId(regionId)}.v1`;
+  return `explore.catalog.region.${normalizeRegionId(regionId)}.v2`;
 }
 
 export function createRouteCatalogSummaryCache(

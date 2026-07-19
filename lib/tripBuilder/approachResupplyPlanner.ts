@@ -37,11 +37,19 @@ export type ApproachResupplyRouteEvidenceState =
   | 'unavailable';
 
 export type ApproachResupplyRemoteEntrySource =
+  | 'practical_trail_entry'
   | 'known_service_boundary'
   | 'route_metadata'
   | 'remoteness_estimate'
   | 'trailhead_estimate'
   | 'unavailable';
+
+export type ApproachResupplyCorridorTier = 'preferred' | 'acceptable';
+
+export type ApproachResupplyCategoryUsefulness =
+  | 'combined'
+  | 'category_match'
+  | 'convenience_only';
 
 export type ApproachResupplyRemoteEntry = {
   coordinate?: ApproachResupplyCoordinate | null;
@@ -65,6 +73,8 @@ export type ApproachResupplyExclusionReason =
   | 'invalid_coordinate'
   | 'known_closed'
   | 'inaccessible'
+  | 'unverified_routed_access'
+  | 'approach_route_unavailable'
   | 'behind_origin'
   | 'after_remote_entry'
   | 'after_trailhead'
@@ -90,6 +100,7 @@ export type ApproachResupplyCandidate = {
   detourDurationMinutes?: number | null;
   operatingStatus?: ApproachResupplyOperatingStatus | null;
   accessStatus?: 'accessible' | 'inaccessible' | 'unknown' | null;
+  categoryUsefulness?: ApproachResupplyCategoryUsefulness | null;
   warnings?: string[] | null;
 };
 
@@ -108,6 +119,7 @@ export type ApproachResupplyRankedOption = ApproachResupplyCandidate & {
   distanceFromOriginMiles: number | null;
   distanceFromTrailheadMiles: number | null;
   distanceFromApproachRouteMiles: number | null;
+  corridorTier: ApproachResupplyCorridorTier;
   routeDeviationMiles: number | null;
   detourDurationMinutes: number | null;
   approachProgressRatio: number | null;
@@ -122,6 +134,8 @@ export type ApproachResupplyRankedOption = ApproachResupplyCandidate & {
   remoteEntryConfidence: TripBuilderConfidence;
   remoteEntryEstimated: boolean;
   remoteEntryLabel: string;
+  categoryUsefulness: ApproachResupplyCategoryUsefulness;
+  providerDataCompleteness: number;
   exclusionReasons: [];
   warnings: string[];
 };
@@ -131,9 +145,24 @@ export type ApproachResupplyExcludedOption = ApproachResupplyCandidate & {
   warnings: string[];
 };
 
+export type ApproachResupplyDiagnosticRow = {
+  candidateId: string;
+  candidateName: string;
+  category: string;
+  corridorOffsetMiles: number | null;
+  routeProgress: number | null;
+  milesRemainingBeforeTrailEntry: number | null;
+  routedDetourMinutes: number | null;
+  routedDetourMiles: number | null;
+  accepted: boolean;
+  rejectionReason: string | null;
+  finalRank: number | null;
+};
+
 export type ApproachResupplyInventory = {
   ranked: ApproachResupplyRankedOption[];
   excluded: ApproachResupplyExcludedOption[];
+  diagnostics: ApproachResupplyDiagnosticRow[];
   fallbackState: ApproachResupplyFallbackState;
   routeAwareConfidence: TripBuilderConfidence;
   remoteEntry: ApproachResupplyRemoteEntry;
@@ -166,6 +195,14 @@ export type BuildApproachResupplySearchAnchorsArgs = {
   remoteEntry?: ApproachResupplyRemoteEntry | null;
   remoteEntryProgressRatio?: number | null;
   maxAnchors?: number | null;
+  searchRadiusMiles?: number | null;
+};
+
+export type ApproachResupplySearchCoverage = {
+  complete: boolean;
+  totalApproachMiles: number;
+  coveredApproachMiles: number;
+  gaps: { startMile: number; endMile: number }[];
 };
 
 export type RankApproachResupplyOptionsArgs = {
@@ -183,43 +220,20 @@ export type RankApproachResupplyOptionsArgs = {
   remoteEntry?: ApproachResupplyRemoteEntry | null;
   remoteEntryProgressRatio?: number | null;
   remoteEntryBufferMiles?: number | null;
+  requireRoutedAccess?: boolean | null;
 };
 
 export const APPROACH_RESUPPLY_POLICY = Object.freeze({
-  preferredCorridorOffsetMiles: 0.2,
+  preferredCorridorOffsetMiles: 0.1,
   preferredRoutedDetourMiles: 10,
-  maximumCorridorOffsetMiles: 20,
+  maximumCorridorOffsetMiles: 0.2,
   // Backward-compatible name for callers that still supply the routed-detour preference.
   preferredRouteBufferMiles: 10,
   maximumRouteDetourMiles: 20,
   maximumRemoteEntryProjectionOffsetMiles: 5,
   maximumRemoteEntryProgressMismatchRatio: 0.08,
-  trailheadEstimateProgressRatio: 0.985,
+  trailheadEstimateProgressRatio: 1,
   minimumRemoteEntryProgressRatio: 0.55,
-  remoteEntrySearchBackoffRatio: 0.04,
-  remoteEntryRatiosByRemoteness: Object.freeze({
-    high: 0.88,
-    remote: 0.9,
-    watch: 0.93,
-  }),
-  remoteEntryRemotenessThresholds: Object.freeze({
-    high: 8,
-    remote: 7,
-    watch: 6,
-  }),
-  scoreWeights: Object.freeze({
-    progressTowardRemoteEntry: 0.4,
-    routeDetour: 0.3,
-    categoryCoverage: 0.1,
-    providerConfidence: 0.1,
-    operatingEvidence: 0.05,
-    providerScore: 0.05,
-  }),
-  routeEvidenceScoreMultiplier: Object.freeze({
-    provider_route: 1,
-    corridor_offset_estimate: 0.55,
-    unavailable: 0.25,
-  }),
 });
 
 function isValidCoordinate(point: ApproachResupplyCoordinate | null | undefined): point is ApproachResupplyCoordinate {
@@ -311,7 +325,42 @@ function canonicalizeApproachRoute(
       (haversineDistanceMeters(trailheadPoint, first) ?? 0);
     if (reverseCost < forwardCost) oriented = oriented.slice().reverse();
   }
-  return oriented;
+
+  const startProjection = preferredOrigin
+    ? nearestPointOnRoute(preferredOrigin, oriented)
+    : null;
+  if (!isValidCoordinate(trailhead)) return oriented;
+  const entryProjection = nearestPointOnRoute(toRouteCoordinate(trailhead), oriented);
+  if (
+    !entryProjection ||
+    entryProjection.distanceMeters / METERS_PER_MILE >
+      APPROACH_RESUPPLY_POLICY.maximumRemoteEntryProjectionOffsetMiles
+  ) {
+    return [];
+  }
+  if (
+    preferredOrigin &&
+    (!startProjection ||
+      startProjection.distanceMeters / METERS_PER_MILE >
+        APPROACH_RESUPPLY_POLICY.maximumRemoteEntryProjectionOffsetMiles)
+  ) {
+    return [];
+  }
+
+  const startMeters = startProjection?.distanceAlongRouteMeters ?? 0;
+  if (startMeters > entryProjection.distanceAlongRouteMeters + 1) return [];
+  const startPoint = startProjection?.point ?? oriented[0];
+  const startSegmentIndex = startProjection?.segmentIndex ?? 0;
+  const sliced = [startPoint];
+  for (
+    let index = startSegmentIndex + 1;
+    index <= entryProjection.segmentIndex && index < oriented.length;
+    index += 1
+  ) {
+    sliced.push(oriented[index]);
+  }
+  sliced.push(entryProjection.point);
+  return normalizeRouteGeometryCoordinates(sliced);
 }
 
 export function buildApproachResupplyRouteFingerprint(
@@ -427,33 +476,14 @@ export function inferApproachRemoteEntry(input: {
     };
   }
 
-  const remoteness = typeof input.remotenessScore === 'number' && Number.isFinite(input.remotenessScore)
-    ? input.remotenessScore
-    : null;
-  if (remoteness != null && remoteness >= APPROACH_RESUPPLY_POLICY.remoteEntryRemotenessThresholds.watch) {
-    const ratio = remoteness >= APPROACH_RESUPPLY_POLICY.remoteEntryRemotenessThresholds.high
-      ? APPROACH_RESUPPLY_POLICY.remoteEntryRatiosByRemoteness.high
-      : remoteness >= APPROACH_RESUPPLY_POLICY.remoteEntryRemotenessThresholds.remote
-        ? APPROACH_RESUPPLY_POLICY.remoteEntryRatiosByRemoteness.remote
-        : APPROACH_RESUPPLY_POLICY.remoteEntryRatiosByRemoteness.watch;
-    return {
-      coordinate: null,
-      progressRatio: ratio,
-      source: 'remoteness_estimate',
-      confidence: 'low',
-      estimated: true,
-      label: 'Estimated service-loss entry from ECS remoteness',
-    };
-  }
-
   if (input.allowTrailheadEstimate !== false) {
     return {
       coordinate: null,
       progressRatio: APPROACH_RESUPPLY_POLICY.trailheadEstimateProgressRatio,
-      source: 'trailhead_estimate',
-      confidence: 'low',
-      estimated: true,
-      label: 'Estimated service boundary near trailhead',
+      source: 'practical_trail_entry',
+      confidence: 'high',
+      estimated: false,
+      label: 'Resolved practical trail entry',
     };
   }
 
@@ -571,39 +601,29 @@ export function buildApproachResupplySearchAnchors({
   trailhead,
   approachRoute = [],
   fallbackAnchor = null,
-  remoteEntry = null,
-  remoteEntryProgressRatio = null,
+  remoteEntry: _remoteEntry = null,
+  remoteEntryProgressRatio: _remoteEntryProgressRatio = null,
   maxAnchors = 7,
+  searchRadiusMiles = 10,
 }: BuildApproachResupplySearchAnchorsArgs): ApproachResupplySearchAnchor[] {
   const limit = Math.max(2, Math.floor(maxAnchors ?? 7));
   const route = canonicalizeApproachRoute(approachRoute ?? [], origin, trailhead);
   const anchors: ApproachResupplySearchAnchor[] = [];
   const hasTrailhead = !!trailhead && isValidCoordinate(trailhead);
   const approachAnchorLimit = Math.max(1, hasTrailhead ? limit - 1 : limit);
-  const resolvedRemoteEntry = resolveRemoteEntry(route, remoteEntry, remoteEntryProgressRatio);
-  const remoteEntryRatio = resolvedRemoteEntry.progressRatio ?? APPROACH_RESUPPLY_POLICY.trailheadEstimateProgressRatio;
-  const minimumSearchRatio = resolvedRemoteEntry.estimated ? 0.12 : 0;
-  const remoteSearchRatio = Math.round(
-    clampProgress(
-      remoteEntryRatio - APPROACH_RESUPPLY_POLICY.remoteEntrySearchBackoffRatio,
-      minimumSearchRatio,
-      0.96,
-    ) * 100,
-  ) / 100;
 
   if (route.length >= 2) {
-    const knownBoundaryRatios = [
-      remoteSearchRatio,
-      Math.max(0, remoteEntryRatio * 0.6),
-      Math.max(0, remoteEntryRatio * 0.25),
-      0,
-    ].map((ratio) => Math.round(ratio * 100) / 100);
-    const ratios = !resolvedRemoteEntry.estimated && resolvedRemoteEntry.progressRatio != null
-      ? knownBoundaryRatios
-      : approachAnchorLimit <= 3
-        ? [remoteSearchRatio, 0.55, 0.18]
-        : [remoteSearchRatio, 0.74, 0.55, 0.34, 0.18, 0.08, 0.94];
-    Array.from(new Set(ratios))
+    const totalMiles = totalRouteDistanceMeters(route) / METERS_PER_MILE;
+    const radiusMiles = Math.max(0.25, finiteNonNegative(searchRadiusMiles) ?? 10);
+    // Ninety-percent diameter spacing gives neighboring provider windows a
+    // deterministic overlap instead of leaving fixed-ratio gaps on long routes.
+    const spacingMiles = Math.max(0.25, radiusMiles * 1.8);
+    const ratios: number[] = [];
+    for (let distanceFromEntry = spacingMiles; distanceFromEntry < totalMiles; distanceFromEntry += spacingMiles) {
+      ratios.push(clamp01(1 - distanceFromEntry / totalMiles));
+    }
+    ratios.push(0);
+    ratios
       .slice(0, approachAnchorLimit)
       .forEach((ratio) => {
         const coordinate = coordinateAtRouteProgress(route, ratio);
@@ -619,7 +639,59 @@ export function buildApproachResupplySearchAnchors({
   return anchors.slice(0, limit);
 }
 
-export function interleaveApproachSearchResults<T>(buckets: ReadonlyArray<ReadonlyArray<T>>): T[] {
+export function assessApproachResupplySearchCoverage(input: {
+  origin?: ApproachResupplyCoordinate | null;
+  trailhead: ApproachResupplyCoordinate | null;
+  approachRoute?: ApproachResupplyCoordinate[] | null;
+  anchors: ApproachResupplySearchAnchor[];
+  searchRadiusMiles: number;
+}): ApproachResupplySearchCoverage {
+  const route = canonicalizeApproachRoute(input.approachRoute ?? [], input.origin, input.trailhead);
+  const totalApproachMiles = totalRouteDistanceMeters(route) / METERS_PER_MILE;
+  if (route.length < 2 || totalApproachMiles <= 0) {
+    return { complete: false, totalApproachMiles, coveredApproachMiles: 0, gaps: [] };
+  }
+  const radiusMiles = Math.max(0, finiteNonNegative(input.searchRadiusMiles) ?? 0);
+  const intervals = input.anchors
+    .flatMap((anchor) => {
+      const projection = nearestPointOnRoute(toRouteCoordinate(anchor.coordinate), route);
+      if (!projection) return [];
+      const centerMile = projection.distanceAlongRouteMeters / METERS_PER_MILE;
+      return [{
+        startMile: Math.max(0, centerMile - radiusMiles),
+        endMile: Math.min(totalApproachMiles, centerMile + radiusMiles),
+      }];
+    })
+    .sort((left, right) => left.startMile - right.startMile || left.endMile - right.endMile);
+  const merged: { startMile: number; endMile: number }[] = [];
+  intervals.forEach((interval) => {
+    const previous = merged[merged.length - 1];
+    if (!previous || interval.startMile > previous.endMile + 0.01) {
+      merged.push({ ...interval });
+    } else {
+      previous.endMile = Math.max(previous.endMile, interval.endMile);
+    }
+  });
+  const gaps: { startMile: number; endMile: number }[] = [];
+  let cursor = 0;
+  merged.forEach((interval) => {
+    if (interval.startMile > cursor + 0.01) gaps.push({ startMile: cursor, endMile: interval.startMile });
+    cursor = Math.max(cursor, interval.endMile);
+  });
+  if (cursor < totalApproachMiles - 0.01) gaps.push({ startMile: cursor, endMile: totalApproachMiles });
+  const coveredApproachMiles = merged.reduce(
+    (sum, interval) => sum + Math.max(0, interval.endMile - interval.startMile),
+    0,
+  );
+  return {
+    complete: gaps.length === 0,
+    totalApproachMiles,
+    coveredApproachMiles: Math.min(totalApproachMiles, coveredApproachMiles),
+    gaps,
+  };
+}
+
+export function interleaveApproachSearchResults<T>(buckets: readonly (readonly T[])[]): T[] {
   const results: T[] = [];
   const maximumBucketLength = buckets.reduce((maximum, bucket) => Math.max(maximum, bucket.length), 0);
   for (let offset = 0; offset < maximumBucketLength; offset += 1) {
@@ -631,69 +703,122 @@ export function interleaveApproachSearchResults<T>(buckets: ReadonlyArray<Readon
   return results;
 }
 
+export function prioritizeApproachSearchResults<T>(input: {
+  anchors: ApproachResupplySearchAnchor[];
+  buckets: readonly (readonly T[])[];
+  finalApproachProgressRatio?: number;
+  reservedPerFinalAnchor?: number;
+}): T[] {
+  const finalApproachProgressRatio = clamp01(input.finalApproachProgressRatio ?? 0.75);
+  const reservedPerFinalAnchor = Math.max(1, Math.floor(input.reservedPerFinalAnchor ?? 3));
+  const orderedAnchorIndexes = input.anchors
+    .map((anchor, index) => ({ anchor, index }))
+    .sort((left, right) => (
+      (right.anchor.progressRatio ?? Number.NEGATIVE_INFINITY) -
+        (left.anchor.progressRatio ?? Number.NEGATIVE_INFINITY) ||
+      left.index - right.index
+    ));
+  const finalAnchorIndexes = orderedAnchorIndexes
+    .filter(({ anchor }) => (anchor.progressRatio ?? 0) >= finalApproachProgressRatio)
+    .map(({ index }) => index);
+  const reserved = finalAnchorIndexes.flatMap((index) => (
+    (input.buckets[index] ?? []).slice(0, reservedPerFinalAnchor)
+  ));
+  const remainingBuckets = orderedAnchorIndexes.map(({ index }) => (
+    (input.buckets[index] ?? []).slice(finalAnchorIndexes.includes(index) ? reservedPerFinalAnchor : 0)
+  ));
+  return [...reserved, ...interleaveApproachSearchResults(remainingBuckets)];
+}
+
 export function classifyApproachResupplyProviderCoverage(input: {
   expectedAnchorCount: number;
   coveredAnchorCount: number;
   failedAnchorCount: number;
   resultCount: number;
+  routeCoverageComplete?: boolean;
 }): ApproachResupplyProviderCoverageState {
-  const incomplete = input.failedAnchorCount > 0 || input.coveredAnchorCount < input.expectedAnchorCount;
+  const incomplete = input.routeCoverageComplete === false ||
+    input.failedAnchorCount > 0 ||
+    input.coveredAnchorCount < input.expectedAnchorCount;
   if (!incomplete) return 'complete';
   return input.resultCount > 0 ? 'partial_results' : 'retryable_error';
 }
 
-function routeDetourScore(distanceMiles: number | null, maximumDetourMiles: number): number {
-  if (distanceMiles == null) return 0.35;
-  if (maximumDetourMiles <= 0) return distanceMiles <= 0 ? 1 : 0;
-  return clamp01(1 - distanceMiles / maximumDetourMiles);
+function normalizeCategoryUsefulness(
+  candidate: ApproachResupplyCandidate,
+  coverage: ApproachResupplyCategory[],
+): ApproachResupplyCategoryUsefulness {
+  // A fuel stop whose only supply evidence is a convenience store remains the
+  // weaker supply match even though it technically covers both categories.
+  if (candidate.categoryUsefulness === 'convenience_only') return 'convenience_only';
+  if (coverage.includes('fuel') && coverage.includes('food_supplies')) return 'combined';
+  return 'category_match';
 }
 
-function operationalRouteFitBand(
-  routeEvidenceState: ApproachResupplyRouteEvidenceState,
-  routedDetourMiles: number | null,
-  corridorOffsetMiles: number | null,
-  preferredRoutedDetourMiles: number,
-  maximumRoutedDetourMiles: number,
-  preferredCorridorOffsetMiles: number,
-  maximumCorridorOffsetMiles: number,
-): number {
-  const distanceMiles = routeEvidenceState === 'provider_route'
-    ? routedDetourMiles
-    : routeEvidenceState === 'corridor_offset_estimate'
-      ? corridorOffsetMiles
-      : null;
-  const preferredMiles = routeEvidenceState === 'provider_route'
-    ? preferredRoutedDetourMiles
-    : preferredCorridorOffsetMiles;
-  const maximumMiles = routeEvidenceState === 'provider_route'
-    ? maximumRoutedDetourMiles
-    : maximumCorridorOffsetMiles;
-  if (distanceMiles == null) return 2;
-  if (distanceMiles <= preferredMiles) return 0;
-  if (distanceMiles <= maximumMiles) return 1;
-  return 3;
-}
-
-function routeEvidenceBand(state: ApproachResupplyRouteEvidenceState): number {
-  if (state === 'provider_route') return 0;
-  if (state === 'corridor_offset_estimate') return 1;
+function categoryUsefulnessRank(value: ApproachResupplyCategoryUsefulness): number {
+  if (value === 'combined') return 0;
+  if (value === 'category_match') return 1;
   return 2;
 }
 
-function coordinateIntegrityBand(candidate: ApproachResupplyCandidate): number {
-  if (candidate.coordinateConfidence == null) return 0;
-  const score = confidenceScore(candidate.coordinateConfidence);
-  return score >= 0.5 ? 0 : score > 0 ? 1 : 2;
+function providerDataCompleteness(candidate: ApproachResupplyCandidate): number {
+  return [
+    candidate.coordinateConfidence != null,
+    normalizeOperatingStatus(candidate.operatingStatus) !== 'unknown',
+    candidate.accessStatus === 'accessible',
+    finiteNonNegative(candidate.detourDistanceMiles) != null,
+    finiteNonNegative(candidate.detourDurationMinutes) != null,
+  ].filter(Boolean).length;
 }
 
-function operatingEvidenceScore(status: ApproachResupplyOperatingStatus): number {
-  return status === 'open' ? 1 : status === 'unknown' ? 0.45 : 0;
+function finiteSortValue(value: number | null | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value
+    : Number.POSITIVE_INFINITY;
 }
 
-function providerScore(candidate: ApproachResupplyCandidate): number {
-  const score = candidate.score;
-  if (typeof score !== 'number' || !Number.isFinite(score)) return 0.5;
-  return score > 1 ? clamp01(score / 100) : clamp01(score);
+/**
+ * Product-order comparator. Hard eligibility is resolved before this runs;
+ * no blended score, provider popularity, or evidence-source preference may
+ * move an earlier approach stop ahead of the last practical valid stop.
+ */
+export function compareApproachResupplyRankedOptions(
+  left: ApproachResupplyRankedOption,
+  right: ApproachResupplyRankedOption,
+): number {
+  const remainingDelta =
+    finiteSortValue(left.remainingApproachMilesToTrailhead) -
+    finiteSortValue(right.remainingApproachMilesToTrailhead);
+  if (Math.abs(remainingDelta) > 0.000001) return remainingDelta;
+
+  const corridorTierDelta =
+    (left.corridorTier === 'preferred' ? 0 : 1) -
+    (right.corridorTier === 'preferred' ? 0 : 1);
+  if (corridorTierDelta !== 0) return corridorTierDelta;
+
+  const detourTimeDelta =
+    finiteSortValue(left.detourDurationMinutes) -
+    finiteSortValue(right.detourDurationMinutes);
+  if (Math.abs(detourTimeDelta) > 0.000001) return detourTimeDelta;
+
+  const detourDistanceDelta =
+    finiteSortValue(left.routeDeviationMiles) -
+    finiteSortValue(right.routeDeviationMiles);
+  if (Math.abs(detourDistanceDelta) > 0.000001) return detourDistanceDelta;
+
+  const usefulnessDelta =
+    categoryUsefulnessRank(left.categoryUsefulness) -
+    categoryUsefulnessRank(right.categoryUsefulness);
+  if (usefulnessDelta !== 0) return usefulnessDelta;
+
+  if (left.providerDataCompleteness !== right.providerDataCompleteness) {
+    return right.providerDataCompleteness - left.providerDataCompleteness;
+  }
+  const confidenceDelta =
+    confidenceScore(right.coordinateConfidence ?? right.confidence) -
+    confidenceScore(left.coordinateConfidence ?? left.confidence);
+  if (Math.abs(confidenceDelta) > 0.000001) return confidenceDelta;
+  return left.id.localeCompare(right.id);
 }
 
 export function buildApproachResupplyRerankEvidence(input: {
@@ -712,11 +837,11 @@ export function buildApproachResupplyRerankEvidence(input: {
 }
 
 export function mergeApproachResupplySafetyEvidence(
-  evidence: Array<{
+  evidence: {
     accessStatus?: ApproachResupplyCandidate['accessStatus'];
     operatingStatus?: ApproachResupplyCandidate['operatingStatus'];
     coordinateConfidence?: ApproachResupplyCandidate['coordinateConfidence'];
-  }>,
+  }[],
 ): {
   accessStatus: 'accessible' | 'inaccessible' | 'unknown';
   operatingStatus: ApproachResupplyOperatingStatus;
@@ -764,12 +889,12 @@ export function mergeApproachResupplySafetyEvidence(
 }
 
 export function mergeApproachResupplyRouteEvidence(
-  evidence: Array<{
+  evidence: {
     routeEvidenceState: ApproachResupplyRouteEvidenceState;
     routeDeviationMiles: number | null;
     distanceFromApproachRouteMiles: number | null;
     detourDurationMinutes: number | null;
-  }>,
+  }[],
 ): {
   routeEvidenceState: ApproachResupplyRouteEvidenceState;
   routeDeviationMiles: number | null;
@@ -812,6 +937,7 @@ export function evaluateApproachResupplyOptions({
   preferredCorridorOffsetMiles = APPROACH_RESUPPLY_POLICY.preferredCorridorOffsetMiles,
   remoteEntry = null,
   remoteEntryProgressRatio = null,
+  requireRoutedAccess = true,
 }: RankApproachResupplyOptionsArgs): ApproachResupplyInventory {
   const route = canonicalizeApproachRoute(approachRoute ?? [], origin, trailhead);
   const hasApproachRoute = isValidCoordinate(origin) && route.length >= 2;
@@ -838,6 +964,7 @@ export function evaluateApproachResupplyOptions({
   );
   const excluded: ApproachResupplyExcludedOption[] = [];
   const evaluated: ApproachResupplyRankedOption[] = [];
+  const diagnostics: ApproachResupplyDiagnosticRow[] = [];
 
   for (const candidate of candidates) {
     const coverage = normalizeCategoryCoverage(candidate);
@@ -848,9 +975,23 @@ export function evaluateApproachResupplyOptions({
     const operatingStatus = normalizeOperatingStatus(candidate.operatingStatus);
     if (operatingStatus === 'closed' || operatingStatus === 'temporarily_closed') exclusionReasons.push('known_closed');
     if (candidate.accessStatus === 'inaccessible') exclusionReasons.push('inaccessible');
+    if (!hasApproachRoute) exclusionReasons.push('approach_route_unavailable');
 
     if (!isValidCoordinate(candidate.coordinate)) {
       excluded.push({ ...candidate, exclusionReasons, warnings });
+      diagnostics.push({
+        candidateId: candidate.id,
+        candidateName: candidate.title,
+        category: coverage.join(' + ') || candidate.category,
+        corridorOffsetMiles: null,
+        routeProgress: null,
+        milesRemainingBeforeTrailEntry: null,
+        routedDetourMinutes: finiteNonNegative(candidate.detourDurationMinutes),
+        routedDetourMiles: finiteNonNegative(candidate.detourDistanceMiles),
+        accepted: false,
+        rejectionReason: Array.from(new Set(exclusionReasons)).join(', '),
+        finalRank: null,
+      });
       continue;
     }
 
@@ -860,24 +1001,26 @@ export function evaluateApproachResupplyOptions({
     const endpointPosition = projection
       ? endpointRoutePosition(route, candidate.coordinate, projection)
       : 'on_approach';
-    const distanceFromOriginMiles = roundTenths(
-      projection ? projection.distanceAlongRouteMeters / METERS_PER_MILE : null,
-    );
-    const approachProgressRatio = roundThousandths(
-      projection && totalMeters > 0 ? projection.distanceAlongRouteMeters / totalMeters : null,
-    );
+    const distanceFromOriginMiles = projection
+      ? projection.distanceAlongRouteMeters / METERS_PER_MILE
+      : null;
+    const approachProgressRatio = projection && totalMeters > 0
+      ? projection.distanceAlongRouteMeters / totalMeters
+      : null;
     const distanceFromTrailheadMiles = roundTenths(
       finiteNonNegative(candidate.distanceFromTrailheadMiles) ??
       (isValidCoordinate(trailhead)
         ? (haversineDistanceMeters(toRouteCoordinate(trailhead), toRouteCoordinate(candidate.coordinate)) ?? 0) / METERS_PER_MILE
         : null),
     );
-    const distanceFromApproachRouteMiles = roundTenths(
-      finiteNonNegative(candidate.distanceFromApproachRouteMiles) ??
-      (projection ? projection.distanceMeters / METERS_PER_MILE : null),
-    );
+    // The geometric projection is authoritative for corridor eligibility. A
+    // provider's routed detour is a different measurement and cannot replace it.
+    const distanceFromApproachRouteMiles = projection
+      ? projection.distanceMeters / METERS_PER_MILE
+      : finiteNonNegative(candidate.distanceFromApproachRouteMiles);
     const providerDetour = finiteNonNegative(candidate.detourDistanceMiles);
-    const routeDeviationMiles = roundTenths(providerDetour ?? distanceFromApproachRouteMiles);
+    const routeDeviationMiles = providerDetour;
+    const detourDurationMinutes = finiteNonNegative(candidate.detourDurationMinutes);
     const routeEvidenceState: ApproachResupplyRouteEvidenceState = providerDetour != null
       ? 'provider_route'
       : projection
@@ -888,104 +1031,101 @@ export function evaluateApproachResupplyOptions({
       : routeEvidenceState === 'corridor_offset_estimate'
         ? 'low'
         : 'unknown';
-    const remainingApproachMilesToTrailhead = roundTenths(
-      projection ? Math.max(0, totalMeters - projection.distanceAlongRouteMeters) / METERS_PER_MILE : null,
-    );
+    const remainingApproachMilesToTrailhead = projection
+      ? Math.max(0, totalMeters - projection.distanceAlongRouteMeters) / METERS_PER_MILE
+      : null;
     const rawDistanceBeforeRemoteEntryMiles = projection && remoteEntryMeters != null
       ? (remoteEntryMeters - projection.distanceAlongRouteMeters) / METERS_PER_MILE
       : null;
-    const distanceBeforeRemoteEntryMiles = roundTenths(rawDistanceBeforeRemoteEntryMiles);
-    const afterRemoteEntry = rawDistanceBeforeRemoteEntryMiles != null && rawDistanceBeforeRemoteEntryMiles <= 0;
+    const distanceBeforeRemoteEntryMiles = rawDistanceBeforeRemoteEntryMiles;
     let routePosition: ApproachResupplyRoutePosition = fallbackState === 'trailhead_only'
       ? 'unknown'
       : endpointPosition;
-    if (routePosition === 'on_approach' && afterRemoteEntry) routePosition = 'after_remote_entry';
     if (candidate.beforeTrailEntry === false) routePosition = 'after_trailhead';
     const beforeTrailEntry = fallbackState === 'trailhead_only'
       ? candidate.beforeTrailEntry ?? null
       : routePosition !== 'after_trailhead';
     const beforeRemoteEntry = fallbackState === 'trailhead_only'
       ? null
-      : routePosition !== 'after_remote_entry' && routePosition !== 'after_trailhead';
+      : rawDistanceBeforeRemoteEntryMiles == null
+        ? routePosition !== 'after_trailhead'
+        : rawDistanceBeforeRemoteEntryMiles >= 0 && routePosition !== 'after_trailhead';
 
     if (routePosition === 'behind_origin') exclusionReasons.push('behind_origin');
-    if (routePosition === 'after_remote_entry') exclusionReasons.push('after_remote_entry');
     if (routePosition === 'after_trailhead') exclusionReasons.push('after_trailhead');
-    if (providerDetour != null && providerDetour > maximumRoutedDetour) {
-      exclusionReasons.push('excessive_detour');
-    } else if (
-      providerDetour == null &&
-      distanceFromApproachRouteMiles != null &&
+    if (
+      distanceFromApproachRouteMiles == null ||
       distanceFromApproachRouteMiles > maximumCorridorOffset
     ) {
       exclusionReasons.push('excessive_corridor_offset');
     }
+    if (providerDetour != null && providerDetour > maximumRoutedDetour) exclusionReasons.push('excessive_detour');
+    const hasRoutedAccessEvidence = candidate.accessStatus === 'accessible' || providerDetour != null;
+    if (requireRoutedAccess !== false && !hasRoutedAccessEvidence) {
+      exclusionReasons.push('unverified_routed_access');
+    }
 
     if (fallbackState === 'trailhead_only') {
-      warnings.push('Approach route unavailable; ECS used trailhead proximity only. Route order, accessibility, and detour remain unknown.');
+      warnings.push('The origin-to-entry driving approach is unavailable; this candidate cannot enter normal Smart Resupply results.');
     } else {
-      if (resolvedRemoteEntry.estimated) warnings.push(`${resolvedRemoteEntry.label}; verify service coverage before relying on this boundary.`);
       if (resolvedRemoteEntry.conflictReason === 'coordinate_progress_mismatch') {
-        warnings.push(`${resolvedRemoteEntry.label}; verify the service-loss boundary before relying on this recommendation.`);
+        warnings.push(`${resolvedRemoteEntry.label}; verify the practical entry boundary before relying on this recommendation.`);
       }
-      if (routeEvidenceState === 'corridor_offset_estimate') {
-        warnings.push('Approach offset is geometric only; routed detour time and road access remain unverified.');
-        if (
-          distanceFromApproachRouteMiles != null &&
-          distanceFromApproachRouteMiles > preferredCorridorOffset &&
-          distanceFromApproachRouteMiles <= maximumCorridorOffset
-        ) {
-          warnings.push(
-            `Candidate is outside the preferred ${preferredCorridorOffset}-mile geometric approach corridor; keep it as a broader fallback and verify road access.`,
-          );
-        }
-      }
-      if (
-        routeEvidenceState === 'provider_route' &&
-        providerDetour != null &&
-        providerDetour > preferredRoutedDetour &&
-        providerDetour <= maximumRoutedDetour
-      ) {
+      if (distanceFromApproachRouteMiles != null && distanceFromApproachRouteMiles > preferredCorridorOffset) {
         warnings.push(
-          `Provider-routed detour exceeds the preferred ${preferredRoutedDetour}-mile approach detour; keep it as a broader fallback and verify before selecting.`,
+          `Candidate is in the acceptable ${preferredCorridorOffset.toFixed(2)}-${maximumCorridorOffset.toFixed(2)} mile corridor tier.`,
+        );
+      }
+      if (routeEvidenceState !== 'provider_route') {
+        warnings.push('Actual routed detour distance and time are unavailable.');
+      } else if (providerDetour != null && providerDetour > preferredRoutedDetour) {
+        warnings.push(
+          `Actual routed detour exceeds the preferred ${preferredRoutedDetour}-mile detour.`,
         );
       }
     }
     if (operatingStatus === 'unknown') warnings.push('Hours and current operating availability are unknown; verify before departure.');
 
     if (exclusionReasons.length > 0) {
-      excluded.push({ ...candidate, exclusionReasons: Array.from(new Set(exclusionReasons)), warnings: Array.from(new Set(warnings)) });
+      const uniqueReasons = Array.from(new Set(exclusionReasons));
+      excluded.push({ ...candidate, exclusionReasons: uniqueReasons, warnings: Array.from(new Set(warnings)) });
+      diagnostics.push({
+        candidateId: candidate.id,
+        candidateName: candidate.title,
+        category: coverage.join(' + ') || candidate.category,
+        corridorOffsetMiles: distanceFromApproachRouteMiles,
+        routeProgress: approachProgressRatio,
+        milesRemainingBeforeTrailEntry: remainingApproachMilesToTrailhead,
+        routedDetourMinutes: detourDurationMinutes,
+        routedDetourMiles: providerDetour,
+        accepted: false,
+        rejectionReason: uniqueReasons.join(', '),
+        finalRank: null,
+      });
       continue;
     }
 
-    const progressTowardRemoteEntry = projection && remoteEntryMeters && remoteEntryMeters > 0
-      ? clamp01(projection.distanceAlongRouteMeters / remoteEntryMeters)
-      : distanceFromTrailheadMiles == null
-        ? 0.35
-        : clamp01(1 - distanceFromTrailheadMiles / 75);
-    const weights = APPROACH_RESUPPLY_POLICY.scoreWeights;
-    const score =
-      progressTowardRemoteEntry * weights.progressTowardRemoteEntry +
-      routeDetourScore(
-        routeEvidenceState === 'provider_route' ? providerDetour : distanceFromApproachRouteMiles,
-        routeEvidenceState === 'provider_route' ? maximumRoutedDetour : maximumCorridorOffset,
-      ) *
-        APPROACH_RESUPPLY_POLICY.routeEvidenceScoreMultiplier[routeEvidenceState] *
-        weights.routeDetour +
-      clamp01(coverage.length / 2) * weights.categoryCoverage +
-      confidenceScore(candidate.confidence) * weights.providerConfidence +
-      operatingEvidenceScore(operatingStatus) * weights.operatingEvidence +
-      providerScore(candidate) * weights.providerScore;
+    const progressTowardTrailEntry = projection && totalMeters > 0
+      ? clamp01(projection.distanceAlongRouteMeters / totalMeters)
+      : 0;
+    const corridorTier: ApproachResupplyCorridorTier =
+      (distanceFromApproachRouteMiles ?? Number.POSITIVE_INFINITY) <= preferredCorridorOffset
+        ? 'preferred'
+        : 'acceptable';
+    const categoryUsefulness = normalizeCategoryUsefulness(candidate, coverage);
     evaluated.push({
       ...candidate,
       categoryCoverage: coverage,
+      categoryUsefulness,
+      providerDataCompleteness: providerDataCompleteness(candidate),
       operatingStatus,
       fallbackState,
       distanceFromOriginMiles,
       distanceFromTrailheadMiles,
       distanceFromApproachRouteMiles,
+      corridorTier,
       routeDeviationMiles,
-      detourDurationMinutes: roundTenths(finiteNonNegative(candidate.detourDurationMinutes)),
+      detourDurationMinutes,
       approachProgressRatio,
       remainingApproachMilesToTrailhead,
       distanceBeforeRemoteEntryMiles,
@@ -1000,64 +1140,39 @@ export function evaluateApproachResupplyOptions({
       remoteEntryLabel: resolvedRemoteEntry.label,
       exclusionReasons: [],
       warnings: Array.from(new Set(warnings)),
-      approachScore: Math.round(clamp01(score) * 1000) / 1000,
+      // Retained for backward-compatible evidence display only. Ranking uses
+      // compareApproachResupplyRankedOptions and never this value.
+      approachScore: roundThousandths(progressTowardTrailEntry) ?? 0,
       rank: 0,
+    });
+    diagnostics.push({
+      candidateId: candidate.id,
+      candidateName: candidate.title,
+      category: coverage.join(' + ') || candidate.category,
+      corridorOffsetMiles: distanceFromApproachRouteMiles,
+      routeProgress: approachProgressRatio,
+      milesRemainingBeforeTrailEntry: remainingApproachMilesToTrailhead,
+      routedDetourMinutes: detourDurationMinutes,
+      routedDetourMiles: providerDetour,
+      accepted: true,
+      rejectionReason: null,
+      finalRank: null,
     });
   }
 
-  const ranked = evaluated
-    .sort((left, right) => {
-      const fallbackDelta = (left.fallbackState === 'approach_route' ? 0 : 1) -
-        (right.fallbackState === 'approach_route' ? 0 : 1);
-      if (fallbackDelta !== 0) return fallbackDelta;
-      const bandDelta = operationalRouteFitBand(
-        left.routeEvidenceState,
-        left.routeEvidenceState === 'provider_route' ? left.routeDeviationMiles : null,
-        left.distanceFromApproachRouteMiles,
-        preferredRoutedDetour,
-        maximumRoutedDetour,
-        preferredCorridorOffset,
-        maximumCorridorOffset,
-      ) - operationalRouteFitBand(
-        right.routeEvidenceState,
-        right.routeEvidenceState === 'provider_route' ? right.routeDeviationMiles : null,
-        right.distanceFromApproachRouteMiles,
-        preferredRoutedDetour,
-        maximumRoutedDetour,
-        preferredCorridorOffset,
-        maximumCorridorOffset,
-      );
-      if (bandDelta !== 0) return bandDelta;
-      const evidenceDelta = routeEvidenceBand(left.routeEvidenceState) - routeEvidenceBand(right.routeEvidenceState);
-      if (evidenceDelta !== 0) return evidenceDelta;
-      const coordinateConfidenceDelta = coordinateIntegrityBand(left) - coordinateIntegrityBand(right);
-      if (coordinateConfidenceDelta !== 0) return coordinateConfidenceDelta;
-      const remoteDelta =
-        (left.distanceBeforeRemoteEntryMiles ?? left.distanceFromTrailheadMiles ?? Number.POSITIVE_INFINITY) -
-        (right.distanceBeforeRemoteEntryMiles ?? right.distanceFromTrailheadMiles ?? Number.POSITIVE_INFINITY);
-      if (Math.abs(remoteDelta) > 0.01) return remoteDelta;
-      const detourDelta = (left.routeDeviationMiles ?? Number.POSITIVE_INFINITY) -
-        (right.routeDeviationMiles ?? Number.POSITIVE_INFINITY);
-      if (Math.abs(detourDelta) > 0.01) return detourDelta;
-      const durationDelta = (left.detourDurationMinutes ?? Number.POSITIVE_INFINITY) -
-        (right.detourDurationMinutes ?? Number.POSITIVE_INFINITY);
-      if (Math.abs(durationDelta) > 0.01) return durationDelta;
-      if (left.categoryCoverage.length !== right.categoryCoverage.length) {
-        return right.categoryCoverage.length - left.categoryCoverage.length;
-      }
-      const operatingDelta = operatingEvidenceScore(right.operatingStatus) - operatingEvidenceScore(left.operatingStatus);
-      if (Math.abs(operatingDelta) > 0.001) return operatingDelta;
-      const confidenceDelta = confidenceScore(right.coordinateConfidence ?? right.confidence) -
-        confidenceScore(left.coordinateConfidence ?? left.confidence);
-      if (Math.abs(confidenceDelta) > 0.001) return confidenceDelta;
-      return left.id.localeCompare(right.id);
-    })
-    .slice(0, Math.max(0, limit ?? 5))
+  const allRanked = evaluated
+    .sort(compareApproachResupplyRankedOptions)
     .map((option, index) => ({ ...option, rank: index + 1 }));
+  const rankById = new Map(allRanked.map((option) => [option.id, option.rank]));
+  const ranked = allRanked.slice(0, Math.max(0, limit ?? 5));
 
   return {
     ranked,
     excluded,
+    diagnostics: diagnostics.map((row) => ({
+      ...row,
+      finalRank: row.accepted ? rankById.get(row.candidateId) ?? null : null,
+    })),
     fallbackState,
     routeAwareConfidence,
     remoteEntry: resolvedRemoteEntry,

@@ -14,6 +14,7 @@ import type {
   ECSTrailPackRouteType,
   ECSTrailPackSource,
 } from './trailPacks';
+import { normalizeECSRouteCatalogRequestId } from './routeCatalogRequestCorrelation';
 import { getRouteCatalogSourcePublishingBlocker } from './routeCatalogSourceRestrictions';
 import { classifyRouteCatalogTripType } from './routeCatalogDiscovery';
 
@@ -141,6 +142,11 @@ export type RouteCatalogCoverageState = {
 };
 
 export type RouteCatalogSearchMeta = {
+  ecsRequestId?: string;
+  paginationContractVersion?: string;
+  nearbyRouteRpcUsed?: boolean;
+  nearbyRouteRpc?: string | null;
+  fallbackQueryUsed?: boolean;
   candidateCount: number;
   radiusMatchedCount: number;
   geometryMatchedCount?: number;
@@ -156,6 +162,7 @@ export type RouteCatalogSearchMeta = {
   offset: number;
   hasMore: boolean;
   nextPage: number | null;
+  nextCursor?: string | null;
   totalMatchedCount: number;
   totalMatchedCountBounded: boolean;
   clientInvalidRecordCount?: number;
@@ -1307,7 +1314,25 @@ function normalizeRouteCatalogSearchMeta(value: unknown): RouteCatalogSearchMeta
   const pageSize = record ? readNumber(record, 'pageSize', 'page_size') ?? 0 : 0;
   const offset = record ? readNumber(record, 'offset') ?? Math.max(0, (page - 1) * pageSize) : 0;
   const nextPageValue = record ? readNumber(record, 'nextPage', 'next_page') : undefined;
+  const nextCursorValue = record
+    ? readString(record, 'nextCursor', 'next_cursor') ?? null
+    : null;
   return {
+    ecsRequestId: normalizeECSRouteCatalogRequestId(
+      record?.ecsRequestId ?? record?.ecs_request_id,
+    ) ?? undefined,
+    paginationContractVersion: record
+      ? readString(record, 'paginationContractVersion', 'pagination_contract_version')
+      : undefined,
+    nearbyRouteRpcUsed: record
+      ? readBoolean(record, 'nearbyRouteRpcUsed', 'nearby_route_rpc_used')
+      : undefined,
+    nearbyRouteRpc: record
+      ? readString(record, 'nearbyRouteRpc', 'nearby_route_rpc') ?? null
+      : null,
+    fallbackQueryUsed: record
+      ? readBoolean(record, 'fallbackQueryUsed', 'fallback_query_used')
+      : undefined,
     candidateCount: record ? readNumber(record, 'candidateCount', 'candidate_count') ?? 0 : 0,
     radiusMatchedCount,
     geometryMatchedCount: record ? readNumber(record, 'geometryMatchedCount', 'geometry_matched_count') : undefined,
@@ -1326,6 +1351,7 @@ function normalizeRouteCatalogSearchMeta(value: unknown): RouteCatalogSearchMeta
     offset: Math.max(0, Math.floor(offset)),
     hasMore: record ? readBoolean(record, 'hasMore', 'has_more') ?? false : false,
     nextPage: nextPageValue != null && nextPageValue >= 1 ? Math.floor(nextPageValue) : null,
+    nextCursor: nextCursorValue,
     totalMatchedCount: record
       ? readNumber(record, 'totalMatchedCount', 'total_matched_count') ?? radiusMatchedCount
       : 0,

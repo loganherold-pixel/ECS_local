@@ -1,5 +1,5 @@
 import {
-  MIN_DISCOVERY_ROUTE_MILES,
+  MIN_GUIDANCE_READY_ROUTE_MILES,
   type ExpeditionOpportunity,
 } from '../discoverEngine';
 import {
@@ -288,7 +288,7 @@ function exclusionReasonCopy(code: ExploreGuidanceReadyExclusionCode): string {
     case 'invalid_geometry':
       return 'Active guidance requires continuous route geometry.';
     case 'too_short':
-      return `Route must be at least ${MIN_DISCOVERY_ROUTE_MILES} miles for Explorer guidance-ready cards.`;
+      return `Route must be at least ${MIN_GUIDANCE_READY_ROUTE_MILES} miles for Explorer guidance-ready cards.`;
     case 'access_unverified':
     case 'source_restricted':
     case 'moderation_pending':
@@ -487,7 +487,7 @@ function collectExploreGuidanceReadyExclusions(
   ].join(' ').toLowerCase();
 
   const distanceMiles = finiteNumber(route.distanceMiles);
-  if (distanceMiles == null || distanceMiles < MIN_DISCOVERY_ROUTE_MILES) exclude('too_short');
+  if (distanceMiles == null || distanceMiles < MIN_GUIDANCE_READY_ROUTE_MILES) exclude('too_short');
 
   const routeStatuses = normalizedTokens(
     routeRecord.routeTypeStatus,
@@ -828,7 +828,7 @@ function availabilityDecision(
 
 function isExploreDiscoveryBlockingReason(
   route: ExpeditionOpportunity,
-  guidanceReason: string | null,
+  geometryUnavailableReason: string | null,
   reason: ExploreGuidanceReadyExclusionReason,
 ): boolean {
   // The five-mile threshold is a guidance-card policy, not evidence that a
@@ -838,17 +838,26 @@ function isExploreDiscoveryBlockingReason(
   if (reason.code === 'too_short') return false;
   return !(
     reason.code === 'missing_geometry' &&
-    getExploreRouteDetailState(route, guidanceReason) === 'deferred'
+    getExploreRouteDetailState(route, geometryUnavailableReason) === 'deferred'
   );
+}
+
+function guidanceGeometryUnavailableReason(
+  guidance: ExploreReadyRouteEligibilityResult,
+): string | null {
+  return guidance.exclusionReasons.find(
+    (reason) => reason.code === 'missing_geometry' || reason.code === 'invalid_geometry',
+  )?.reason ?? null;
 }
 
 export function classifyExploreRouteAvailability(
   route: ExpeditionOpportunity,
 ): ExploreRouteAvailability {
   const guidance = defaultExploreReadyRouteEligibility(route);
-  const detailState = getExploreRouteDetailState(route, guidance.reason);
+  const geometryUnavailableReason = guidanceGeometryUnavailableReason(guidance);
+  const detailState = getExploreRouteDetailState(route, geometryUnavailableReason);
   const discoverabilityReasons = guidance.exclusionReasons.filter(
-    (reason) => isExploreDiscoveryBlockingReason(route, guidance.reason, reason),
+    (reason) => isExploreDiscoveryBlockingReason(route, geometryUnavailableReason, reason),
   );
   const tripBuilderEligibility = getExploreTripBuilderEligibility(route);
   const tripBuilderReasons: Array<{
@@ -1124,7 +1133,7 @@ function buildForRefinement(
             guidanceEligibility.exclusionReasons.filter(
               (reason) => isExploreDiscoveryBlockingReason(
                 route,
-                guidanceEligibility.reason,
+                guidanceGeometryUnavailableReason(guidanceEligibility),
                 reason,
               ),
             ),
@@ -1146,8 +1155,43 @@ function buildForRefinement(
   const normalized = normalizeExploreWizardRouteCandidates(eligibleInput);
   const routeSourceKey = (routeId: unknown, sourceKind: ExploreWizardRouteSourceKind) =>
     `${sourceKind}:${String(routeId)}`;
+  const sourceRouteByKey = new Map<string, ExpeditionOpportunity>();
+  eligibleRoutes.forEach(({ route, sourceKind }) => {
+    const key = routeSourceKey(route.id, sourceKind);
+    if (!sourceRouteByKey.has(key)) sourceRouteByKey.set(key, route);
+  });
+  const projectedCandidates = normalized.candidates.map((candidate) => {
+    const eligibilityRoute = sourceRouteByKey.get(
+      routeSourceKey(candidate.route.id, candidate.sourceKind),
+    ) ?? candidate.route;
+    const guidanceEligibility = applySourceAccessRequirement(
+      eligibilityRoute,
+      candidate.sourceKind,
+      getEligibility(eligibilityRoute),
+    );
+    const tripBuilderEligibility = getExploreTripBuilderEligibility(
+      candidate.route,
+      candidate.navigationPayload,
+    );
+    return {
+      ...candidate,
+      tripBuilderEligible: tripBuilderEligibility.eligible,
+      guidanceReady: guidanceEligibility.eligible,
+      detailState: getExploreRouteDetailState(
+        candidate.route,
+        guidanceGeometryUnavailableReason(guidanceEligibility),
+      ),
+      tripBuilderUnavailableReason: tripBuilderEligibility.reason,
+      guidanceUnavailableReason: guidanceEligibility.reason,
+      unavailableReason: guidanceEligibility.reason,
+    };
+  });
+  const projected = {
+    ...normalized,
+    candidates: projectedCandidates,
+  };
   const retainedRouteCounts = new Map<string, number>();
-  normalized.candidates.forEach((candidate) => {
+  projected.candidates.forEach((candidate) => {
     const key = routeSourceKey(candidate.route.id, candidate.sourceKind);
     retainedRouteCounts.set(key, (retainedRouteCounts.get(key) ?? 0) + 1);
   });
@@ -1179,7 +1223,7 @@ function buildForRefinement(
   const combinedHiddenRoutes = [...hiddenRoutes, ...normalized.hiddenRoutes];
 
   return {
-    ...normalized,
+    ...projected,
     hiddenRoutes: combinedHiddenRoutes,
     hiddenTotal: combinedHiddenRoutes.length,
     hiddenBySource: combinedHiddenBySource,

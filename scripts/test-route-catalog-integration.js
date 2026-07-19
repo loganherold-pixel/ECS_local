@@ -235,12 +235,20 @@ assert(
 );
 assert(
   searchFunction.includes("from './providerContract.ts'") &&
-    searchFunction.includes('partitionRestrictedRouteCatalogRecords(conditionAwareRecords)') &&
+    searchFunction.includes('partitionRouteCatalogRecordsForPage(') &&
+    searchFunction.includes('expandRouteCatalogCandidateLimit(queryLimit, pageSize)') &&
+    searchFunction.includes('revealablePage.hasMoreRevealable') &&
     searchFunction.includes('diagnosticRecords,') &&
     searchFunction.includes('normalizeRouteCatalogPagination(params)') &&
-    searchFunction.includes('sourceMatchedRecords.slice(offset, windowEnd)') &&
-    searchFunction.includes('radiusFiltered.records.slice(offset, windowEnd)'),
-  'Route catalog search should exclude restricted geometry at the Edge boundary and apply bounded stable pagination.',
+    searchFunction.includes("'route_catalog_nearby_public_route_cursor_page'") &&
+    searchFunction.includes("'route_catalog_public_cursor_page_v2'") &&
+    searchFunction.includes('p_cursor_route_id: args.continuationCursor?.routeId ?? null') &&
+    searchFunction.includes('nextCursor: hasMore ? nextCursor : null') &&
+    searchFunction.includes("safeErrorCode: 'ROUTE_CATALOG_INVALID_CONTINUATION'") &&
+    searchFunction.includes("safeErrorCode: 'ROUTE_CATALOG_CONTINUATION_REQUIRED'") &&
+    !searchFunction.includes('sourceMatchedRecords.slice(offset, windowEnd)') &&
+    !searchFunction.includes('radiusFiltered.records.slice(offset, windowEnd)'),
+  'Route catalog search should exclude restricted geometry before assigning bounded revealable-route pagination slots.',
 );
 
 assert(
@@ -264,6 +272,12 @@ assert(
     liveCatalog.includes('includeGeometry: false') &&
     liveCatalog.includes('const includePreviewGeometry = criteria.includePreviewGeometry === true') &&
     liveCatalog.includes('includePreviewGeometry,') &&
+    liveCatalog.includes('const continuationCursor = cleanText(criteria.continuationCursor)') &&
+    liveCatalog.includes('...(continuationCursor ? { continuationCursor } : {})') &&
+    liveCatalog.includes('paginationContractVersion: ROUTE_CATALOG_PAGINATION_CONTRACT_VERSION') &&
+    liveCatalog.includes("searchMeta.nearbyRouteRpc !== 'route_catalog_nearby_public_route_cursor_page'") &&
+    liveCatalog.includes('delete family.continuationCursor') &&
+    liveCatalog.includes('nextCursor: page.nextCursor ?? null') &&
     liveCatalog.includes('includeCoverageDiagnostics: false') &&
     liveCatalog.includes("expectedKnownRoutes: criteria.expectedKnownRoutes ?? ['rubicon']") &&
     liveCatalog.includes('normalizeRouteCatalogSearchResponse') &&

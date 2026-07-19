@@ -10,6 +10,8 @@ const catalogPath = path.join(root, 'lib', 'explore', 'routeCatalog.ts');
 const readyInventoryPath = path.join(root, 'lib', 'explore', 'exploreGuidanceReadyInventory.ts');
 
 global.__DEV__ = false;
+process.env.EXPO_PUBLIC_SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? 'https://example.supabase.co';
+process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? 'test-anon-key';
 
 const discover = fs.readFileSync(discoverPath, 'utf8');
 const catalog = fs.readFileSync(catalogPath, 'utf8');
@@ -82,7 +84,7 @@ assert(
   discover.includes('Available Routes') &&
     discover.includes('canonicalExplorePlanningRoutes') &&
     discover.includes('const mapInventory = buildExploreGuidanceReadyInventory') &&
-    readyInventory.includes('MIN_DISCOVERY_ROUTE_MILES'),
+    readyInventory.includes('MIN_GUIDANCE_READY_ROUTE_MILES'),
   'Explore should expose a Guidance Ready route set while retaining the 5+ mile guidance policy.',
 );
 assert(
@@ -146,8 +148,8 @@ assert(
     discover.includes('guardGuidanceReadyRouteHandoff') &&
     discover.includes("guardHydratedGuidanceReadyHandoff(routeForHandoff, 'navigate')") &&
     discover.includes('explore_hydrated_route_not_ready') &&
-    discover.includes('defaultExploreReadyRouteEligibility(routeForPlanning)'),
-  'Navigate and guidance actions must continue to recheck readiness after authoritative detail hydration.',
+    discover.includes('classifyExploreRouteAvailability(routeForPlanning)'),
+  'Navigate must retain strict guidance checks while planning uses the separate post-hydration discovery and Trip Builder decisions.',
 );
 assert(
   discover.includes('beginExploreRouteIntentRequest') &&
@@ -252,6 +254,11 @@ assert.strictEqual(
 );
 assert.strictEqual(shortRouteAvailability.tripBuilder.eligible, true);
 assert.strictEqual(shortRouteAvailability.guidance.eligible, false);
+assert.strictEqual(
+  shortRouteAvailability.detailState,
+  'ready',
+  'Valid full detail geometry should remain ready even when the route is too short for guidance readiness.',
+);
 assert(
   shortRouteAvailability.guidance.exclusionCodes.includes('too_short'),
   'The minimum-length policy must remain a guidance-readiness exclusion.',
@@ -262,6 +269,25 @@ const shortRouteInventory = buildExploreGuidanceReadyInventory({
 });
 assert.strictEqual(shortRouteInventory.totalDiscoverableCount, 1);
 assert.strictEqual(shortRouteInventory.totalReadyCount, 0);
+assert.strictEqual(shortRouteInventory.discoverableCandidateSet.candidates.length, 1);
+const shortRouteCandidate = shortRouteInventory.discoverableCandidateSet.candidates[0];
+assert.strictEqual(shortRouteCandidate.discoverable, true);
+assert.strictEqual(shortRouteCandidate.tripBuilderEligible, true);
+assert.strictEqual(
+  shortRouteCandidate.guidanceReady,
+  false,
+  'The discovery candidate projection must not relabel a full-geometry short route as guidance-ready.',
+);
+assert.strictEqual(
+  shortRouteCandidate.detailState,
+  'ready',
+  'A full-geometry short route should not be mislabeled as invalid detail.',
+);
+assert.strictEqual(
+  shortRouteCandidate.guidanceUnavailableReason,
+  shortRouteAvailability.guidance.reason,
+  'Summary and detail projections should preserve the same too-short guidance reason.',
+);
 const privateRoute = makeRoute('private-route', {
   routeMetadata: { routeTypeStatus: 'private', routeGeometryMode: 'full' },
 });

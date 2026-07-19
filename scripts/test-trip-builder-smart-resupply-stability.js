@@ -288,18 +288,18 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'const SMART_RESUPPLY_LOOKUP_TIMEOUT_MS = 8000;',
+  'const SMART_RESUPPLY_LOOKUP_TIMEOUT_MS = 20000;',
   'Smart resupply lookup should have a bounded wall-clock budget so setup does not spin for many seconds.',
 );
 assertIncludes(
   screen,
-  'const SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET = 7;',
-  'Smart resupply lookup should cap corridor coverage plus one expanded trail-entry search per radius tier.',
+  'const SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET = 48;',
+  'Smart resupply lookup should cover every bounded corridor window with each configured category variant.',
 );
 assertIncludes(
   screen,
-  'const SMART_RESUPPLY_RETRIEVE_REQUEST_BUDGET = 5;',
-  'Smart resupply lookup should cap Search Box retrieve calls after suggest returns candidates.',
+  'const SMART_RESUPPLY_RETRIEVE_REQUEST_BUDGET = 32;',
+  'Smart resupply lookup should leave enough detail capacity for the provider-supported final-approach result windows.',
 );
 assertIncludes(
   screen,
@@ -308,7 +308,7 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'if (suggestRequestCount >= SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET) break searchLoop;',
+  'if (suggestRequestCount >= SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET) break;',
   'Smart resupply suggest loop should stop before it burns repeated Mapbox sessions.',
 );
 assertIncludes(
@@ -318,8 +318,8 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'forwardGeocodeFallback: allowForwardGeocodeFallback',
-  'Smart resupply background lookup should reserve forward geocoding for the final expanded-radius pass.',
+  'forwardGeocodeFallback: false',
+  'Smart resupply background lookup should stay inside explicit approach search windows.',
 );
 assertIncludes(
   screen,
@@ -333,18 +333,46 @@ assertIncludes(
 );
 assertIncludes(
   screen,
-  'if (radiusTierIndex === 0) return ordered;',
-  'Smart resupply lookup should still cover the sampled approach corridor on the first tight-radius pass.',
+  '(right.anchor.progressRatio ?? Number.NEGATIVE_INFINITY)',
+  'Smart resupply lookup should search the final approach before earlier windows.',
 );
 assertIncludes(
   screen,
-  "anchors[index]?.basis === 'approach_corridor'",
-  'Smart resupply fallback radius passes should retain the remote-side corridor anchor before trailhead-only fallback.',
+  'assessApproachResupplySearchCoverage({',
+  'Smart resupply should explicitly assess whether provider windows cover the complete driving approach.',
 );
 assertIncludes(
   screen,
-  'interleaveApproachSearchResults(',
-  'Provider detail requests should be shared across approach anchors instead of exhausting the budget at one proximity.',
+  'prioritizeApproachSearchResults({',
+  'Provider detail requests should reserve capacity for exact-entry and final-approach candidates.',
+);
+assert(
+  /for \(const query of params\.queries\.slice\(1\)\) \{\s*for \(const anchorIndex of anchorOrder\)/.test(screen),
+  'Every configured fuel/supply query variant should cover every bounded approach window, not just the last two anchors.',
+);
+assertIncludes(
+  screen,
+  'reservedPerFinalAnchor: SMART_RESUPPLY_SEARCH_LIMIT',
+  'The entire provider-supported exact-entry result window should be prioritized for place-detail retrieval.',
+);
+assertIncludes(
+  screen,
+  'for (let offset = 0; offset < options.length; offset += SMART_RESUPPLY_ACCESS_VALIDATION_CONCURRENCY)',
+  'Routed access validation should exhaust the discovered geometric inventory in bounded batches.',
+);
+assertIncludes(
+  screen,
+  'limit: options.length',
+  'Geometric prefiltering must not truncate candidates before routed access validation.',
+);
+assert(
+  !screen.includes('SMART_RESUPPLY_ACCESS_VALIDATION_LIMIT'),
+  'Smart Resupply must not silently discard the ninth or later on-corridor candidate before routing.',
+);
+assertIncludes(
+  screen,
+  'sameSmartResupplyPhysicalPlace(current, option)',
+  'Cross-source results should deduplicate by normalized physical-place evidence, not provider key alone.',
 );
 assert(
   !screen.includes("if (option.fallbackState === 'trailhead_only') return true;"),
@@ -352,8 +380,8 @@ assert(
 );
 assertIncludes(
   screen,
-  'if (option.routeDeviationMiles != null) {',
-  'Smart Resupply route-awareness filtering should inspect known route deviation before accepting fallback candidates.',
+  "option.accessStatus !== 'inaccessible'",
+  'Smart Resupply route-awareness filtering should reject known inaccessible candidates before ranking.',
 );
 assertIncludes(
   screen,

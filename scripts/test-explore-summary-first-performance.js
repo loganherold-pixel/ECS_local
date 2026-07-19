@@ -40,12 +40,12 @@ const {
 
 assert.strictEqual(
   EXPLORE_CATALOG_SUMMARY_CACHE_KEY,
-  'explore.catalog.summary.v1',
+  'explore.catalog.summary.v2',
   'Global Explore summary cache key should be stable.',
 );
 assert.strictEqual(
   exploreCatalogRegionCacheKey('Sierra Nevada / Tahoe NF'),
-  'explore.catalog.region.sierra-nevada-tahoe-nf.v1',
+  'explore.catalog.region.sierra-nevada-tahoe-nf.v2',
   'Region summary cache key should normalize human region ids.',
 );
 
@@ -141,12 +141,13 @@ assert(
   'Trip Builder should own selected-route detail loading, trailhead confirmation, and canonical persistence.',
 );
 assert(
-  routeDetail.includes('fetchRouteCatalogTrailPackDetail') &&
+    routeDetail.includes('fetchRouteCatalogTrailPackDetail') &&
     routeDetail.includes('sourceVersion,') &&
     routeDetail.includes('mergeTripBuilderRouteDetail') &&
-    routeDetail.includes('defaultExploreReadyRouteEligibility') &&
+    routeDetail.includes('classifyExploreRouteAvailability') &&
+    routeDetail.includes('hasPostDetailPolicyBlocker') &&
     routeDetail.includes('ROUTE_CATALOG_DETAIL_REJECTED'),
-  'The selected-route adapter should reuse the canonical detail client, stable-identity merge, and post-fetch safety gates.',
+  'The selected-route adapter should reuse the canonical detail client, stable-identity merge, and Trip Builder-specific post-fetch safety gates.',
 );
 assert(
   !discover.includes('routeGeometryViewportOverlayEnabled') &&

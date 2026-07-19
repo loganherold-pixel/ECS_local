@@ -18,6 +18,33 @@ export type PersistedTripBuilderPlanState = {
   updatedAt: string;
 };
 
+export type TripBuilderPlanRuntimeState = Pick<
+  PersistedTripBuilderPlanState,
+  'selectedRouteId' | 'plan' | 'visible' | 'itinerarySaved' | 'itineraryEditSession'
+>;
+
+export function resolveTripBuilderPlanRuntimeState(
+  persisted: PersistedTripBuilderPlanState | null,
+): TripBuilderPlanRuntimeState {
+  if (!persisted) {
+    return {
+      selectedRouteId: null,
+      plan: null,
+      visible: false,
+      itinerarySaved: false,
+      itineraryEditSession: null,
+    };
+  }
+
+  return {
+    selectedRouteId: persisted.selectedRouteId,
+    plan: persisted.plan,
+    visible: persisted.visible,
+    itinerarySaved: persisted.itinerarySaved,
+    itineraryEditSession: persisted.itineraryEditSession,
+  };
+}
+
 function normalize(value: unknown): PersistedTripBuilderPlanState | null {
   if (!value || typeof value !== 'object') return null;
   const parsed = value as Partial<PersistedTripBuilderPlanState>;
@@ -61,4 +88,3 @@ export async function saveTripBuilderPlanState(
 export async function clearTripBuilderPlanState(): Promise<void> {
   await planStorage.remove(TRIP_BUILDER_PLAN_KEY);
 }
-

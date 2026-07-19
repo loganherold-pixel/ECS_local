@@ -7,6 +7,10 @@ const ts = require('typescript');
 const root = path.join(__dirname, '..');
 const storage = new Map();
 
+global.__DEV__ = false;
+process.env.EXPO_PUBLIC_SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? 'https://example.supabase.co';
+process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? 'test-anon-key';
+
 global.localStorage = {
   getItem(key) {
     return storage.has(key) ? storage.get(key) : null;
@@ -62,6 +66,10 @@ const {
   buildExploreRouteCardSummary,
 } = require(path.join(root, 'lib', 'explore', 'exploreRouteCardSummary.ts'));
 const planningSave = require(path.join(root, 'lib', 'explore', 'exploreRoutePlanningSave.ts'));
+const {
+  buildExploreGuidanceReadyInventory,
+  classifyExploreRouteAvailability,
+} = require(path.join(root, 'lib', 'explore', 'exploreGuidanceReadyInventory.ts'));
 const favoritesStore = require(path.join(root, 'lib', 'exploreFavoritesStore.ts'));
 const { routeStore } = require(path.join(root, 'lib', 'routeStore.ts'));
 const { runStore } = require(path.join(root, 'lib', 'runStore.ts'));
@@ -95,8 +103,23 @@ function makeRoute(id, name, overrides = {}) {
         [-109.82, 38.18],
       ],
     },
+    trailGeometry: [
+      { lat: 38, lng: -110 },
+      { lat: 38.08, lng: -109.92 },
+      { lat: 38.18, lng: -109.82 },
+    ],
     routeMetadata: {
       source: 'test_source',
+      routeTypeStatus: 'suggested_trailhead',
+      routeGeometryMode: 'full',
+      activeGuidance: { status: 'ready' },
+      reviewStatus: 'approved',
+      legalAccessStatus: 'verified',
+      catalogVerification: {
+        publicRecommendation: true,
+        blockers: [],
+        currentCondition: { status: 'clear', activeClosureCount: 0 },
+      },
       confidenceReasons: ['continuous geometry', 'verified source timestamp'],
       warnings: ['Verify current conditions before departure.'],
       dataUsed: [{ label: 'Test source', freshness: 'fresh' }],
@@ -126,6 +149,7 @@ async function main() {
     },
   });
   const previewOnly = makeRoute('preview-only', 'Preview Only', {
+    trailGeometry: [],
     routeGeometry: {
       type: 'MultiLineString',
       coordinates: [
@@ -352,6 +376,71 @@ async function main() {
     'Saving an existing local route asset should not create a duplicate route copy.',
   );
   assert.ok(existingAssetSave.route.linked_run_id, 'Reused local route asset should receive a linked run when missing.');
+
+  const shortPlanningRoute = makeRoute('trail-pack:short-planning-route', 'Short Planning Route', {
+    distanceMiles: 2,
+    routeGeometry: {
+      type: 'LineString',
+      coordinates: [
+        [-110, 38],
+        [-109.99, 38.01],
+        [-109.98, 38.02],
+      ],
+    },
+    trailGeometry: [
+      { lat: 38, lng: -110 },
+      { lat: 38.01, lng: -109.99 },
+      { lat: 38.02, lng: -109.98 },
+    ],
+    routeMetadata: {
+      source: 'trail_pack',
+      trailPackId: 'short-planning-route',
+      routeTypeStatus: 'suggested_trailhead',
+      routeGeometryMode: 'full',
+      activeGuidance: { status: 'ready' },
+      reviewStatus: 'approved',
+      legalAccessStatus: 'verified',
+      catalogVerification: {
+        publicRecommendation: true,
+        blockers: [],
+        currentCondition: { status: 'clear', activeClosureCount: 0 },
+      },
+    },
+  });
+  const shortPlanningAvailability = classifyExploreRouteAvailability(shortPlanningRoute);
+  assert.strictEqual(shortPlanningAvailability.discoverability.eligible, true);
+  assert.strictEqual(shortPlanningAvailability.tripBuilder.eligible, true);
+  assert.strictEqual(shortPlanningAvailability.guidance.eligible, false);
+  assert(
+    shortPlanningAvailability.guidance.exclusionCodes.includes('too_short'),
+    'The short planning route should retain the typed guidance-only exclusion.',
+  );
+
+  const shortPlanningInventory = buildExploreGuidanceReadyInventory({
+    trailPacks: [shortPlanningRoute],
+    selectedRefinement: null,
+  });
+  const shortPlanningCandidate = shortPlanningInventory.discoverableCandidateSet.candidates[0];
+  assert.ok(shortPlanningCandidate, 'A short approved route should remain a discoverable planning candidate.');
+  assert.strictEqual(shortPlanningCandidate.id, shortPlanningRoute.id);
+  assert.strictEqual(shortPlanningCandidate.savedAssetKey, shortPlanningRoute.id);
+  assert.strictEqual(shortPlanningCandidate.tripBuilderEligible, true);
+  assert.strictEqual(shortPlanningCandidate.guidanceReady, false);
+  assert.strictEqual(shortPlanningCandidate.detailState, 'ready');
+
+  const shortPlanningSave = await planningSave.saveExploreRouteForPlanning(shortPlanningCandidate);
+  assert.strictEqual(
+    shortPlanningSave.route.external_source_id,
+    shortPlanningCandidate.id,
+    'Saving a valid short route should create or reuse its route asset without requiring guidance readiness.',
+  );
+  assert.ok(shortPlanningSave.route.linked_run_id, 'A saved short route should still receive a linked planning run.');
+  assert.ok(
+    favoritesStore.getExploreFavoritesSnapshot().favorites.some(
+      (favorite) => favorite.sourceTrailId === shortPlanningRoute.id,
+    ),
+    'Saving a short eligible route should retain the normal Explore favorite state transition.',
+  );
 
   console.log('Explore TripBuilder wizard domain checks passed.');
 }

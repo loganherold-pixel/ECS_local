@@ -132,6 +132,11 @@ import {
   resolveCachedOperatorAccessSnapshot,
 } from '../lib/auth/offlineAccessPolicy';
 import { shouldClearOfflineModeForAuthCleanup } from '../lib/auth/offlineModeClearPolicy';
+import {
+  clearAuthenticatedExploreTripState,
+  shouldClearAuthenticatedExploreTripState,
+  type AuthExploreTripStateCleanupReason,
+} from '../lib/auth/authExploreTripStateCleanup';
 import { offlineCredentialStore } from '../lib/auth/offlineCredentialStore';
 import type { ECSAccessResolution } from '../lib/auth/entitlementTypes';
 import { connectivity, type ConnectivityStatus } from "../lib/connectivity";
@@ -172,6 +177,22 @@ const STARTUP_OPTIONAL_READINESS_TIMEOUT_MS = 2500;
 const STARTUP_AUTH_RESTORE_TIMEOUT_MS = 6000;
 const STARTUP_PROVIDER_SESSION_TIMEOUT_MS = 2500;
 const SIGN_IN_REQUEST_TIMEOUT_MS = 10000;
+
+async function clearExploreTripStateAtAccountBoundary(args: {
+  reason: AuthExploreTripStateCleanupReason;
+  hasAuthenticatedActor: boolean;
+}): Promise<void> {
+  if (!shouldClearAuthenticatedExploreTripState(args)) return;
+
+  try {
+    await clearAuthenticatedExploreTripState();
+  } catch (error) {
+    console.warn(
+      '[Auth] Account-bound Explore and Trip Builder state cleanup failed.',
+      sanitizeAuthLogPayload(error),
+    );
+  }
+}
 
 interface StartupHydrationResult {
   persistedOfflineMode: boolean;
@@ -1239,6 +1260,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           connectivity.isOnline() ? AUTH_COPY.session.expired : AUTH_COPY.session.reconnect
         );
         setStartupSessionRestored(false);
+        void clearExploreTripStateAtAccountBoundary({
+          reason: 'session_expired',
+          hasAuthenticatedActor: true,
+        });
         clearAuthenticatedRuntimeState({
           clearOfflineMode: shouldClearOfflineModeForAuthCleanup({
             reason: 'session_expired',
@@ -1322,6 +1347,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const mapped = mapOperatorInfoFromBackend(info as Partial<OperatorInfo>, currentUser.email || null);
           if (mapped.status === 'suspended') {
             supabase.auth.signOut();
+            void clearExploreTripStateAtAccountBoundary({
+              reason: 'account_suspended',
+              hasAuthenticatedActor: true,
+            });
             clearAuthenticatedRuntimeState();
           } else {
             setOperatorInfo(mapped);
@@ -1477,6 +1506,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           sessionValidity: runtimeSessionValidity,
         });
         setStartupSessionRestored(false);
+        void clearExploreTripStateAtAccountBoundary({
+          reason: 'provider_signed_out',
+          hasAuthenticatedActor: true,
+        });
         clearAuthenticatedRuntimeState();
         void clearPersistedSupabaseAuthState();
         setAuthLoading(false);
@@ -1524,6 +1557,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
       } else {
         if (event === 'SIGNED_OUT') {
+          void clearExploreTripStateAtAccountBoundary({
+            reason: 'provider_signed_out',
+            hasAuthenticatedActor:
+              !!userRef.current || runtimeSessionValidity === 'valid' || hasTransientRuntimeSession,
+          });
           if (signOutIntentRef.current) {
             signOutIntentRef.current = false;
           } else {
@@ -2066,6 +2104,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           if (postResult.suspended) {
             await supabase.auth.signOut();
+            await clearExploreTripStateAtAccountBoundary({
+              reason: 'account_suspended',
+              hasAuthenticatedActor: true,
+            });
             clearAuthenticatedRuntimeState();
             setSignInPending(false);
             console.log('[Auth] Login attempt failure', {
@@ -2219,6 +2261,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         }
         await clearPersistedSupabaseAuthState();
+        await clearExploreTripStateAtAccountBoundary({
+          reason: 'explicit_sign_out',
+          hasAuthenticatedActor: !!userId,
+        });
         clearAuthenticatedRuntimeState();
         console.log('[Auth] Sign-out success', {
           userId: redactedUserId,

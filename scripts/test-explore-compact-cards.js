@@ -119,8 +119,12 @@ assert.ok(
     discoverSource.includes('visibleExploreWizardCardCandidates') &&
     discoverSource.includes('visibleExploreWizardCandidates.slice(0, exploreGuidanceReadyVisibleLimit)') &&
     discoverSource.includes('SHOW MORE ROUTES') &&
-    discoverSource.includes('setExploreGuidanceReadyVisibleLimit(EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT)'),
-  'Guidance Ready should mount a small first paint batch and let users reveal more routes without blocking initial render.',
+    discoverSource.includes('setExploreGuidanceReadyVisibleLimit(EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT)') &&
+    discoverSource.includes('liveTrailPackCatalogSnapshot.routeCatalogSummaries.length === 0') &&
+    discoverSource.includes('Math.max(\n      current,\n      exploreWizardCandidateSet.candidates.length') &&
+    discoverSource.includes('initialNumToRender={EXPLORE_ROUTE_CARD_INITIAL_RENDER_COUNT}') &&
+    discoverSource.includes('maxToRenderPerBatch={EXPLORE_ROUTE_CARD_BATCH_SIZE}'),
+  'Guidance Ready should keep virtualized first paint while automatically making every loaded catalog candidate scroll-reachable.',
 );
 
 assert.ok(

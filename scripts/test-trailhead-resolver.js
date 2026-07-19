@@ -70,6 +70,29 @@ assert.ok(explicitTrailhead.confidence.value >= 0.9);
 assert.strictEqual(explicitTrailhead.providerMetadata.source, 'fixture');
 assert.strictEqual(explicitTrailhead.providerMetadata.sourceId, 'trailhead-1');
 
+const preparedTrailEntry = resolveTrailheadAnchor({
+  id: 'prepared-trail-entry',
+  trailheadStart: {
+    latitude: 38.451,
+    longitude: -109.821,
+    source: 'trip_builder_route_preparation',
+    id: 'prepared-entry-1',
+  },
+  startLat: 37.5,
+  startLng: -110.5,
+  routeGeometry: {
+    type: 'LineString',
+    coordinates: [
+      [-110.5, 37.5],
+      [-109.7, 38.7],
+    ],
+  },
+});
+assert.strictEqual(preparedTrailEntry.source, 'explicit_trailhead');
+assertCoordinate(preparedTrailEntry, 38.451, -109.821);
+assert.strictEqual(preparedTrailEntry.providerMetadata.source, 'trip_builder_route_preparation');
+assert.strictEqual(preparedTrailEntry.providerMetadata.sourceId, 'prepared-entry-1');
+
 const explicitStart = resolveTrailheadAnchor({
   id: 'explicit-start',
   startLat: '35.1415',

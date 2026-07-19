@@ -100,13 +100,13 @@ export function loadTripBuilderRouteHandoff(): TripBuilderRouteHandoff | null {
   }
 }
 
-export function clearTripBuilderRouteHandoff(): void {
+export async function clearTripBuilderRouteHandoff(): Promise<void> {
   memoryHandoff = null;
   try {
     if (Platform.OS === 'web') getStorage()?.removeItem(TRIP_BUILDER_ROUTE_HANDOFF_KEY);
     else {
       handoffPersistence.delete(TRIP_BUILDER_ROUTE_HANDOFF_KEY);
-      void handoffPersistence.flush();
+      await handoffPersistence.flush();
     }
   } catch {
     // No-op.

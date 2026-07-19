@@ -20,19 +20,34 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 
 const {
   APPROACH_RESUPPLY_POLICY,
+  assessApproachResupplySearchCoverage,
   buildApproachResupplyStopPlan,
   buildApproachResupplyRerankEvidence,
   buildApproachResupplyRouteFingerprint,
   buildApproachResupplySearchAnchors,
   classifyApproachResupplyRoutePosition,
   classifyApproachResupplyProviderCoverage,
-  evaluateApproachResupplyOptions,
+  evaluateApproachResupplyOptions: evaluateApproachResupplyOptionsStrict,
   inferApproachRemoteEntry,
   interleaveApproachSearchResults,
   mergeApproachResupplyRouteEvidence,
   mergeApproachResupplySafetyEvidence,
-  rankApproachResupplyOptions,
+  prioritizeApproachSearchResults,
+  rankApproachResupplyOptions: rankApproachResupplyOptionsStrict,
 } = require(path.join(root, 'lib', 'tripBuilder', 'approachResupplyPlanner.ts'));
+
+// Preserve the historical broad-policy coverage below while the strict A-H
+// fixture at the end exercises the product's normal 0.20-mile/access rules.
+const evaluateApproachResupplyOptions = (args) => evaluateApproachResupplyOptionsStrict({
+  maxCorridorOffsetMiles: 20,
+  requireRoutedAccess: false,
+  ...args,
+});
+const rankApproachResupplyOptions = (args) => rankApproachResupplyOptionsStrict({
+  maxCorridorOffsetMiles: 20,
+  requireRoutedAccess: false,
+  ...args,
+});
 
 assert.strictEqual(
   classifyApproachResupplyProviderCoverage({
@@ -79,7 +94,7 @@ assert.ok(
   'Approach resupply should sample the early/home-side corridor instead of only searching near the trailhead.',
 );
 assert.ok(
-  anchors.some((anchor) => anchor.basis === 'approach_corridor' && anchor.progressRatio != null && anchor.progressRatio >= 0.9),
+  anchors.some((anchor) => anchor.progressRatio != null && anchor.progressRatio >= 0.9),
   'Approach resupply should still sample the last approach segment before trail entry.',
 );
 assert.strictEqual(
@@ -142,7 +157,7 @@ assert.ok(
   'The preferred option should remain before trail entry.',
 );
 
-const fallbackFuel = rankApproachResupplyOptions({
+const fallbackFuel = evaluateApproachResupplyOptions({
   category: 'fuel',
   origin: null,
   trailhead,
@@ -156,10 +171,10 @@ const fallbackFuel = rankApproachResupplyOptions({
     confidence: 'medium',
   }],
 });
-assert.strictEqual(fallbackFuel[0].fallbackState, 'trailhead_only');
+assert.strictEqual(fallbackFuel.ranked.length, 0);
 assert.ok(
-  fallbackFuel[0].warnings.some((warning) => /Approach route unavailable/i.test(warning)),
-  'Trailhead fallback ranking should be explicit when the selected-origin approach geometry is missing.',
+  fallbackFuel.excluded[0].exclusionReasons.includes('approach_route_unavailable'),
+  'Missing approach geometry must not create a normal trailhead-proximity recommendation.',
 );
 
 const bufferedOffRouteFuel = rankApproachResupplyOptions({
@@ -206,15 +221,16 @@ assert.deepStrictEqual(
   'A single proximity anchor must not consume the entire provider-detail budget before other approach segments are represented.',
 );
 assert.ok(
-  bufferedOffRouteFuel[0].warnings.some((warning) => /provider-routed detour exceeds the preferred 10-mile approach detour/i.test(warning)),
+  bufferedOffRouteFuel[0].warnings.some((warning) => /routed detour exceeds the preferred 10-mile detour/i.test(warning)),
   'Fuel outside the preferred routed-detour band but inside the maximum should stay selectable with a clear fallback warning.',
 );
 
 assert.strictEqual(
   APPROACH_RESUPPLY_POLICY.preferredCorridorOffsetMiles,
-  0.2,
-  'The ideal geometric approach corridor should remain a centralized 0.2-mile preference.',
+  0.1,
+  'The preferred geometric approach corridor should be the 0.00-0.10 mile tier.',
 );
+assert.strictEqual(APPROACH_RESUPPLY_POLICY.maximumCorridorOffsetMiles, 0.2);
 assert.notStrictEqual(
   APPROACH_RESUPPLY_POLICY.preferredCorridorOffsetMiles,
   APPROACH_RESUPPLY_POLICY.preferredRoutedDetourMiles,
@@ -247,12 +263,10 @@ const idealCorridorPreference = rankApproachResupplyOptions({
     },
   ],
 });
-assert.strictEqual(idealCorridorPreference[0].id, 'ideal-corridor-earlier');
-assert.ok(idealCorridorPreference[0].distanceFromApproachRouteMiles <= 0.2);
-assert.ok(idealCorridorPreference[1].distanceFromApproachRouteMiles > 0.2);
-assert.ok(
-  idealCorridorPreference[1].warnings.some((warning) => /broader fallback/i.test(warning)),
-  'A viable candidate outside the ideal 0.2-mile corridor should remain available with truthful fallback language.',
+assert.strictEqual(
+  idealCorridorPreference[0].id,
+  'broader-corridor-later',
+  'Route position is the first comparator key even when a legacy caller explicitly widens its corridor.',
 );
 
 const latestInsideIdealCorridor = rankApproachResupplyOptions({
@@ -314,8 +328,8 @@ assert.strictEqual(
   'When no ideal-corridor option exists, broader viable fallbacks should retain last-useful-before-entry ordering.',
 );
 assert.ok(
-  broaderFallbackOnly.every((option) => option.warnings.some((warning) => /broader fallback/i.test(warning))),
-  'Every broader geometric fallback should disclose that it is outside the ideal corridor.',
+  broaderFallbackOnly.every((option) => option.warnings.some((warning) => /acceptable .* corridor tier/i.test(warning))),
+  'A caller-widened corridor should still disclose the non-preferred tier.',
 );
 
 const directionInvariantCandidates = [
@@ -443,14 +457,14 @@ const boundaryInventory = evaluateApproachResupplyOptions({
     },
   ],
 });
-assert.strictEqual(boundaryInventory.ranked[0].id, 'before-remote-entry');
+assert.strictEqual(boundaryInventory.ranked[0].id, 'after-remote-entry');
 assert.ok(
   boundaryInventory.excluded.find((option) => option.id === 'behind-origin')?.exclusionReasons.includes('behind_origin'),
   'A stop behind the selected origin must not become the last fuel recommendation.',
 );
 assert.ok(
-  boundaryInventory.excluded.find((option) => option.id === 'after-remote-entry')?.exclusionReasons.includes('after_remote_entry'),
-  'A stop after the known service-loss entry must not be selected as a pre-remote stop.',
+  boundaryInventory.ranked.some((option) => option.id === 'after-remote-entry'),
+  'A service-loss estimate must not truncate the resolved origin-to-trail-entry approach.',
 );
 assert.ok(
   boundaryInventory.excluded.find((option) => option.id === 'after-trailhead')?.exclusionReasons.includes('after_trailhead'),
@@ -461,7 +475,7 @@ assert.ok(
   'Invalid or low-integrity coordinates must not enter the recommendation list.',
 );
 assert.strictEqual(boundaryInventory.ranked[0].remoteEntrySource, 'known_service_boundary');
-assert.ok(boundaryInventory.ranked[0].distanceBeforeRemoteEntryMiles > 0);
+assert.ok(boundaryInventory.ranked[0].distanceBeforeRemoteEntryMiles < 0);
 
 const earlyBoundaryInventory = evaluateApproachResupplyOptions({
   category: 'fuel',
@@ -494,8 +508,8 @@ const earlyBoundaryInventory = evaluateApproachResupplyOptions({
 });
 assert.strictEqual(earlyBoundaryInventory.remoteEntry.progressRatio, 0.2, 'Known early boundaries must not be shifted to a later policy minimum.');
 assert.ok(
-  earlyBoundaryInventory.excluded.find((option) => option.id === 'after-early-boundary')?.exclusionReasons.includes('after_remote_entry'),
-  'A stop after a known early boundary must be excluded.',
+  earlyBoundaryInventory.ranked.some((option) => option.id === 'after-early-boundary'),
+  'An earlier service-loss marker is informational and must not replace practical trail entry.',
 );
 const earlyBoundaryAnchors = buildApproachResupplySearchAnchors({
   origin,
@@ -511,8 +525,8 @@ const earlyBoundaryAnchors = buildApproachResupplySearchAnchors({
   maxAnchors: 4,
 });
 assert.ok(
-  earlyBoundaryAnchors.some((anchor) => anchor.progressRatio != null && anchor.progressRatio >= 0 && anchor.progressRatio < 0.1),
-  'A known early boundary must still create a provider-search anchor on its useful civilization side.',
+  earlyBoundaryAnchors.some((anchor) => anchor.progressRatio === 1),
+  'Provider discovery must always include the exact practical trail entry.',
 );
 
 const precisionBoundaryInventory = evaluateApproachResupplyOptions({
@@ -737,8 +751,8 @@ const coordinateConfidenceInventory = evaluateApproachResupplyOptions({
 });
 assert.strictEqual(
   coordinateConfidenceInventory.ranked[0].id,
-  'high-integrity-forward-stop',
-  'Low-confidence coordinates must not win solely because they appear slightly later on the route.',
+  'low-integrity-later-stop',
+  'Provider confidence is only a final tie-breaker and cannot override route position.',
 );
 
 const samePlaceSafetyEvidence = mergeApproachResupplySafetyEvidence([
@@ -863,8 +877,8 @@ const verifiedDetourInventory = rankApproachResupplyOptions({
 });
 assert.strictEqual(
   verifiedDetourInventory[0].id,
-  'verified-provider-detour',
-  'A geometric corridor offset must not outrank provider-routed evidence solely because it projects later on the route.',
+  'later-geometric-offset',
+  'Evidence-source preference must not override the last-practical-stop route position.',
 );
 
 const customThresholdInventory = rankApproachResupplyOptions({
@@ -895,14 +909,14 @@ const customThresholdInventory = rankApproachResupplyOptions({
 });
 assert.strictEqual(
   customThresholdInventory[0].id,
-  'inside-custom-preferred',
-  'Configured detour thresholds must control both filtering and ranking bands.',
+  'outside-custom-preferred',
+  'Preferred detour bands cannot move an earlier stop ahead of a later eligible stop.',
 );
 
 const inferredBoundary = inferApproachRemoteEntry({ remotenessScore: 8 });
-assert.strictEqual(inferredBoundary.source, 'remoteness_estimate');
-assert.strictEqual(inferredBoundary.estimated, true);
-assert.match(inferredBoundary.label, /estimated/i);
+assert.strictEqual(inferredBoundary.source, 'practical_trail_entry');
+assert.strictEqual(inferredBoundary.estimated, false);
+assert.match(inferredBoundary.label, /practical trail entry/i);
 
 const noRouteInventory = evaluateApproachResupplyOptions({
   category: 'fuel',
@@ -914,10 +928,8 @@ const noRouteInventory = evaluateApproachResupplyOptions({
 assert.strictEqual(noRouteInventory.fallbackState, 'trailhead_only');
 assert.strictEqual(noRouteInventory.routeAwareConfidence, 'unknown');
 assert.strictEqual(noRouteInventory.remoteEntry.source, 'unavailable');
-assert.ok(
-  noRouteInventory.ranked.every((option) => option.routeEvidenceState === 'unavailable'),
-  'Trailhead-only fallback must not claim route-aware detour confidence.',
-);
+assert.strictEqual(noRouteInventory.ranked.length, 0);
+assert.ok(noRouteInventory.excluded.every((option) => option.exclusionReasons.includes('approach_route_unavailable')));
 
 const combinedStop = {
   ...forwardRanked[0],
@@ -987,5 +999,269 @@ const unavailablePlan = buildApproachResupplyStopPlan({
 });
 assert.strictEqual(unavailablePlan.status, 'unavailable');
 assert.match(unavailablePlan.explanation, /no viable/i);
+
+// Required last-practical-stop regression fixture (Cases A-H).
+const milesPerDegreeAtEquator = 69.0934;
+const strictOrigin = { latitude: 0, longitude: 0 };
+const strictEntry = { latitude: 1, longitude: 0 };
+const strictApproach = [strictOrigin, strictEntry];
+const pointBeforeEntry = (remainingMiles, corridorOffsetMiles) => ({
+  latitude: 1 - remainingMiles / milesPerDegreeAtEquator,
+  longitude: corridorOffsetMiles / milesPerDegreeAtEquator,
+});
+const routedCandidate = (input) => ({
+  category: 'fuel',
+  confidence: 'medium',
+  coordinateConfidence: 'medium',
+  operatingStatus: 'open',
+  accessStatus: 'accessible',
+  categoryUsefulness: 'category_match',
+  ...input,
+});
+
+const requiredFixtureInventory = evaluateApproachResupplyOptionsStrict({
+  category: 'fuel',
+  origin: strictOrigin,
+  trailhead: strictEntry,
+  approachRoute: strictApproach,
+  candidates: [
+    routedCandidate({
+      id: 'case-a-early-preferred',
+      title: 'Case A — Early Preferred Corridor',
+      coordinate: pointBeforeEntry(12, 0.05),
+      detourDurationMinutes: 1,
+      detourDistanceMiles: 0.1,
+      score: 100,
+    }),
+    routedCandidate({
+      id: 'case-b-last-acceptable',
+      title: 'Case B — Last Acceptable Corridor',
+      coordinate: pointBeforeEntry(0.8, 0.18),
+      detourDurationMinutes: 4,
+      detourDistanceMiles: 0.6,
+      score: 1,
+    }),
+    routedCandidate({
+      id: 'case-c-outside-normal',
+      title: 'Case C — 0.21 Mile Offset',
+      coordinate: pointBeforeEntry(0.1, 0.21),
+      detourDurationMinutes: 1,
+      detourDistanceMiles: 0.1,
+    }),
+    routedCandidate({
+      id: 'case-e-inaccessible-detour',
+      title: 'Case E — Divider / River Detour',
+      coordinate: pointBeforeEntry(0.6, 0.04),
+      detourDurationMinutes: 55,
+      detourDistanceMiles: 25,
+    }),
+  ],
+});
+assert.deepStrictEqual(
+  requiredFixtureInventory.ranked.map((candidate) => candidate.id),
+  ['case-b-last-acceptable', 'case-a-early-preferred'],
+  'Case B must outrank Case A because route position is the first lexicographic key.',
+);
+assert.ok(
+  requiredFixtureInventory.excluded.find((candidate) => candidate.id === 'case-c-outside-normal')
+    ?.exclusionReasons.includes('excessive_corridor_offset'),
+  'Case C must be excluded from normal results using the raw 0.21-mile offset.',
+);
+assert.ok(
+  requiredFixtureInventory.excluded.find((candidate) => candidate.id === 'case-e-inaccessible-detour')
+    ?.exclusionReasons.includes('excessive_detour'),
+  'Case E must not survive routed practicality validation.',
+);
+
+const postEntryFullGpxInventory = evaluateApproachResupplyOptionsStrict({
+  category: 'fuel',
+  origin: strictOrigin,
+  trailhead: strictEntry,
+  // Deliberately pass a full GPX continuing into trail geometry. The planner
+  // must trim at strictEntry before projecting candidates.
+  approachRoute: [strictOrigin, strictEntry, { latitude: 1.2, longitude: 0 }],
+  candidates: [routedCandidate({
+    id: 'case-d-after-entry-full-gpx',
+    title: 'Case D — Trail-Side GPX POI',
+    coordinate: { latitude: 1.05, longitude: 0.05 / milesPerDegreeAtEquator },
+    detourDurationMinutes: 2,
+    detourDistanceMiles: 0.2,
+  })],
+});
+assert.strictEqual(postEntryFullGpxInventory.ranked.length, 0);
+assert.ok(
+  postEntryFullGpxInventory.excluded[0].exclusionReasons.includes('after_trailhead') ||
+    postEntryFullGpxInventory.excluded[0].exclusionReasons.includes('excessive_corridor_offset'),
+  'Case D must be excluded after the approach is trimmed at practical entry.',
+);
+
+const mismatchedEntryGeometryInventory = evaluateApproachResupplyOptionsStrict({
+  category: 'fuel',
+  origin: strictOrigin,
+  trailhead: strictEntry,
+  approachRoute: [
+    { latitude: 20, longitude: 20 },
+    { latitude: 21, longitude: 20 },
+  ],
+  candidates: [routedCandidate({
+    id: 'mismatched-entry-geometry',
+    title: 'Mismatched Geometry Candidate',
+    coordinate: { latitude: 20.9, longitude: 20 },
+    detourDurationMinutes: 1,
+    detourDistanceMiles: 0.1,
+  })],
+});
+assert.strictEqual(mismatchedEntryGeometryInventory.ranked.length, 0);
+assert.ok(
+  mismatchedEntryGeometryInventory.excluded[0].exclusionReasons.includes('approach_route_unavailable'),
+  'A practical entry that cannot project onto the supplied approach must fail closed instead of ranking against unrelated/full geometry.',
+);
+
+const usefulnessTieInventory = evaluateApproachResupplyOptionsStrict({
+  category: 'fuel',
+  origin: strictOrigin,
+  trailhead: strictEntry,
+  approachRoute: strictApproach,
+  candidates: [
+    routedCandidate({
+      id: 'case-f-fuel-only',
+      title: 'Case F — Fuel Only',
+      coordinate: pointBeforeEntry(2, 0.05),
+      detourDurationMinutes: 3,
+      detourDistanceMiles: 0.3,
+      categoryCoverage: ['fuel'],
+    }),
+    routedCandidate({
+      id: 'case-f-combined',
+      title: 'Case F — Fuel + Groceries/Supplies',
+      coordinate: pointBeforeEntry(2, 0.05),
+      detourDurationMinutes: 3,
+      detourDistanceMiles: 0.3,
+      categoryCoverage: ['fuel', 'food_supplies'],
+    }),
+    routedCandidate({
+      id: 'case-f-convenience-only',
+      title: 'Case F — Fuel + Convenience Supplies',
+      coordinate: pointBeforeEntry(2, 0.05),
+      detourDurationMinutes: 3,
+      detourDistanceMiles: 0.3,
+      categoryCoverage: ['fuel', 'food_supplies'],
+      categoryUsefulness: 'convenience_only',
+    }),
+  ],
+});
+assert.strictEqual(usefulnessTieInventory.ranked[0].id, 'case-f-combined');
+assert.deepStrictEqual(
+  usefulnessTieInventory.ranked.map((candidate) => candidate.id),
+  ['case-f-combined', 'case-f-fuel-only', 'case-f-convenience-only'],
+  'Strong combined coverage must win the usefulness tie, while convenience-only supplies remain the weaker tier.',
+);
+
+const providerPopularityTrap = evaluateApproachResupplyOptionsStrict({
+  category: 'fuel',
+  origin: strictOrigin,
+  trailhead: strictEntry,
+  approachRoute: strictApproach,
+  candidates: [
+    routedCandidate({
+      id: 'case-g-popular-early',
+      title: 'Case G — Popular Early Stop',
+      coordinate: pointBeforeEntry(15, 0.04),
+      detourDurationMinutes: 1,
+      detourDistanceMiles: 0.1,
+      confidence: 'high',
+      score: 100,
+    }),
+    routedCandidate({
+      id: 'case-g-late-low-popularity',
+      title: 'Case G — Last Valid Stop',
+      coordinate: pointBeforeEntry(0.7, 0.18),
+      detourDurationMinutes: 4,
+      detourDistanceMiles: 0.5,
+      confidence: 'low',
+      score: 0,
+    }),
+  ],
+});
+assert.strictEqual(providerPopularityTrap.ranked[0].id, 'case-g-late-low-popularity');
+
+const noOnCorridorMatch = evaluateApproachResupplyOptionsStrict({
+  category: 'fuel',
+  origin: strictOrigin,
+  trailhead: strictEntry,
+  approachRoute: strictApproach,
+  candidates: [routedCandidate({
+    id: 'case-h-no-normal-match',
+    title: 'Case H — Wider Candidate',
+    coordinate: pointBeforeEntry(0.5, 0.25),
+    detourDurationMinutes: 2,
+    detourDistanceMiles: 0.2,
+  })],
+});
+assert.strictEqual(noOnCorridorMatch.ranked.length, 0);
+assert.ok(noOnCorridorMatch.diagnostics[0].rejectionReason.includes('excessive_corridor_offset'));
+
+const hundredMileEntry = { latitude: 100 / milesPerDegreeAtEquator, longitude: 0 };
+const completeCoverageAnchors = buildApproachResupplySearchAnchors({
+  origin: strictOrigin,
+  trailhead: hundredMileEntry,
+  approachRoute: [strictOrigin, hundredMileEntry],
+  maxAnchors: 12,
+  searchRadiusMiles: 10,
+});
+const completeCoverage = assessApproachResupplySearchCoverage({
+  origin: strictOrigin,
+  trailhead: hundredMileEntry,
+  approachRoute: [strictOrigin, hundredMileEntry],
+  anchors: completeCoverageAnchors,
+  searchRadiusMiles: 10,
+});
+assert.strictEqual(completeCoverage.complete, true, 'Distance-spaced provider windows must cover a 100-mile approach without gaps.');
+const underSampledCoverageAnchors = buildApproachResupplySearchAnchors({
+  origin: strictOrigin,
+  trailhead: hundredMileEntry,
+  approachRoute: [strictOrigin, hundredMileEntry],
+  maxAnchors: 4,
+  searchRadiusMiles: 10,
+});
+assert.strictEqual(assessApproachResupplySearchCoverage({
+  origin: strictOrigin,
+  trailhead: hundredMileEntry,
+  approachRoute: [strictOrigin, hundredMileEntry],
+  anchors: underSampledCoverageAnchors,
+  searchRadiusMiles: 10,
+}).complete, false, 'An under-sampled provider route must report partial coverage instead of a valid empty result.');
+
+const prioritizedRetrievals = prioritizeApproachSearchResults({
+  anchors: [
+    { coordinate: strictEntry, basis: 'trailhead_fallback', progressRatio: 1 },
+    { coordinate: pointBeforeEntry(10, 0), basis: 'approach_corridor', progressRatio: 0.85 },
+    { coordinate: pointBeforeEntry(35, 0), basis: 'approach_corridor', progressRatio: 0.5 },
+  ],
+  buckets: [
+    Array.from({ length: 10 }, (_, index) => `entry-provider-${index + 1}`),
+    ['final-approach-first'],
+    ['early-popular-first', 'early-second'],
+  ],
+  reservedPerFinalAnchor: 10,
+});
+assert.ok(
+  prioritizedRetrievals.slice(0, 10).includes('entry-provider-6'),
+  'The provider-supported sixth result at exact entry must be retrieved before early-route popularity consumes the budget.',
+);
+
+const diagnosticRows = requiredFixtureInventory.diagnostics.map((row) => ({
+  candidate: row.candidateName,
+  category: row.category,
+  corridorOffsetMi: row.corridorOffsetMiles == null ? null : Number(row.corridorOffsetMiles.toFixed(2)),
+  routeProgress: row.routeProgress == null ? null : Number(row.routeProgress.toFixed(3)),
+  milesBeforeEntry: row.milesRemainingBeforeTrailEntry == null ? null : Number(row.milesRemainingBeforeTrailEntry.toFixed(1)),
+  detourMinutes: row.routedDetourMinutes,
+  detourMiles: row.routedDetourMiles,
+  accepted: row.accepted,
+  rejectionReason: row.rejectionReason ?? '—',
+  finalRank: row.finalRank ?? '—',
+}));
+console.table(diagnosticRows);
 
 console.log('Trip Builder approach resupply corridor checks passed.');

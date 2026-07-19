@@ -20,12 +20,14 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 
 const {
   buildApproachResupplySearchAnchors,
-  evaluateApproachResupplyOptions,
-  rankApproachResupplyOptions,
+  evaluateApproachResupplyOptions: evaluateStrict,
+  rankApproachResupplyOptions: rankStrict,
 } = require(path.join(root, 'lib', 'tripBuilder', 'approachResupplyPlanner.ts'));
 const {
   retainEquivalentResupplyOptions,
 } = require(path.join(root, 'lib', 'tripBuilder', 'resupplyPlaceIdentity.ts'));
+const evaluateApproachResupplyOptions = (args) => evaluateStrict({ requireRoutedAccess: false, ...args });
+const rankApproachResupplyOptions = (args) => rankStrict({ requireRoutedAccess: false, ...args });
 
 const origin = { latitude: 39.0, longitude: -121.4 };
 const trailhead = { latitude: 40.0, longitude: -121.4 };
@@ -43,13 +45,8 @@ const remoteBoundaryAnchors = buildApproachResupplySearchAnchors({
   remoteEntryProgressRatio: 0.88,
 });
 assert.ok(
-  remoteBoundaryAnchors.some((anchor) => (
-    anchor.basis === 'approach_corridor' &&
-    anchor.progressRatio != null &&
-    anchor.progressRatio >= 0.82 &&
-    anchor.progressRatio <= 0.88
-  )),
-  'High-remoteness Smart Resupply search should sample the inferred remote-entry/civilization-exit approach segment.',
+  remoteBoundaryAnchors.some((anchor) => anchor.progressRatio === 1),
+  'Smart Resupply discovery must include the exact practical trail entry.',
 );
 assert.strictEqual(
   remoteBoundaryAnchors[remoteBoundaryAnchors.length - 1].basis,
@@ -97,15 +94,15 @@ const ranked = trailEdgeInventory.ranked;
 
 assert.strictEqual(
   ranked[0].id,
-  'last-town-fuel-before-entry',
-  'Smart Resupply should prefer the last civilization-side stop before trail entry over a POI sitting at the remote trailhead edge.',
+  'remote-trailhead-edge-fuel',
+  'Smart Resupply should prefer the last valid stop before practical trail entry.',
 );
 assert.ok(
-  trailEdgeInventory.excluded.find((option) => option.id === 'remote-trailhead-edge-fuel')?.exclusionReasons.includes('after_remote_entry'),
-  'Fuel candidates beyond the estimated service boundary should not remain selectable as pre-remote stops.',
+  ranked.some((option) => option.id === 'remote-trailhead-edge-fuel'),
+  'An inferred service-loss marker must not exclude a valid stop before practical entry.',
 );
 assert.ok(
-  ranked.find((option) => option.id === 'mid-corridor-fuel')?.rank > ranked.find((option) => option.id === 'last-town-fuel-before-entry')?.rank,
+  ranked.find((option) => option.id === 'mid-corridor-fuel')?.rank > ranked.find((option) => option.id === 'remote-trailhead-edge-fuel')?.rank,
   'Earlier civilization stops should not beat the last viable pre-entry stop when both are close to the approach route.',
 );
 
@@ -149,15 +146,15 @@ const remoteBoundaryInventory = evaluateApproachResupplyOptions({
 
 assert.strictEqual(
   remoteBoundaryInventory.ranked[0].id,
-  'civilization-exit-fuel',
-  'High-remoteness Smart Resupply should prefer the last civilization-side stop before the inferred remote-entry boundary.',
+  'beyond-remote-entry-fuel',
+  'Practical trail entry, not an earlier remoteness ratio, defines the final valid stop.',
 );
 assert.ok(
-  remoteBoundaryInventory.excluded.find((option) => option.id === 'beyond-remote-entry-fuel')?.exclusionReasons.includes('after_remote_entry'),
-  'Fuel candidates beyond the inferred remote-entry boundary should be excluded from the pre-remote recommendation.',
+  remoteBoundaryInventory.ranked.some((option) => option.id === 'beyond-remote-entry-fuel'),
+  'A candidate before practical entry remains eligible despite an earlier service-loss estimate.',
 );
 assert.ok(
-  remoteBoundaryInventory.ranked.find((option) => option.id === 'early-city-fuel')?.rank > remoteBoundaryInventory.ranked.find((option) => option.id === 'civilization-exit-fuel')?.rank,
+  remoteBoundaryInventory.ranked.find((option) => option.id === 'early-city-fuel')?.rank > remoteBoundaryInventory.ranked.find((option) => option.id === 'beyond-remote-entry-fuel')?.rank,
   'Early city stops should not beat the last viable pre-remote-entry stop when both are close to the approach route.',
 );
 
@@ -209,11 +206,11 @@ const longApproachRanked = rankApproachResupplyOptions({
 });
 assert.strictEqual(
   longApproachRanked[0].id,
-  'last-viable-before-remote-fuel',
-  'Long GPS-to-trailhead approaches should prefer the last viable civilization-side fuel stop over a stronger provider match far earlier on the route.',
+  'remote-edge-fuel',
+  'Long approaches should prefer the last valid stop before exact entry, independent of provider popularity.',
 );
 assert.ok(
-  longApproachRanked.find((option) => option.id === 'early-high-provider-fuel')?.rank > longApproachRanked.find((option) => option.id === 'last-viable-before-remote-fuel')?.rank,
+  longApproachRanked.find((option) => option.id === 'early-high-provider-fuel')?.rank > longApproachRanked.find((option) => option.id === 'remote-edge-fuel')?.rank,
   'High provider confidence alone should not pull Smart Resupply hundreds of miles before the remote-entry corridor.',
 );
 

@@ -1,5 +1,113 @@
 export const ROUTE_CATALOG_MAX_PAGE_SIZE = 500;
 export const ROUTE_CATALOG_MAX_PAGINATION_WINDOW = 2_000;
+export const ROUTE_CATALOG_CURSOR_VERSION = 1;
+export const ROUTE_CATALOG_CURSOR_MAX_LENGTH = 512;
+
+const ROUTE_CATALOG_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export type RouteCatalogPageCursor = {
+  routeId: string;
+};
+
+export async function routeCatalogCursorFingerprint(values: unknown[]): Promise<string> {
+  const input = new TextEncoder().encode(JSON.stringify(values));
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', input));
+  return Array.from(digest.slice(0, 16))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function encodeCursorBytes(value: Uint8Array): string {
+  return btoa(String.fromCharCode(...value))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function decodeCursorBytes(value: string): Uint8Array {
+  const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=');
+  return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
+}
+
+async function routeCatalogCursorHmacKey(
+  signingSecret: string,
+  usage: KeyUsage[],
+): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(signingSecret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    usage,
+  );
+}
+
+function routeCatalogCursorSigningPayload(routeId: string, fingerprint: string): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify([
+    ROUTE_CATALOG_CURSOR_VERSION,
+    fingerprint,
+    routeId,
+  ]));
+}
+
+export async function encodeRouteCatalogPageCursor(
+  cursor: RouteCatalogPageCursor,
+  fingerprint: string,
+  signingSecret: string,
+): Promise<string> {
+  const key = await routeCatalogCursorHmacKey(signingSecret, ['sign']);
+  const signature = new Uint8Array(await crypto.subtle.sign(
+    'HMAC',
+    key,
+    routeCatalogCursorSigningPayload(cursor.routeId, fingerprint),
+  ));
+  return btoa(JSON.stringify({
+    v: ROUTE_CATALOG_CURSOR_VERSION,
+    f: fingerprint,
+    r: cursor.routeId,
+    s: encodeCursorBytes(signature),
+  }))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+export async function decodeRouteCatalogPageCursor(
+  value: unknown,
+  fingerprint: string,
+  signingSecret: string,
+): Promise<RouteCatalogPageCursor | null> {
+  const encoded = cleanText(value);
+  if (!encoded || encoded.length > ROUTE_CATALOG_CURSOR_MAX_LENGTH) return null;
+  try {
+    const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=');
+    const record = readRecord(JSON.parse(atob(padded)));
+    const routeId = cleanText(record?.r);
+    const signature = cleanText(record?.s);
+    if (
+      record?.v !== ROUTE_CATALOG_CURSOR_VERSION ||
+      record?.f !== fingerprint ||
+      !ROUTE_CATALOG_UUID_PATTERN.test(routeId) ||
+      !signature
+    ) {
+      return null;
+    }
+    const key = await routeCatalogCursorHmacKey(signingSecret, ['verify']);
+    const verified = await crypto.subtle.verify(
+      'HMAC',
+      key,
+      decodeCursorBytes(signature),
+      routeCatalogCursorSigningPayload(routeId, fingerprint),
+    );
+    if (!verified) return null;
+    return { routeId };
+  } catch {
+    return null;
+  }
+}
 
 export type RouteCatalogSafeExclusionReason =
   | 'missing_geometry'
@@ -175,6 +283,36 @@ export function partitionRestrictedRouteCatalogRecords(
     if (diagnostic) diagnosticRecords.push(diagnostic);
   });
   return { records, diagnosticRecords };
+}
+
+export function partitionRouteCatalogRecordsForPage(
+  values: UnknownRecord[],
+  options: { offset: number; pageSize: number },
+): {
+  records: UnknownRecord[];
+  diagnosticRecords: RouteCatalogSafeDiagnosticRecord[];
+  revealableMatchedCount: number;
+  hasMoreRevealable: boolean;
+} {
+  const partition = partitionRestrictedRouteCatalogRecords(values);
+  const offset = Math.max(0, Math.floor(options.offset));
+  const pageSize = Math.max(1, Math.floor(options.pageSize));
+  const windowEnd = offset + pageSize;
+  return {
+    records: partition.records.slice(offset, windowEnd),
+    diagnosticRecords: partition.diagnosticRecords,
+    revealableMatchedCount: partition.records.length,
+    hasMoreRevealable: partition.records.length > windowEnd,
+  };
+}
+
+export function expandRouteCatalogCandidateLimit(currentLimit: number, pageSize: number): number {
+  const current = Math.max(1, Math.floor(currentLimit));
+  const increment = Math.max(1, Math.floor(pageSize));
+  return Math.min(
+    ROUTE_CATALOG_MAX_PAGINATION_WINDOW,
+    Math.max(current + increment, current * 2),
+  );
 }
 
 export function normalizeRouteCatalogPagination(

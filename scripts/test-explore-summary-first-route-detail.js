@@ -51,6 +51,7 @@ const {
   getDiscoverableTrailPacks,
   routeCatalogSummaryToDeferredOpportunity,
   routeCatalogSummaryToDeferredTrailPack,
+  trailPackToExpeditionOpportunity,
 } = require(path.join(root, 'lib', 'explore', 'trailPacks.ts'));
 
 function catalogSummary(id = 'cached-summary', overrides = {}) {
@@ -139,6 +140,28 @@ function detailTrailPack(id = 'summary-route') {
     },
     createdAt: '2026-07-16T00:00:00.000Z',
     updatedAt: '2026-07-16T00:00:00.000Z',
+  };
+}
+
+function shortSummaryRoute(id = 'short-summary-route') {
+  return {
+    ...summaryRoute(id),
+    name: 'Two Mile Summary Route',
+    distanceMiles: 2,
+  };
+}
+
+function shortDetailTrailPack(id = 'short-summary-route', overrides = {}) {
+  const detail = detailTrailPack(id);
+  return {
+    ...detail,
+    name: 'Two Mile Summary Route',
+    distanceMiles: 2,
+    ...overrides,
+    catalogVerification: {
+      ...detail.catalogVerification,
+      ...(overrides.catalogVerification ?? {}),
+    },
   };
 }
 
@@ -267,6 +290,92 @@ function detailTrailPack(id = 'summary-route') {
   assert.strictEqual(blockedDetail.safeErrorCode, 'ROUTE_CATALOG_DETAIL_REJECTED');
   assert.strictEqual(blockedDetail.retryEligible, false);
   assert.strictEqual(blockedDetail.route, summary);
+
+  const shortSummary = shortSummaryRoute();
+  const shortSummaryAvailability = classifyExploreRouteAvailability(shortSummary);
+  assert.strictEqual(shortSummaryAvailability.discoverability.eligible, true);
+  assert.strictEqual(shortSummaryAvailability.tripBuilder.eligible, true);
+  assert.strictEqual(shortSummaryAvailability.guidance.eligible, false);
+  assert(
+    shortSummaryAvailability.guidance.exclusionCodes.includes('too_short'),
+    'A two-mile summary must retain too_short as guidance-readiness context.',
+  );
+  assert.strictEqual(shortSummaryAvailability.detailState, 'deferred');
+
+  const shortSuccess = await resolveExploreTripBuilderRouteDetail(shortSummary, {
+    fetchDetail: async () => shortDetailTrailPack(),
+  });
+  assert.strictEqual(
+    shortSuccess.status,
+    'ready',
+    'Valid detail hydration must not reject a Trip Builder-eligible route solely because it is short.',
+  );
+  assert.strictEqual(shortSuccess.route.id, shortSummary.id);
+  const shortHydratedAvailability = classifyExploreRouteAvailability(shortSuccess.route);
+  assert.strictEqual(shortHydratedAvailability.discoverability.eligible, true);
+  assert.strictEqual(shortHydratedAvailability.tripBuilder.eligible, true);
+  assert.strictEqual(shortHydratedAvailability.guidance.eligible, false);
+  assert(shortHydratedAvailability.guidance.exclusionCodes.includes('too_short'));
+  assert.strictEqual(
+    shortHydratedAvailability.detailState,
+    'ready',
+    'A valid full-geometry short route is detail-ready even when advanced guidance is not ready.',
+  );
+
+  const shortMissingGeometry = await resolveExploreTripBuilderRouteDetail(shortSummary, {
+    fetchDetail: async () => shortDetailTrailPack('short-summary-route', {
+      routeGeometry: undefined,
+    }),
+  });
+  assert.strictEqual(shortMissingGeometry.status, 'error');
+  assert.strictEqual(shortMissingGeometry.safeErrorCode, 'ROUTE_CATALOG_DETAIL_INVALID_GEOMETRY');
+  assert.notStrictEqual(shortMissingGeometry.safeErrorCode, 'ROUTE_CATALOG_DETAIL_REJECTED');
+
+  const shortInvalidGeometry = await resolveExploreTripBuilderRouteDetail(shortSummary, {
+    fetchDetail: async () => shortDetailTrailPack('short-summary-route', {
+      routeGeometry: {
+        type: 'LineString',
+        coordinates: [[-109.6, 38.5]],
+      },
+    }),
+  });
+  assert.strictEqual(shortInvalidGeometry.status, 'error');
+  assert.strictEqual(shortInvalidGeometry.safeErrorCode, 'ROUTE_CATALOG_DETAIL_INVALID_GEOMETRY');
+  assert.notStrictEqual(shortInvalidGeometry.safeErrorCode, 'ROUTE_CATALOG_DETAIL_REJECTED');
+
+  const shortAccessBlockedPack = shortDetailTrailPack('short-summary-route', {
+    catalogVerification: {
+      legalAccessStatus: 'unverified',
+    },
+  });
+  const shortAccessAvailability = classifyExploreRouteAvailability(
+    trailPackToExpeditionOpportunity(shortAccessBlockedPack),
+  );
+  assert(shortAccessAvailability.tripBuilder.exclusionCodes.includes('access_unverified'));
+  const shortAccessBlocked = await resolveExploreTripBuilderRouteDetail(shortSummary, {
+    fetchDetail: async () => shortAccessBlockedPack,
+  });
+  assert.strictEqual(shortAccessBlocked.status, 'error');
+  assert.strictEqual(shortAccessBlocked.safeErrorCode, 'ROUTE_CATALOG_DETAIL_REJECTED');
+  assert.strictEqual(shortAccessBlocked.retryEligible, false);
+
+  const shortModerationBlockedPack = shortDetailTrailPack('short-summary-route', {
+    reviewStatus: 'needs_more_data',
+    catalogVerification: {
+      publicRecommendation: false,
+      blockers: ['Route is pending moderation and is not approved for public recommendation.'],
+    },
+  });
+  const shortModerationAvailability = classifyExploreRouteAvailability(
+    trailPackToExpeditionOpportunity(shortModerationBlockedPack),
+  );
+  assert(shortModerationAvailability.tripBuilder.exclusionCodes.includes('moderation_pending'));
+  const shortModerationBlocked = await resolveExploreTripBuilderRouteDetail(shortSummary, {
+    fetchDetail: async () => shortModerationBlockedPack,
+  });
+  assert.strictEqual(shortModerationBlocked.status, 'error');
+  assert.strictEqual(shortModerationBlocked.safeErrorCode, 'ROUTE_CATALOG_DETAIL_REJECTED');
+  assert.strictEqual(shortModerationBlocked.retryEligible, false);
 
   const suppliedMalformedSummary = {
     ...summaryRoute('supplied-malformed'),

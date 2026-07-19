@@ -1,8 +1,42 @@
 const assert = require('assert');
 const fs = require('fs');
+const Module = require('module');
 const path = require('path');
+const ts = require('typescript');
 
 const root = path.join(__dirname, '..');
+global.__DEV__ = false;
+
+function compileTypescript(module, filename) {
+  const source = fs.readFileSync(filename, 'utf8');
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: filename,
+  });
+  module._compile(output.outputText, filename);
+}
+
+require.extensions['.ts'] = compileTypescript;
+
+const originalLoad = Module._load;
+Module._load = function load(request, parent, isMain) {
+  if (request === 'react-native') {
+    return {
+      Platform: { OS: 'web', select: (choices) => choices?.web ?? choices?.default },
+    };
+  }
+  if (
+    (request === '../supabase' || request === './supabase') &&
+    parent?.filename.includes(`${path.sep}lib${path.sep}`)
+  ) {
+    return { supabase: {} };
+  }
+  return originalLoad.apply(this, [request, parent, isMain]);
+};
 
 function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), 'utf8');
@@ -23,6 +57,31 @@ assert(exists(migrationPath), 'Trail Packs should define a live Supabase catalog
 
 const liveCatalog = read(liveCatalogPath);
 const migration = read(migrationPath);
+const { deriveExploreRouteSurfaceState } = require(
+  path.join(root, 'lib', 'explore', 'exploreGuidanceReadyInventory.ts'),
+);
+
+function routeSurface(overrides = {}) {
+  return deriveExploreRouteSurfaceState({
+    status: 'ready',
+    providerStatus: 'active',
+    catalogSource: 'route_catalog',
+    sourceTruth: 'live',
+    freshness: 'live',
+    snapshotRefreshKey: 'current-route-request',
+    currentRefreshKey: 'current-route-request',
+    visibleCandidateCount: 0,
+    candidateCount: 0,
+    discoverableCount: 0,
+    readyCount: 0,
+    evaluatedCount: 0,
+    hasRangeData: false,
+    isSourceFilterAll: true,
+    isLoading: false,
+    validEmpty: false,
+    ...overrides,
+  });
+}
 
 assert(
   discover.includes('liveTrailPackCatalogStore') &&
@@ -34,10 +93,38 @@ assert(
   !discover.includes('getDefaultECSTrailPacks'),
   'Explore must not merge default fixture Trail Packs into user-visible Trail Pack content',
 );
+const providerUnavailable = routeSurface({
+  status: 'error',
+  providerStatus: 'error',
+  catalogSource: 'unavailable',
+  sourceTruth: 'unavailable',
+  freshness: 'unknown',
+  snapshotRefreshKey: null,
+  evaluatedCount: 23,
+  hasRangeData: true,
+});
+assert.strictEqual(providerUnavailable.kind, 'provider_unavailable');
+assert.strictEqual(providerUnavailable.currentSuccessfulEvaluation, false);
+assert.strictEqual(providerUnavailable.showBlockedNotice, false);
+
+const providerDegraded = routeSurface({
+  status: 'degraded',
+  sourceTruth: 'cached',
+  freshness: 'stale',
+  evaluatedCount: 23,
+  hasRangeData: true,
+});
+assert.strictEqual(providerDegraded.kind, 'stale');
+assert.strictEqual(providerDegraded.currentSuccessfulEvaluation, false);
+assert.strictEqual(providerDegraded.showBlockedNotice, false);
+
 assert(
-  discover.includes('No live reviewed Trail Packs found within this radius.') &&
-    discover.includes('Live Trail Packs are not available from the reviewed catalog yet.'),
-  'Explore empty/error copy should be truthful when live reviewed Trail Packs are unavailable',
+  discover.includes('testID="explore-guidance-ready-provider-unavailable"') &&
+    discover.includes('testID="explore-guidance-ready-degraded-notice"') &&
+    discover.includes('testID="explore-guidance-ready-blocked-notice"') &&
+    discover.includes('accessibilityRole="button"') &&
+    discover.includes('accessibilityLabel="Retry Explore route catalog"'),
+  'Explore should expose stable provider-unavailable and degraded states with an accessible retry action distinct from policy blocking.',
 );
 assert(
   liveCatalog.includes("from('trail_packs')") &&

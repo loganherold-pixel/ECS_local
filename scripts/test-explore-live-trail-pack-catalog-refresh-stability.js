@@ -28,20 +28,27 @@ const legacyResponses = [];
 const invocations = [];
 const legacyQueryEvents = [];
 const memoryCaches = new Map();
+const ECS_REQUEST_ID_HEADER = 'x-ecs-request-id';
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const mockSupabase = {
   functions: {
     async invoke(name, options) {
-      invocations.push({
+      const invocation = {
         name,
         body: options?.body ?? null,
+        headers: { ...(options?.headers ?? {}) },
         signal: options?.signal ?? null,
         timeout: options?.timeout ?? null,
-      });
+      };
+      invocations.push(invocation);
       const next = responses.shift();
       if (!next) {
         throw new Error(`Unexpected Supabase invocation: ${name}`);
       }
-      return next;
+      return typeof next === 'function'
+        ? next({ invocation, name, options })
+        : next;
     },
   },
   from(table) {
@@ -109,6 +116,7 @@ Module._load = function load(request, parent, isMain) {
 };
 
 const {
+  buildRouteCatalogPaginationProgress,
   buildRouteCatalogSearchBody,
   createLiveTrailPackCatalogRefreshKey,
   fetchRouteCatalogTrailPackDetail,
@@ -228,6 +236,29 @@ function searchResponse(records, coverageState, diagnosticRecords = [], metaOver
       },
     },
     error: null,
+  };
+}
+
+function echoRequestIdInResponse(response) {
+  return ({ invocation }) => {
+    const requestId = invocation.headers[ECS_REQUEST_ID_HEADER];
+    return {
+      ...response,
+      data: {
+        ...response.data,
+        meta: {
+          ...response.data.meta,
+          ecsRequestId: requestId,
+        },
+      },
+      response: {
+        headers: {
+          get(name) {
+            return String(name).toLowerCase() === ECS_REQUEST_ID_HEADER ? requestId : null;
+          },
+        },
+      },
+    };
   };
 }
 
@@ -390,16 +421,39 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
     'Page identity must participate in request deduplication and stale-response fingerprints.',
   );
 
-  responses.push(searchResponse([routeRecord()], {
+  responses.push(echoRequestIdInResponse(searchResponse([routeRecord()], {
     state: 'ready',
     title: 'Verified routes available',
     message: 'Source-backed ECS route catalog records match the current criteria.',
-  }));
+  })));
 
   const first = await refreshLiveTrailPackCatalog(criteria);
+  const firstInvocation = invocations.find(
+    (entry) => entry.name === 'route-catalog-search' && entry.body.radiusMiles === criteria.radiusMiles,
+  );
+  assert(firstInvocation, 'The initial route-catalog request should reach the provider.');
+  const firstEcsRequestId = firstInvocation.headers[ECS_REQUEST_ID_HEADER];
+  assert.match(firstEcsRequestId, UUID_PATTERN, 'Every fresh route-catalog request should send a UUID header.');
+  assert.deepStrictEqual(
+    firstInvocation.body,
+    buildRouteCatalogSearchBody(criteria),
+    'Correlation identity must remain outside the semantic request body.',
+  );
+  assert.strictEqual(
+    Object.prototype.hasOwnProperty.call(firstInvocation.body, 'ecsRequestId'),
+    false,
+    'Correlation identity must not become request or cache-key input.',
+  );
+  assert.strictEqual(
+    createLiveTrailPackCatalogRefreshKey(criteria),
+    refreshKey,
+    'Adding a correlation header must not change the semantic refresh/cache key.',
+  );
   assert.strictEqual(first.status, 'ready');
   assert.strictEqual(first.source, 'route_catalog');
   assert.strictEqual(first.refreshKey, refreshKey);
+  assert.strictEqual(first.ecsRequestId, firstEcsRequestId);
+  assert.strictEqual(first.searchMeta.ecsRequestId, firstEcsRequestId);
   assert.strictEqual(first.trailPacks.length, 1);
   assert.strictEqual(first.guidanceDiagnosticTrailPacks.length, 0);
   assert.strictEqual(first.preservedFromEmptyRefresh, false);
@@ -409,17 +463,23 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
     radiusMiles: 99,
     page: 2,
     pageSize: 25,
+    continuationCursor: 'isolated-page-two-cursor',
   };
   responses.push(searchResponse([routeRecord('second-page-route')], {
     state: 'ready',
     title: 'Verified routes available',
     message: 'The second provider page completed.',
   }, [], {
+    paginationContractVersion: 'route_catalog_public_cursor_page_v2',
+    nearbyRouteRpcUsed: true,
+    nearbyRouteRpc: 'route_catalog_nearby_public_route_cursor_page',
+    fallbackQueryUsed: false,
     page: 2,
     pageSize: 25,
     offset: 25,
     hasMore: true,
     nextPage: 3,
+    nextCursor: 'isolated-page-three-cursor',
     totalMatchedCount: 51,
     totalMatchedCountBounded: true,
   }));
@@ -470,13 +530,18 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
     title: 'Verified routes available',
     message: 'The first atomic provider page completed.',
   }, [], {
+    paginationContractVersion: 'route_catalog_public_cursor_page_v2',
+    nearbyRouteRpcUsed: true,
+    nearbyRouteRpc: 'route_catalog_nearby_public_route_cursor_page',
+    fallbackQueryUsed: false,
     page: 1,
     pageSize: 25,
     offset: 0,
     hasMore: true,
     nextPage: 2,
+    nextCursor: 'atomic-page-two-cursor',
     totalMatchedCount: 3,
-    totalMatchedCountBounded: false,
+    totalMatchedCountBounded: true,
   }));
   const atomicBase = await refreshLiveTrailPackCatalog(atomicBaseCriteria);
   assert.strictEqual(atomicBase.refreshKey, atomicBaseKey);
@@ -490,17 +555,23 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
     title: 'Verified routes available',
     message: 'The second atomic provider page completed.',
   }, [], {
+    paginationContractVersion: 'route_catalog_public_cursor_page_v2',
+    nearbyRouteRpcUsed: true,
+    nearbyRouteRpc: 'route_catalog_nearby_public_route_cursor_page',
+    fallbackQueryUsed: false,
     page: 2,
     pageSize: 25,
     offset: 25,
     hasMore: true,
     nextPage: 3,
+    nextCursor: 'atomic-page-three-cursor',
     totalMatchedCount: 3,
-    totalMatchedCountBounded: false,
+    totalMatchedCountBounded: true,
   }));
   const atomicSecondPage = await refreshLiveTrailPackCatalog({
     ...atomicBaseCriteria,
     page: 2,
+    continuationCursor: atomicBase.searchMeta.nextCursor,
   });
   unsubscribeAtomicPage();
   assert.deepStrictEqual(atomicSecondPage.trailPacks.map((route) => route.id), [
@@ -527,6 +598,7 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   const atomicPageFailure = await refreshLiveTrailPackCatalog({
     ...atomicBaseCriteria,
     page: 3,
+    continuationCursor: atomicSecondPage.searchMeta.nextCursor,
   });
   assert.strictEqual(atomicPageFailure.status, 'degraded');
   assert.strictEqual(atomicPageFailure.source, 'route_catalog');
@@ -544,6 +616,10 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
     title: 'Verified routes available',
     message: 'The retried atomic provider page completed.',
   }, [], {
+    paginationContractVersion: 'route_catalog_public_cursor_page_v2',
+    nearbyRouteRpcUsed: true,
+    nearbyRouteRpc: 'route_catalog_nearby_public_route_cursor_page',
+    fallbackQueryUsed: false,
     page: 3,
     pageSize: 25,
     offset: 50,
@@ -555,6 +631,7 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   const atomicPageRetry = await refreshLiveTrailPackCatalog({
     ...atomicBaseCriteria,
     page: 3,
+    continuationCursor: atomicSecondPage.searchMeta.nextCursor,
   });
   assert.strictEqual(atomicPageRetry.status, 'ready');
   assert.strictEqual(atomicPageRetry.error, null);
@@ -571,6 +648,7 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   const cancelledAtomicPageRequest = refreshLiveTrailPackCatalog({
     ...atomicBaseCriteria,
     page: 4,
+    continuationCursor: 'atomic-page-four-cursor',
   }, {
     signal: atomicCancellationController.signal,
     cancellationReason: 'unmount',
@@ -588,6 +666,7 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   const supersededAtomicPage = refreshLiveTrailPackCatalog({
     ...atomicBaseCriteria,
     page: 4,
+    continuationCursor: 'atomic-page-four-cursor',
   }, { timeoutMs: 100 });
   await new Promise((resolve) => setTimeout(resolve, 0));
   responses.push(searchResponse([routeRecord('atomic-primary-retry-route')], {
@@ -703,6 +782,301 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   assert.strictEqual(mergedPages.searchMeta.hasMore, false);
   assert.strictEqual(mergedPages.searchMeta.totalMatchedCount, 27);
   assert.strictEqual(mergedPages.refreshKey, mergeBaseKey);
+
+  // Pagination acceptance A-F: production normalization and merge retain every
+  // revealable summary, preserve short-route planning semantics, and keep page
+  // failures/stale responses from replacing the active card set.
+  const paginationCriteria = {
+    ...criteria,
+    radiusMiles: 496,
+    page: 1,
+    pageSize: 50,
+    limit: 50,
+  };
+  const paginationRefreshKey = createLiveTrailPackCatalogRefreshKey(paginationCriteria);
+  const paginationInvocationStart = invocations.length;
+  const pageOneRecords = Array.from({ length: 50 }, (_, index) =>
+    lightweightRouteRecord(
+      `pagination-route-${String(index).padStart(2, '0')}`,
+      { name: `Pagination route ${String(index).padStart(2, '0')}` },
+    ));
+  responses.push(searchResponse(pageOneRecords, {
+    state: 'ready',
+    title: 'Verified routes available',
+    message: 'The first public route page is available.',
+  }, [], {
+    paginationContractVersion: 'route_catalog_public_cursor_page_v2',
+    nearbyRouteRpcUsed: true,
+    nearbyRouteRpc: 'route_catalog_nearby_public_route_cursor_page',
+    fallbackQueryUsed: false,
+    page: 1,
+    pageSize: 50,
+    offset: 0,
+    returnedCount: 50,
+    hasMore: true,
+    nextPage: 2,
+    nextCursor: 'cursor-page-2',
+    totalMatchedCount: 51,
+    totalMatchedCountBounded: true,
+  }));
+  const paginationPageOne = await refreshLiveTrailPackCatalog(paginationCriteria);
+  assert.strictEqual(paginationPageOne.trailPacks.length, 50);
+  assert.strictEqual(new Set(paginationPageOne.trailPacks.map((route) => route.id)).size, 50);
+  assert.strictEqual(paginationPageOne.searchMeta.hasMore, true);
+  assert.strictEqual(paginationPageOne.searchMeta.nextPage, 2);
+  assert.strictEqual(paginationPageOne.searchMeta.nextCursor, 'cursor-page-2');
+  const paginationPageOneSurface = buildProductionExploreSurface(
+    paginationPageOne,
+    paginationRefreshKey,
+  );
+  assert.strictEqual(paginationPageOneSurface.visibleCandidates.length, 50);
+  assert.strictEqual(paginationPageOneSurface.surface.kind, 'cards');
+
+  const pageTwoShortRecord = {
+    ...lightweightRouteRecord('pagination-short-route', { name: 'Pagination short route' }),
+    distance_miles: 3,
+  };
+  responses.push(searchResponse([pageTwoShortRecord], {
+    state: 'ready',
+    title: 'Verified routes available',
+    message: 'The terminal public route page is available.',
+  }, [], {
+    paginationContractVersion: 'route_catalog_public_cursor_page_v2',
+    nearbyRouteRpcUsed: true,
+    nearbyRouteRpc: 'route_catalog_nearby_public_route_cursor_page',
+    fallbackQueryUsed: false,
+    page: 2,
+    pageSize: 50,
+    offset: 50,
+    returnedCount: 1,
+    hasMore: false,
+    nextPage: null,
+    nextCursor: null,
+    totalMatchedCount: 51,
+    totalMatchedCountBounded: false,
+  }));
+  const paginationPageTwo = await refreshLiveTrailPackCatalog({
+    ...paginationCriteria,
+    page: 2,
+    continuationCursor: paginationPageOne.searchMeta.nextCursor,
+  });
+  assert.strictEqual(
+    invocations[paginationInvocationStart + 1].body.continuationCursor,
+    paginationPageOne.searchMeta.nextCursor,
+    'The production page-two request must send the opaque continuation returned by page one.',
+  );
+  const pageOneBody = invocations[paginationInvocationStart].body;
+  const pageTwoBody = invocations[paginationInvocationStart + 1].body;
+  [
+    'latitude',
+    'longitude',
+    'radiusMiles',
+    'vehicleClass',
+    'recommendationOnly',
+    'includeGeometry',
+    'includePreviewGeometry',
+    'minDistanceMiles',
+    'maxDistanceMiles',
+    'difficulty',
+  ].forEach((key) => {
+    assert.deepStrictEqual(
+      pageTwoBody[key],
+      pageOneBody[key],
+      `Page two must preserve the page-one ${key} criterion.`,
+    );
+  });
+  assert.strictEqual(pageTwoBody.includeGeometry, false);
+  const paginationSurface = buildProductionExploreSurface(
+    paginationPageTwo,
+    paginationRefreshKey,
+  );
+  assert.strictEqual(paginationPageTwo.trailPacks.length, 51);
+  assert.strictEqual(new Set(paginationPageTwo.trailPacks.map((route) => route.id)).size, 51);
+  assert.strictEqual(paginationPageTwo.routeCatalogSummaries.length, 51);
+  assert.strictEqual(paginationPageTwo.searchMeta.paginationContractVersion, 'route_catalog_public_cursor_page_v2');
+  assert.strictEqual(paginationPageTwo.searchMeta.nearbyRouteRpcUsed, true);
+  assert.strictEqual(paginationPageTwo.searchMeta.nearbyRouteRpc, 'route_catalog_nearby_public_route_cursor_page');
+  assert.strictEqual(paginationPageTwo.searchMeta.nextCursor, null);
+  assert.strictEqual(paginationPageTwo.searchMeta.fallbackQueryUsed, false);
+  assert.strictEqual(paginationSurface.visibleCandidates.length, 51);
+  assert.strictEqual(paginationSurface.surface.kind, 'cards');
+  assert.deepStrictEqual(
+    paginationPageTwo.trailPacks.slice(0, 50).map((route) => route.id),
+    paginationPageOne.trailPacks.map((route) => route.id),
+    'Appending page two must preserve every page-one card in its original order.',
+  );
+  assert.strictEqual(paginationPageTwo.trailPacks[50].id, 'pagination-short-route');
+  const appendedShortCandidate = paginationSurface.visibleCandidates.find((candidate) =>
+    candidate.route.routeMetadata?.trailPackId === 'pagination-short-route');
+  assert(appendedShortCandidate, 'The page-two short route must remain visible after append.');
+  assert.strictEqual(appendedShortCandidate.discoverable, true);
+  assert.strictEqual(appendedShortCandidate.tripBuilderEligible, true);
+  assert.strictEqual(appendedShortCandidate.guidanceReady, false);
+  const appendedShortAvailability = classifyExploreRouteAvailability(appendedShortCandidate.route);
+  assert(appendedShortAvailability.guidance.exclusionCodes.includes('too_short'));
+
+  const duplicatePageSnapshot = {
+    ...paginationPageTwo,
+    trailPacks: [paginationPageOne.trailPacks[0], paginationPageTwo.trailPacks[50]],
+    routeCatalogSummaries: [
+      paginationPageOne.routeCatalogSummaries[0],
+      paginationPageTwo.routeCatalogSummaries[50],
+    ],
+    refreshKey: createLiveTrailPackCatalogRefreshKey({
+      ...paginationCriteria,
+      page: 2,
+      continuationCursor: 'cursor-page-2',
+    }),
+  };
+  const duplicateMerged = mergeLiveTrailPackCatalogPageSnapshots(
+    paginationPageOne,
+    duplicatePageSnapshot,
+    paginationRefreshKey,
+  );
+  assert.strictEqual(duplicateMerged.trailPacks.length, 51);
+  assert.strictEqual(new Set(duplicateMerged.trailPacks.map((route) => route.id)).size, 51);
+  assert.deepStrictEqual(
+    duplicateMerged.trailPacks.map((route) => route.id),
+    paginationPageTwo.trailPacks.map((route) => route.id),
+    'Cross-page deduplication must not reorder already-loaded cards.',
+  );
+
+  const rejectedPaginationRadius = mergeLiveTrailPackCatalogPageSnapshots(
+    paginationPageOne,
+    {
+      ...duplicatePageSnapshot,
+      refreshKey: createLiveTrailPackCatalogRefreshKey({
+        ...paginationCriteria,
+        radiusMiles: 495,
+        page: 2,
+      }),
+    },
+    paginationRefreshKey,
+  );
+  assert.strictEqual(rejectedPaginationRadius.trailPacks.length, 50);
+  assert(
+    !rejectedPaginationRadius.trailPacks.some((route) => route.id === 'pagination-short-route'),
+    'A page from an obsolete radius must not merge into the current request family.',
+  );
+  const rejectedPaginationFilter = mergeLiveTrailPackCatalogPageSnapshots(
+    paginationPageOne,
+    {
+      ...duplicatePageSnapshot,
+      refreshKey: createLiveTrailPackCatalogRefreshKey({
+        ...paginationCriteria,
+        difficulty: 'hard',
+        page: 2,
+      }),
+    },
+    paginationRefreshKey,
+  );
+  assert.strictEqual(rejectedPaginationFilter.trailPacks.length, 50);
+  assert(
+    !rejectedPaginationFilter.trailPacks.some((route) => route.id === 'pagination-short-route'),
+    'A page from an obsolete filter set must not merge into the current request family.',
+  );
+
+  const paginationProgress = buildRouteCatalogPaginationProgress({
+    loadedCatalogCount: 50,
+    totalMatchedCount: 51,
+    totalMatchedCountBounded: true,
+    visibleCatalogCardCount: 50,
+    visibleCandidateCount: 72,
+  });
+  assert.deepStrictEqual(
+    {
+      loaded: paginationProgress.loadedCatalogCount,
+      matched: paginationProgress.matchedCatalogCount,
+      lowerBound: paginationProgress.matchedCatalogCountIsLowerBound,
+      visibleCatalog: paginationProgress.visibleCatalogCardCount,
+      nonCatalog: paginationProgress.nonCatalogCandidateCount,
+    },
+    { loaded: 50, matched: 51, lowerBound: true, visibleCatalog: 50, nonCatalog: 22 },
+  );
+  assert.match(paginationProgress.label, /50 CATALOG ROUTES LOADED/);
+  assert.match(paginationProgress.label, /AT LEAST 51 CATALOG MATCHES/);
+  assert.match(paginationProgress.label, /22 OTHER CANDIDATES/);
+  const terminalPaginationProgress = buildRouteCatalogPaginationProgress({
+    loadedCatalogCount: 51,
+    totalMatchedCount: 51,
+    totalMatchedCountBounded: false,
+    visibleCatalogCardCount: 51,
+    visibleCandidateCount: 51,
+  });
+  assert.match(terminalPaginationProgress.label, /51 OF 51 CATALOG ROUTES LOADED/);
+
+  const failedPageCriteria = { ...paginationCriteria, radiusMiles: 494 };
+  const failedPageRefreshKey = createLiveTrailPackCatalogRefreshKey(failedPageCriteria);
+  responses.push(searchResponse(pageOneRecords, {
+    state: 'ready',
+    title: 'Verified routes available',
+    message: 'The first page remains available.',
+  }, [], {
+    page: 1,
+    pageSize: 50,
+    offset: 0,
+    returnedCount: 50,
+    hasMore: true,
+    nextPage: 2,
+    nextCursor: 'failed-page-cursor',
+    totalMatchedCount: 51,
+    totalMatchedCountBounded: true,
+  }));
+  await refreshLiveTrailPackCatalog(failedPageCriteria);
+  responses.push({ data: null, error: { message: 'Page two provider unavailable', status: 503 } });
+  const failedSecondPage = await refreshLiveTrailPackCatalog({
+    ...failedPageCriteria,
+    page: 2,
+    continuationCursor: 'failed-page-cursor',
+  });
+  const failedSecondPageSurface = buildProductionExploreSurface(
+    failedSecondPage,
+    failedPageRefreshKey,
+  );
+  assert.strictEqual(failedSecondPage.trailPacks.length, 50);
+  assert.strictEqual(failedSecondPage.preservedReason, 'pagination_page_unavailable');
+  assert.strictEqual(failedSecondPage.asyncState.retryEligible, true);
+  assert.strictEqual(failedSecondPage.searchMeta.hasMore, true);
+  assert.strictEqual(failedSecondPage.searchMeta.nextPage, 2);
+  assert.strictEqual(failedSecondPage.searchMeta.nextCursor, 'failed-page-cursor');
+  assert.strictEqual(failedSecondPageSurface.visibleCandidates.length, 50);
+  assert.strictEqual(failedSecondPageSurface.surface.kind, 'cards');
+  assert.strictEqual(failedSecondPageSurface.surface.showBlockedNotice, false);
+  responses.push(searchResponse([
+    lightweightRouteRecord('pagination-retry-route', { name: 'Pagination retry route' }),
+  ], {
+    state: 'ready',
+    title: 'Verified routes available',
+    message: 'The retried terminal page is available.',
+  }, [], {
+    paginationContractVersion: 'route_catalog_public_cursor_page_v2',
+    nearbyRouteRpcUsed: true,
+    nearbyRouteRpc: 'route_catalog_nearby_public_route_cursor_page',
+    fallbackQueryUsed: false,
+    page: 2,
+    pageSize: 50,
+    offset: 50,
+    returnedCount: 1,
+    hasMore: false,
+    nextPage: null,
+    nextCursor: null,
+    totalMatchedCount: 51,
+    totalMatchedCountBounded: false,
+  }));
+  const retriedSecondPage = await refreshLiveTrailPackCatalog({
+    ...failedPageCriteria,
+    page: failedSecondPage.searchMeta.nextPage,
+    continuationCursor: failedSecondPage.searchMeta.nextCursor,
+  });
+  const retriedSecondPageSurface = buildProductionExploreSurface(
+    retriedSecondPage,
+    failedPageRefreshKey,
+  );
+  assert.strictEqual(retriedSecondPage.trailPacks.length, 51);
+  assert.strictEqual(retriedSecondPage.searchMeta.hasMore, false);
+  assert.strictEqual(retriedSecondPageSurface.visibleCandidates.length, 51);
+  assert.strictEqual(retriedSecondPageSurface.surface.kind, 'cards');
+
   const persistentDegradedMerge = mergeLiveTrailPackCatalogPageSnapshots(
     {
       ...first,
@@ -1034,6 +1408,9 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
     concurrentInvocationsBefore + 1,
     'Equivalent concurrent route-catalog consumers should share one provider request.',
   );
+  const concurrentInvocation = invocations[concurrentInvocationsBefore];
+  const concurrentEcsRequestId = concurrentInvocation.headers[ECS_REQUEST_ID_HEADER];
+  assert.match(concurrentEcsRequestId, UUID_PATTERN);
   resolveConcurrentRefresh(searchResponse([routeRecord('shared-route')], {
     state: 'ready',
     title: 'Verified routes available',
@@ -1043,6 +1420,14 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   assert.strictEqual(concurrentResultA.status, 'ready');
   assert.strictEqual(concurrentResultB.status, 'ready');
   assert.strictEqual(concurrentResultA.trailPacks[0].id, 'shared-route');
+  assert.strictEqual(
+    concurrentResultA.ecsRequestId,
+    concurrentEcsRequestId,
+    'The shared logical request should retain the single provider correlation ID.',
+  );
+  assert.strictEqual(concurrentResultB.ecsRequestId, concurrentEcsRequestId);
+  assert.strictEqual(concurrentResultA.searchMeta.ecsRequestId, concurrentEcsRequestId);
+  assert.strictEqual(concurrentResultB.searchMeta.ecsRequestId, concurrentEcsRequestId);
 
   const sharedCancellationCriteria = { ...criteria, radiusMiles: 42.5 };
   let resolveSharedCancellationRefresh;
@@ -1115,9 +1500,14 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   assert.strictEqual(liveTrailPackCatalogStore.getSnapshot().trailPacks[0].id, 'newest-route');
 
   const timeoutCriteria = { ...criteria, radiusMiles: 45 };
+  const timeoutInvocationsBefore = invocations.length;
   responses.push(new Promise(() => {}));
   const timedOut = await refreshLiveTrailPackCatalog(timeoutCriteria, { timeoutMs: 15 });
+  const timedOutInvocation = invocations[timeoutInvocationsBefore];
+  const timedOutEcsRequestId = timedOutInvocation.headers[ECS_REQUEST_ID_HEADER];
+  assert.match(timedOutEcsRequestId, UUID_PATTERN);
   assert.strictEqual(timedOut.status, 'error');
+  assert.strictEqual(timedOut.ecsRequestId, timedOutEcsRequestId);
   assert.strictEqual(timedOut.asyncState.safeErrorCode, 'ROUTE_CATALOG_TIMEOUT');
   assert.strictEqual(timedOut.asyncState.retryEligible, true);
 
@@ -1126,9 +1516,141 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
     title: 'Verified routes available',
     message: 'Retry completed.',
   }));
-  const retried = await refreshLiveTrailPackCatalog(timeoutCriteria, { timeoutMs: 100 });
+  const retried = await refreshLiveTrailPackCatalog(timeoutCriteria, {
+    timeoutMs: 100,
+    retryEcsRequestId: timedOut.ecsRequestId,
+  });
+  const retryInvocation = invocations[timeoutInvocationsBefore + 1];
+  assert.strictEqual(
+    retryInvocation.headers[ECS_REQUEST_ID_HEADER],
+    timedOutEcsRequestId,
+    'An explicit retry of the exact logical request should preserve its correlation ID.',
+  );
   assert.strictEqual(retried.status, 'ready');
+  assert.strictEqual(retried.ecsRequestId, timedOutEcsRequestId);
+  assert.strictEqual(retried.searchMeta.ecsRequestId, timedOutEcsRequestId);
   assert.strictEqual(retried.trailPacks[0].id, 'retry-route');
+
+  responses.push(echoRequestIdInResponse(searchResponse([routeRecord('fresh-revalidation-route')], {
+    state: 'ready',
+    title: 'Verified routes available',
+    message: 'A fresh revalidation completed.',
+  })));
+  const freshRevalidation = await refreshLiveTrailPackCatalog(timeoutCriteria, { timeoutMs: 100 });
+  const freshRevalidationInvocation = invocations[timeoutInvocationsBefore + 2];
+  const freshRevalidationEcsRequestId =
+    freshRevalidationInvocation.headers[ECS_REQUEST_ID_HEADER];
+  assert.match(freshRevalidationEcsRequestId, UUID_PATTERN);
+  assert.notStrictEqual(
+    freshRevalidationEcsRequestId,
+    timedOutEcsRequestId,
+    'A fresh revalidation should receive a new correlation ID even when its semantic body is unchanged.',
+  );
+  assert.deepStrictEqual(
+    freshRevalidationInvocation.body,
+    retryInvocation.body,
+    'Retry lifecycle identity must be carried in the header, not the semantic request body.',
+  );
+  assert.strictEqual(
+    createLiveTrailPackCatalogRefreshKey(timeoutCriteria),
+    freshRevalidation.refreshKey,
+    'A fresh correlation ID must not alter the cache/refresh key.',
+  );
+  assert.strictEqual(freshRevalidation.ecsRequestId, freshRevalidationEcsRequestId);
+  assert.strictEqual(freshRevalidation.searchMeta.ecsRequestId, freshRevalidationEcsRequestId);
+
+  responses.push(echoRequestIdInResponse(searchResponse([routeRecord('successful-refresh-route')], {
+    state: 'ready',
+    title: 'Verified routes available',
+    message: 'A successful same-key refresh completed.',
+  })));
+  const successfulSameKeyRefresh = await refreshLiveTrailPackCatalog(timeoutCriteria, {
+    timeoutMs: 100,
+    retryEcsRequestId: freshRevalidationEcsRequestId,
+  });
+  const successfulSameKeyInvocation = invocations[timeoutInvocationsBefore + 3];
+  const successfulSameKeyRequestId =
+    successfulSameKeyInvocation.headers[ECS_REQUEST_ID_HEADER];
+  assert.match(successfulSameKeyRequestId, UUID_PATTERN);
+  assert.notStrictEqual(
+    successfulSameKeyRequestId,
+    freshRevalidationEcsRequestId,
+    'A caller-supplied ID must not be reused after a successful non-retryable request.',
+  );
+  assert.strictEqual(successfulSameKeyRefresh.ecsRequestId, successfulSameKeyRequestId);
+
+  const cachedOriginCriteria = {
+    ...criteria,
+    radiusMiles: 45.5,
+    regionId: 'correlation_cache_origin',
+  };
+  responses.push(echoRequestIdInResponse(searchResponse([routeRecord('cached-correlation-origin')], {
+    state: 'ready',
+    title: 'Verified routes available',
+    message: 'The correlation cache origin completed.',
+  })));
+  const cachedOrigin = await refreshLiveTrailPackCatalog(cachedOriginCriteria);
+  const cachedOriginEcsRequestId = cachedOrigin.searchMeta.ecsRequestId;
+  assert.match(cachedOriginEcsRequestId, UUID_PATTERN);
+
+  const unrelatedCacheCriteria = {
+    ...criteria,
+    radiusMiles: 45.6,
+    regionId: 'correlation_cache_other',
+  };
+  responses.push(searchResponse([routeRecord('unrelated-correlation-cache-route')], {
+    state: 'ready',
+    title: 'Verified routes available',
+    message: 'An unrelated semantic request replaced the in-memory snapshot.',
+  }));
+  await refreshLiveTrailPackCatalog(unrelatedCacheCriteria);
+
+  let resolveCachedRevalidation;
+  responses.push(new Promise((resolve) => {
+    resolveCachedRevalidation = resolve;
+  }));
+  const cachedRevalidationEmissions = [];
+  const unsubscribeCachedRevalidation = liveTrailPackCatalogStore.subscribe(() => {
+    cachedRevalidationEmissions.push(liveTrailPackCatalogStore.getSnapshot());
+  });
+  const cachedRevalidationInvocationsBefore = invocations.length;
+  const cachedRevalidationRequest = refreshLiveTrailPackCatalog(cachedOriginCriteria);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const cachedLoadingSnapshot = cachedRevalidationEmissions.find(
+    (entry) => entry.status === 'loading' && entry.asyncState.source === 'cached',
+  );
+  assert(
+    cachedLoadingSnapshot,
+    'A persisted summary should render as cached while its fresh revalidation remains pending.',
+  );
+  const cachedRevalidationInvocation = invocations[cachedRevalidationInvocationsBefore];
+  const cachedRevalidationEcsRequestId =
+    cachedRevalidationInvocation.headers[ECS_REQUEST_ID_HEADER];
+  assert.match(cachedRevalidationEcsRequestId, UUID_PATTERN);
+  assert.strictEqual(
+    cachedLoadingSnapshot.searchMeta.ecsRequestId,
+    cachedOriginEcsRequestId,
+    'Cached summaries should retain the response ID that originally produced them.',
+  );
+  assert.strictEqual(
+    cachedLoadingSnapshot.ecsRequestId,
+    cachedRevalidationEcsRequestId,
+    'The loading snapshot should separately expose the active revalidation ID.',
+  );
+  assert.notStrictEqual(
+    cachedLoadingSnapshot.ecsRequestId,
+    cachedLoadingSnapshot.searchMeta.ecsRequestId,
+    'Cached-origin and revalidation correlation IDs must remain distinguishable.',
+  );
+  resolveCachedRevalidation(searchResponse([routeRecord('revalidated-correlation-cache-route')], {
+    state: 'ready',
+    title: 'Verified routes available',
+    message: 'The cached route revalidation completed.',
+  }));
+  const cachedRevalidated = await cachedRevalidationRequest;
+  unsubscribeCachedRevalidation();
+  assert.strictEqual(cachedRevalidated.ecsRequestId, cachedRevalidationEcsRequestId);
+  assert.strictEqual(cachedRevalidated.searchMeta.ecsRequestId, cachedRevalidationEcsRequestId);
 
   const fallbackCriteria = { ...criteria, radiusMiles: 47 };
   responses.push({
@@ -1677,6 +2199,14 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   assert.strictEqual(matrixBlockedSurface.surface.currentSuccessfulEvaluation, true);
   assert.strictEqual(matrixBlockedSurface.surface.showBlockedNotice, true);
 
+  const mismatchedBlockedSurface = buildProductionExploreSurface(
+    matrixBlocked,
+    createLiveTrailPackCatalogRefreshKey({ ...matrixBlockedCriteria, radiusMiles: 497 }),
+  );
+  assert.notStrictEqual(mismatchedBlockedSurface.surface.kind, 'blocked');
+  assert.strictEqual(mismatchedBlockedSurface.surface.currentSuccessfulEvaluation, false);
+  assert.strictEqual(mismatchedBlockedSurface.surface.showBlockedNotice, false);
+
   // E: the same diagnostic-only last-good data after a 503 is stale provider
   // evidence, never a fresh policy-blocked conclusion.
   responses.push({ data: null, error: { message: '503 route catalog unavailable', status: 503 } });
@@ -1710,9 +2240,14 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
     matrixPersistedBlockedCriteria,
   );
   assert.strictEqual(matrixPersistedBlockedSeed.source, 'trail_packs_fallback');
-  const summaryCacheAdapter = memoryCaches.get('explore.catalog.summary.v1');
-  assert(summaryCacheAdapter, 'The v1 persisted summary cache adapter must be initialized.');
-  const persistedBlockedRaw = summaryCacheAdapter.get('explore.catalog.summary.v1');
+  const summaryCacheAdapter = memoryCaches.get('explore.catalog.summary.v2');
+  assert(summaryCacheAdapter, 'The v2 persisted summary cache adapter must be initialized.');
+  assert.strictEqual(
+    memoryCaches.has('explore.catalog.summary.v1'),
+    false,
+    'The cursor-contract build must not hydrate the obsolete v1 summary namespace.',
+  );
+  const persistedBlockedRaw = summaryCacheAdapter.get('explore.catalog.summary.v2');
   assert(persistedBlockedRaw, 'The blocked fallback summary must be persisted before revalidation.');
   const persistedBlockedPayload = JSON.parse(persistedBlockedRaw);
   assert.strictEqual(persistedBlockedPayload.refreshKey, matrixPersistedBlockedKey);
@@ -1780,7 +2315,7 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   assert.strictEqual(matrixOldFallbackSurface.visibleCandidates.length, 0);
   assert.strictEqual(matrixOldFallbackSurface.surface.kind, 'stale');
   assert.strictEqual(matrixOldFallbackSurface.surface.showBlockedNotice, false);
-  const matrixOldFallbackRaw = summaryCacheAdapter.get('explore.catalog.summary.v1');
+  const matrixOldFallbackRaw = summaryCacheAdapter.get('explore.catalog.summary.v2');
   assert(matrixOldFallbackRaw);
   const matrixOldFallbackPayload = JSON.parse(matrixOldFallbackRaw);
   assert.strictEqual(matrixOldFallbackPayload.refreshKey, matrixReplacementKey);
@@ -1804,7 +2339,7 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   assert.strictEqual(matrixFreshReplacementSurface.visibleCandidates.length, 50);
   assert.strictEqual(matrixFreshReplacementSurface.surface.kind, 'cards');
   assert.strictEqual(matrixFreshReplacementSurface.surface.currentSuccessfulEvaluation, true);
-  const matrixFreshReplacementRaw = summaryCacheAdapter.get('explore.catalog.summary.v1');
+  const matrixFreshReplacementRaw = summaryCacheAdapter.get('explore.catalog.summary.v2');
   assert(matrixFreshReplacementRaw);
   const matrixFreshReplacementPayload = JSON.parse(matrixFreshReplacementRaw);
   assert.strictEqual(matrixFreshReplacementPayload.refreshKey, matrixReplacementKey);

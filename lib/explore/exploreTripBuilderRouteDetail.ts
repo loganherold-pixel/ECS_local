@@ -1,6 +1,6 @@
 import type { ExpeditionOpportunity } from '../discoverEngine';
 import { classifyExploreRouteAuthority } from '../exploreRouteAuthority';
-import { defaultExploreReadyRouteEligibility } from './exploreGuidanceReadyInventory';
+import { classifyExploreRouteAvailability } from './exploreGuidanceReadyInventory';
 import { mergeTripBuilderRouteDetail } from '../tripBuilder/tripBuilderRouteOptions';
 import {
   fetchRouteCatalogTrailPackDetail,
@@ -65,6 +65,13 @@ function failureCode(
   if (/timeout/i.test(message)) return 'ROUTE_CATALOG_DETAIL_TIMEOUT';
   if (/geometry/i.test(message)) return 'ROUTE_CATALOG_DETAIL_INVALID_GEOMETRY';
   return 'ROUTE_CATALOG_DETAIL_UNAVAILABLE';
+}
+
+function hasPostDetailPolicyBlocker(route: ExpeditionOpportunity): boolean {
+  const availability = classifyExploreRouteAvailability(route);
+  return availability.tripBuilder.exclusionCodes.some(
+    (code) => code !== 'missing_geometry' && code !== 'invalid_geometry',
+  );
 }
 
 export function getResolvedExploreTripBuilderRouteDetail(
@@ -147,11 +154,7 @@ export async function resolveExploreTripBuilderRouteDetail(
         routeCatalogSummaryState: 'ready',
       },
     } as ExpeditionOpportunity;
-    const hydratedEligibility = defaultExploreReadyRouteEligibility(hydrated);
-    const hydratedNonGeometryBlockers = hydratedEligibility.exclusionCodes.filter(
-      (code) => code !== 'missing_geometry' && code !== 'invalid_geometry',
-    );
-    if (hydratedNonGeometryBlockers.length > 0 || !isPublicSuggestedTrailheadRoute(hydrated)) {
+    if (hasPostDetailPolicyBlocker(hydrated) || !isPublicSuggestedTrailheadRoute(hydrated)) {
       return {
         status: 'error',
         route: selectedSummary,
@@ -160,11 +163,7 @@ export async function resolveExploreTripBuilderRouteDetail(
       };
     }
     const mergedRoute = mergeTripBuilderRouteDetail(selectedSummary, hydrated);
-    const guidanceEligibility = defaultExploreReadyRouteEligibility(mergedRoute);
-    const nonGeometryBlockers = guidanceEligibility.exclusionCodes.filter(
-      (code) => code !== 'missing_geometry' && code !== 'invalid_geometry',
-    );
-    if (nonGeometryBlockers.length > 0 || !isPublicSuggestedTrailheadRoute(mergedRoute)) {
+    if (hasPostDetailPolicyBlocker(mergedRoute) || !isPublicSuggestedTrailheadRoute(mergedRoute)) {
       return {
         status: 'error',
         route: selectedSummary,
@@ -173,14 +172,6 @@ export async function resolveExploreTripBuilderRouteDetail(
       };
     }
     if (!classifyExploreRouteAuthority(mergedRoute).canUseForTrailItinerary) {
-      return {
-        status: 'error',
-        route: selectedSummary,
-        safeErrorCode: 'ROUTE_CATALOG_DETAIL_INVALID_GEOMETRY',
-        retryEligible: true,
-      };
-    }
-    if (!guidanceEligibility.eligible) {
       return {
         status: 'error',
         route: selectedSummary,

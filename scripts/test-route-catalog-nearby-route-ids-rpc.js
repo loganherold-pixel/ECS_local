@@ -15,17 +15,53 @@ const optimizationMigrationPath = path.join(
   'migrations',
   '20260718192605_optimize_route_catalog_nearby_route_ids_rpc.sql',
 );
+const stabilizationMigrationPath = path.join(
+  root,
+  'supabase',
+  'migrations',
+  '20260718231818_stabilize_route_catalog_pagination.sql',
+);
+const restoredKnnPageMigrationPath = path.join(
+  root,
+  'supabase',
+  'migrations',
+  '20260718233128_restore_route_catalog_page_knn_plan.sql',
+);
+const cursorPaginationMigrationPath = path.join(
+  root,
+  'supabase',
+  'migrations',
+  '20260719001253_route_catalog_cursor_pagination.sql',
+);
 
 assert(fs.existsSync(migrationPath), 'Nearby route ID RPC migration should exist.');
 assert(
   fs.existsSync(optimizationMigrationPath),
   'Nearby route ID RPC timeout optimization migration should exist.',
 );
+assert(
+  fs.existsSync(stabilizationMigrationPath),
+  'Nearby route ID RPC pagination stabilization migration should exist.',
+);
+assert(
+  fs.existsSync(restoredKnnPageMigrationPath),
+  'Nearby route page RPC KNN-plan restoration migration should exist.',
+);
+assert(
+  fs.existsSync(cursorPaginationMigrationPath),
+  'Nearby route cursor pagination migration should exist.',
+);
 
 const migration = fs.readFileSync(migrationPath, 'utf8');
 const normalizedMigration = migration.replace(/\s+/g, ' ').toLowerCase();
 const optimizationMigration = fs.readFileSync(optimizationMigrationPath, 'utf8');
 const normalizedOptimizationMigration = optimizationMigration.replace(/\s+/g, ' ').toLowerCase();
+const stabilizationMigration = fs.readFileSync(stabilizationMigrationPath, 'utf8');
+const normalizedStabilizationMigration = stabilizationMigration.replace(/\s+/g, ' ').toLowerCase();
+const restoredKnnPageMigration = fs.readFileSync(restoredKnnPageMigrationPath, 'utf8');
+const normalizedRestoredKnnPageMigration = restoredKnnPageMigration.replace(/\s+/g, ' ').toLowerCase();
+const cursorPaginationMigration = fs.readFileSync(cursorPaginationMigrationPath, 'utf8');
+const normalizedCursorPaginationMigration = cursorPaginationMigration.replace(/\s+/g, ' ').toLowerCase();
 
 assert(
   normalizedMigration.includes('create or replace function public.route_catalog_nearby_route_ids') &&
@@ -116,6 +152,135 @@ assert(
       normalizedOptimizationMigration.indexOf('limit (select request.row_limit from request)'),
   'The repair should bound nearest candidates first, then enforce exact radius before final output.',
 );
+assert(
+  normalizedStabilizationMigration.includes(
+    'create or replace function public.route_catalog_nearby_public_route_page',
+  ) &&
+    normalizedStabilizationMigration.includes('p_offset integer default 0') &&
+    normalizedStabilizationMigration.includes('operator(public.<->)') &&
+    normalizedStabilizationMigration.includes('public.st_distance(') &&
+    normalizedStabilizationMigration.includes('public.st_dwithin(') &&
+    normalizedStabilizationMigration.includes('offset (select request.row_offset from request)') &&
+    normalizedStabilizationMigration.includes('limit (select request.row_limit from request)'),
+  'The pagination repair should expose an offset-aware page RPC with one stable KNN order, exact display distance, and exact radius qualification.',
+);
+assert(
+  normalizedStabilizationMigration.indexOf('public.st_dwithin') <
+      normalizedStabilizationMigration.indexOf('order by') &&
+    normalizedStabilizationMigration.indexOf('order by') <
+      normalizedStabilizationMigration.indexOf('offset (select request.row_offset from request)') &&
+    normalizedStabilizationMigration.indexOf('offset (select request.row_offset from request)') <
+      normalizedStabilizationMigration.indexOf('limit (select request.row_limit from request)'),
+  'Exact radius eligibility and stable ordering must be applied before OFFSET/LIMIT assigns page slots.',
+);
+assert(
+  normalizedStabilizationMigration.includes('not exists ( select 1 from public.verified_route_sources restricted_vrs') &&
+    normalizedStabilizationMigration.includes("restricted_rs.source_type, ''))) = 'partner_restricted'") &&
+    normalizedStabilizationMigration.includes("restricted_rs.authority, ''))) = 'partner_restricted'") &&
+    normalizedStabilizationMigration.indexOf('not exists ( select 1 from public.verified_route_sources restricted_vrs') <
+      normalizedStabilizationMigration.indexOf('offset (select request.row_offset from request)'),
+  'Restricted source records must be excluded before public route page slots are assigned.',
+);
+assert(
+  normalizedStabilizationMigration.includes('security invoker') &&
+    normalizedStabilizationMigration.includes("set search_path = ''") &&
+    normalizedStabilizationMigration.includes('from public, anon, authenticated') &&
+    normalizedStabilizationMigration.includes('to service_role'),
+  'The stabilization migration must preserve the service-role-only security-invoker contract.',
+);
+assert(
+  normalizedRestoredKnnPageMigration.includes(
+    'create or replace function public.route_catalog_nearby_public_route_page',
+  ) &&
+    normalizedRestoredKnnPageMigration.includes('nearest_public_candidates as materialized') &&
+    normalizedRestoredKnnPageMigration.includes(
+      'vr.geog operator(public.<->) public.st_setsrid(public.st_makepoint($2, $1), 4326)::public.geography',
+    ) &&
+    normalizedRestoredKnnPageMigration.includes(
+      'limit (select request.candidate_limit from request)',
+    ),
+  'The forward repair must bind the KNN order directly to request parameters and bound its indexed prefix.',
+);
+assert(
+  normalizedRestoredKnnPageMigration.indexOf(
+    'limit (select request.candidate_limit from request)',
+  ) < normalizedRestoredKnnPageMigration.indexOf('where public.st_dwithin(') &&
+    normalizedRestoredKnnPageMigration.includes(
+      'public.st_dwithin( nearest_public_candidates.geog, request.search_center, request.radius_meters, false )',
+    ) &&
+    normalizedRestoredKnnPageMigration.includes(
+      'public.st_distance( nearest_public_candidates.geog, request.search_center, false )',
+    ),
+  'Radius qualification must follow the bounded KNN prefix and use the same spherical geography metric.',
+);
+assert(
+  normalizedRestoredKnnPageMigration.indexOf(
+    'not exists ( select 1 from public.verified_route_sources restricted_vrs',
+  ) < normalizedRestoredKnnPageMigration.indexOf(
+    'limit (select request.candidate_limit from request)',
+  ) &&
+    normalizedRestoredKnnPageMigration.includes('security invoker') &&
+    normalizedRestoredKnnPageMigration.includes("set search_path = ''") &&
+    normalizedRestoredKnnPageMigration.includes('from public, anon, authenticated') &&
+    normalizedRestoredKnnPageMigration.includes('to service_role'),
+  'Restricted records must be filtered before the KNN prefix slots without weakening RPC grants.',
+);
+assert(
+  normalizedCursorPaginationMigration.includes(
+    'verified_routes_public_recommendation_bbox_idx',
+  ) &&
+    !normalizedCursorPaginationMigration.includes('create index') &&
+    normalizedCursorPaginationMigration.includes(
+      'create or replace function public.route_catalog_nearby_public_route_cursor_page',
+    ) &&
+    normalizedCursorPaginationMigration.includes('p_cursor_route_id uuid default null') &&
+    normalizedCursorPaginationMigration.includes(
+      '(vr.center_latitude, vr.center_longitude, vr.id) > (scan_cursor_latitude, scan_cursor_longitude, scan_cursor_route_id)',
+    ) &&
+    normalizedCursorPaginationMigration.includes(
+      'vr.center_latitude >= scan_cursor_latitude',
+    ) &&
+    normalizedCursorPaginationMigration.includes(
+      'scan_cursor_latitude double precision := -91',
+    ) &&
+    normalizedCursorPaginationMigration.includes(
+      "scan_cursor_route_id uuid := '00000000-0000-0000-0000-000000000000'::uuid",
+    ) &&
+    normalizedCursorPaginationMigration.includes(
+      'select vr.center_latitude, vr.center_longitude, vr.id into scan_cursor_latitude, scan_cursor_longitude, scan_cursor_route_id',
+    ) &&
+    !normalizedCursorPaginationMigration.includes('scan_cursor_latitude is null') &&
+    normalizedCursorPaginationMigration.includes(
+      'when min_latitude <= -90 or max_latitude >= 90 then 180::double precision',
+    ) &&
+    normalizedCursorPaginationMigration.includes(
+      'sin(angular_radius) / greatest( abs(cos(radians(p_latitude)))',
+    ) &&
+    normalizedCursorPaginationMigration.includes(
+      'earth_radius_meters constant double precision := 6371000',
+    ) &&
+    normalizedCursorPaginationMigration.includes('limit batch_limit'),
+  'The cursor repair must use a deterministic route-ID-resolved keyset, a pole-safe spherical longitude bound, and bounded ordered scan batches.',
+);
+assert(
+  normalizedCursorPaginationMigration.includes(
+    'public.st_dwithin( vr.geog, search_center, radius_meters, false ) as within_radius',
+  ) &&
+    normalizedCursorPaginationMigration.includes("vr.review_status = 'approved'") &&
+    normalizedCursorPaginationMigration.includes("vr.recommendation_status = 'recommendable'") &&
+    normalizedCursorPaginationMigration.indexOf(
+      'not exists ( select 1 from public.verified_route_sources restricted_vrs',
+    ) < normalizedCursorPaginationMigration.indexOf('limit batch_limit') &&
+    normalizedCursorPaginationMigration.includes('return next'),
+  'Cursor pages must enforce exact radius and public source/eligibility gates before yielding route slots.',
+);
+assert(
+  normalizedCursorPaginationMigration.includes('security invoker') &&
+    normalizedCursorPaginationMigration.includes("set search_path = ''") &&
+    normalizedCursorPaginationMigration.includes('from public, anon, authenticated') &&
+    normalizedCursorPaginationMigration.includes('to service_role'),
+  'The cursor RPC must remain service-role-only with an empty search path.',
+);
 
 function clampLimit(value) {
   return Math.max(1, Math.min(value ?? 600, 2000));
@@ -189,11 +354,55 @@ function selectNearbyRouteIdsWithKnnPool(routes, criteria) {
   return nearestCandidates
     .filter((route) => route.centerDistanceMiles <= criteria.radiusMiles)
     .sort((left, right) =>
-      left.centerDistanceMiles - right.centerDistanceMiles ||
+      (left.knnDistanceMiles ?? left.centerDistanceMiles) -
+        (right.knnDistanceMiles ?? right.centerDistanceMiles) ||
       right.confidenceScore - left.confidenceScore ||
       right.updatedAt.localeCompare(left.updatedAt) ||
       left.id.localeCompare(right.id))
     .slice(0, clampLimit(criteria.limit));
+}
+
+function selectStablePublicPage(routes, criteria) {
+  const offset = Math.max(0, criteria.offset ?? 0);
+  const limit = Math.max(1, Math.min(criteria.limit ?? 51, 501));
+  return routes
+    .filter((route) => !route.restricted && routeMatches(route, criteria))
+    .sort((left, right) =>
+      (left.knnDistanceMiles ?? left.centerDistanceMiles) -
+        (right.knnDistanceMiles ?? right.centerDistanceMiles) ||
+      right.confidenceScore - left.confidenceScore ||
+      right.updatedAt.localeCompare(left.updatedAt) ||
+      left.id.localeCompare(right.id))
+    .slice(offset, offset + limit);
+}
+
+function selectStablePublicCursorPage(routes, criteria, cursorRouteId = null) {
+  const pageSize = Math.max(1, Math.min(criteria.pageSize ?? 50, 500));
+  const cursorRoute = cursorRouteId
+    ? routes.find((route) => route.id === cursorRouteId)
+    : null;
+  const tupleAfterCursor = (route) => {
+    if (!cursorRoute) return true;
+    return route.centerLatitude > cursorRoute.centerLatitude ||
+      (route.centerLatitude === cursorRoute.centerLatitude &&
+        route.centerLongitude > cursorRoute.centerLongitude) ||
+      (route.centerLatitude === cursorRoute.centerLatitude &&
+        route.centerLongitude === cursorRoute.centerLongitude &&
+        route.id.localeCompare(cursorRoute.id) > 0);
+  };
+  const lookahead = routes
+    .filter((route) => !route.restricted && routeMatches(route, criteria) && tupleAfterCursor(route))
+    .sort((left, right) =>
+      left.centerLatitude - right.centerLatitude ||
+      left.centerLongitude - right.centerLongitude ||
+      left.id.localeCompare(right.id))
+    .slice(0, pageSize + 1);
+  const records = lookahead.slice(0, pageSize);
+  return {
+    records,
+    hasMore: lookahead.length > pageSize,
+    nextCursorRouteId: lookahead.length > pageSize ? records[records.length - 1].id : null,
+  };
 }
 
 const baseRoute = {
@@ -271,6 +480,115 @@ assert.strictEqual(
   'The bounded KNN pool should retain every eligible nearby summary when fewer than the output limit exist.',
 );
 assert(knnNearby.every((route) => route.id.startsWith('mendocino-')));
+
+const shiftingExactDistanceRoutes = Array.from({ length: 80 }, (_, index) => ({
+  ...baseRoute,
+  id: `stable-prefix-${String(index).padStart(2, '0')}`,
+  knnDistanceMiles: index + 1,
+  centerDistanceMiles: index === 60 ? 0.5 : index + 1,
+}));
+const stablePrefix50 = selectNearbyRouteIdsWithKnnPool(
+  shiftingExactDistanceRoutes,
+  { ...criteria, radiusMiles: 100, limit: 50, sourceAdapter: '' },
+);
+const stablePrefix80 = selectNearbyRouteIdsWithKnnPool(
+  shiftingExactDistanceRoutes,
+  { ...criteria, radiusMiles: 100, limit: 80, sourceAdapter: '' },
+);
+assert.deepStrictEqual(
+  stablePrefix80.slice(0, 50).map((route) => route.id),
+  stablePrefix50.map((route) => route.id),
+  'Growing the KNN pool must preserve every earlier pagination boundary even when exact spheroid distance would reorder a later row.',
+);
+
+const stablePublicRoutes = Array.from({ length: 101 }, (_, index) => ({
+  ...baseRoute,
+  id: `public-page-${String(index).padStart(3, '0')}`,
+  knnDistanceMiles: index + 1,
+  centerDistanceMiles: index === 75 ? 0.25 : index + 1,
+}));
+const restrictedPageSlot = {
+  ...baseRoute,
+  id: 'restricted-page-slot',
+  knnDistanceMiles: 25.5,
+  centerDistanceMiles: 25.5,
+  restricted: true,
+};
+const stablePageOne = selectStablePublicPage(
+  [...stablePublicRoutes, restrictedPageSlot],
+  { ...criteria, radiusMiles: 500, sourceAdapter: '', offset: 0, limit: 50 },
+);
+const stablePageTwo = selectStablePublicPage(
+  [...stablePublicRoutes, restrictedPageSlot],
+  { ...criteria, radiusMiles: 500, sourceAdapter: '', offset: 50, limit: 50 },
+);
+const stablePageThree = selectStablePublicPage(
+  [...stablePublicRoutes, restrictedPageSlot],
+  { ...criteria, radiusMiles: 500, sourceAdapter: '', offset: 100, limit: 50 },
+);
+assert.strictEqual(stablePageOne.length, 50);
+assert.strictEqual(stablePageTwo.length, 50);
+assert.strictEqual(stablePageThree.length, 1);
+assert.strictEqual(
+  new Set([...stablePageOne, ...stablePageTwo, ...stablePageThree].map((route) => route.id)).size,
+  101,
+  'Every revealable route must appear exactly once across stable public pages.',
+);
+assert(
+  [...stablePageOne, ...stablePageTwo, ...stablePageThree]
+    .every((route) => route.id !== restrictedPageSlot.id),
+  'Restricted diagnostics must not consume a public route slot.',
+);
+
+const cursorPublicRoutes = Array.from({ length: 101 }, (_, index) => ({
+  ...baseRoute,
+  id: `cursor-page-${String(index).padStart(3, '0')}`,
+  centerLatitude: 30 + Math.floor(index / 7) / 100,
+  centerLongitude: -120 + (index % 7) / 100,
+  centerDistanceMiles: index === 100 ? 3 : 20 + index / 10,
+}));
+const restrictedCursorSlot = {
+  ...baseRoute,
+  id: 'cursor-page-restricted',
+  centerLatitude: 30.035,
+  centerLongitude: -119.995,
+  restricted: true,
+};
+const cursorPages = [];
+let cursorRouteId = null;
+do {
+  const cursorPage = selectStablePublicCursorPage(
+    [...cursorPublicRoutes, restrictedCursorSlot],
+    { ...criteria, radiusMiles: 500, sourceAdapter: '', pageSize: 50 },
+    cursorRouteId,
+  );
+  cursorPages.push(cursorPage);
+  cursorRouteId = cursorPage.nextCursorRouteId;
+} while (cursorRouteId);
+assert.deepStrictEqual(cursorPages.map((page) => page.records.length), [50, 50, 1]);
+assert.deepStrictEqual(cursorPages.map((page) => page.hasMore), [true, true, false]);
+const cursorTraversal = cursorPages.flatMap((page) => page.records);
+assert.strictEqual(cursorTraversal.length, 101);
+assert.strictEqual(new Set(cursorTraversal.map((route) => route.id)).size, 101);
+assert.strictEqual(cursorTraversal[50].id, cursorPages[1].records[0].id);
+assert.strictEqual(cursorTraversal[100].centerDistanceMiles, 3);
+assert(
+  cursorTraversal.every((route) => route.id !== restrictedCursorSlot.id),
+  'A restricted provider diagnostic must not consume a cursor-page route slot.',
+);
+for (let index = 1; index < cursorTraversal.length; index += 1) {
+  const previous = cursorTraversal[index - 1];
+  const current = cursorTraversal[index];
+  assert(
+    previous.centerLatitude < current.centerLatitude ||
+      (previous.centerLatitude === current.centerLatitude &&
+        previous.centerLongitude < current.centerLongitude) ||
+      (previous.centerLatitude === current.centerLatitude &&
+        previous.centerLongitude === current.centerLongitude &&
+        previous.id.localeCompare(current.id) < 0),
+    'Cursor traversal order must be strictly increasing by latitude, longitude, and route ID.',
+  );
+}
 
 const excludedFixtures = [
   { ...baseRoute, id: 'pending-review', reviewStatus: 'pending_review' },

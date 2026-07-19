@@ -54,6 +54,12 @@ const {
 const {
   resolveECSAsyncSurfacePresentation,
 } = require(path.join(root, 'lib', 'state', 'asyncSurfacePresentation.ts'));
+const {
+  classifyExploreRouteAvailability,
+} = require(path.join(root, 'lib', 'explore', 'exploreGuidanceReadyInventory.ts'));
+const {
+  buildTripPlan,
+} = require(path.join(root, 'lib', 'tripBuilder', 'tripBuilderService.ts'));
 
 function summaryRoute(id = 'summary-route') {
   return {
@@ -120,6 +126,22 @@ function detailTrailPack(id = 'summary-route', overrides = {}) {
     updatedAt: '2026-07-16T00:00:00.000Z',
     ...overrides,
   };
+}
+
+function shortSummaryRoute(id = 'short-summary-route') {
+  return {
+    ...summaryRoute(id),
+    name: 'Two Mile Summary Route',
+    distanceMiles: 2,
+  };
+}
+
+function shortDetailTrailPack(id = 'short-summary-route', overrides = {}) {
+  return detailTrailPack(id, {
+    name: 'Two Mile Summary Route',
+    distanceMiles: 2,
+    ...overrides,
+  });
 }
 
 function lineCoordinates(route) {
@@ -212,6 +234,92 @@ function lineCoordinates(route) {
     latitude: 38.5002,
     longitude: -109.6002,
   });
+
+  const shortSummary = shortSummaryRoute();
+  const shortSummaryAvailability = classifyExploreRouteAvailability(shortSummary);
+  assert.strictEqual(shortSummaryAvailability.discoverability.eligible, true);
+  assert.strictEqual(shortSummaryAvailability.tripBuilder.eligible, true);
+  assert.strictEqual(shortSummaryAvailability.guidance.eligible, false);
+  assert.ok(shortSummaryAvailability.guidance.exclusionCodes.includes('too_short'));
+  assert.ok(shortSummaryAvailability.guidance.exclusionCodes.includes('missing_geometry'));
+
+  const shortStarted = beginTripBuilderRoutePreparation(idle, shortSummary, 3500);
+  assert.strictEqual(shortStarted.status, 'loading_detail');
+  assert.strictEqual(shortStarted.routeId, shortSummary.id);
+  assert.strictEqual(shortStarted.summaryRoute, shortSummary);
+  const shortAwaiting = await continueTripBuilderRoutePreparation(shortStarted, shortSummary, {
+    now: 3600,
+    fetchDetail: async (routeId) => {
+      assert.strictEqual(routeId, 'short-summary-route');
+      return shortDetailTrailPack();
+    },
+  });
+  assert.notStrictEqual(
+    shortAwaiting.status,
+    'empty_invalid',
+    'A valid short route must not become terminally invalid after detail hydration.',
+  );
+  assert.strictEqual(shortAwaiting.status, 'awaiting_trailhead_selection');
+  assert.strictEqual(shortAwaiting.routeId, shortSummary.id);
+  assert.strictEqual(shortAwaiting.summaryRoute, shortSummary);
+  assert.strictEqual(shortAwaiting.summaryRoute.distanceMiles, 2);
+  assert.ok(shortAwaiting.detailRoute, 'Valid detail hydration must retain the selected short route.');
+
+  const shortHydratedAvailability = classifyExploreRouteAvailability(shortAwaiting.detailRoute);
+  assert.strictEqual(shortHydratedAvailability.discoverability.eligible, true);
+  assert.strictEqual(shortHydratedAvailability.tripBuilder.eligible, true);
+  assert.strictEqual(shortHydratedAvailability.guidance.eligible, false);
+  assert.deepStrictEqual(shortHydratedAvailability.guidance.exclusionCodes, ['too_short']);
+  assert.strictEqual(shortHydratedAvailability.detailState, 'ready');
+
+  const shortReady = completeTripBuilderRoutePreparationFromPracticalEntry(
+    shortAwaiting,
+    { now: 3700 },
+  );
+  assert.strictEqual(shortReady.status, 'ready');
+  assert.strictEqual(shortReady.routeId, shortSummary.id);
+  assert.strictEqual(shortReady.summaryRoute, shortSummary);
+  assert.strictEqual(shortReady.canonicalRoute.distanceMiles, 2);
+  assert.strictEqual(getTripBuilderNavigationHandoffUnavailableReason(shortReady), null);
+  const shortCanonicalAvailability = classifyExploreRouteAvailability(shortReady.canonicalRoute);
+  assert.strictEqual(shortCanonicalAvailability.discoverability.eligible, true);
+  assert.strictEqual(shortCanonicalAvailability.tripBuilder.eligible, true);
+  assert.strictEqual(shortCanonicalAvailability.guidance.eligible, false);
+  assert.deepStrictEqual(shortCanonicalAvailability.guidance.exclusionCodes, ['too_short']);
+
+  const shortTripPlan = buildTripPlan({
+    route: shortReady.canonicalRoute,
+    input: {
+      tripType: 'day_trip',
+      timeWindow: 'full_day',
+      groupType: 'solo',
+      priorities: [],
+    },
+    capturedAt: '2026-07-18T12:00:00.000Z',
+  });
+  assert.strictEqual(shortTripPlan.route.routeId, shortReady.canonicalRoute.id);
+  assert.strictEqual(shortTripPlan.route.distanceMiles, 2);
+  assert.ok(
+    shortTripPlan.suggestedStops.some((stop) => stop.type === 'start') &&
+      shortTripPlan.suggestedStops.some((stop) => stop.type === 'finish'),
+    'Trip creation must complete for an eligible short route without guidance readiness.',
+  );
+
+  const reloadedShort = restoreTripBuilderRoutePreparation(
+    JSON.parse(JSON.stringify(shortReady.canonicalRoute)),
+    4,
+    3800,
+  );
+  assert.ok(reloadedShort, 'A Trip Builder draft containing a short route must reload.');
+  assert.strictEqual(reloadedShort.status, 'ready');
+  assert.strictEqual(reloadedShort.routeId, shortReady.canonicalRoute.id);
+  assert.strictEqual(reloadedShort.summaryRoute.id, shortReady.canonicalRoute.id);
+  assert.strictEqual(reloadedShort.canonicalRoute.distanceMiles, 2);
+  assert.strictEqual(getTripBuilderNavigationHandoffUnavailableReason(reloadedShort), null);
+  const reloadedShortAvailability = classifyExploreRouteAvailability(reloadedShort.canonicalRoute);
+  assert.strictEqual(reloadedShortAvailability.tripBuilder.eligible, true);
+  assert.strictEqual(reloadedShortAvailability.guidance.eligible, false);
+  assert.ok(reloadedShortAvailability.guidance.exclusionCodes.includes('too_short'));
 
   const browserStorage = new Map();
   global.localStorage = {

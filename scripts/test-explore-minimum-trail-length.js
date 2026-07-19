@@ -52,11 +52,15 @@ function loadTsModule(relPath) {
 
 const {
   MIN_DISCOVERY_ROUTE_MILES,
+  MIN_GUIDANCE_READY_ROUTE_MILES,
   filterByRadius,
   filterDiscoverableRoutes,
   isDiscoverableRoute,
 } = loadTsModule(path.join('lib', 'discoverEngine.ts'));
-const { getPopularTrailRecommendations } = loadTsModule(path.join('lib', 'discoverCategoryEngine.ts'));
+const {
+  getHiddenGemRecommendations,
+  getPopularTrailRecommendations,
+} = loadTsModule(path.join('lib', 'discoverCategoryEngine.ts'));
 
 function route(id, overrides = {}) {
   return {
@@ -87,26 +91,43 @@ function route(id, overrides = {}) {
 const shortTrail = route('short-trail', { distanceMiles: 4.9 });
 const exactMinimumTrail = route('exact-minimum-trail', { distanceMiles: 5 });
 const longerTrail = route('longer-trail', { distanceMiles: 12 });
+const zeroLengthTrail = route('zero-length-trail', { distanceMiles: 0 });
 const missingDistanceTrail = route('missing-distance-trail', { distanceMiles: undefined });
 const missingTrailhead = route('missing-trailhead', { startLat: Number.NaN });
 
-assert.strictEqual(MIN_DISCOVERY_ROUTE_MILES, 5, 'Explorer minimum route length should be 5 miles.');
-assert.strictEqual(isDiscoverableRoute(shortTrail), false, 'Trails under 5 miles should not be discoverable.');
+assert.strictEqual(MIN_GUIDANCE_READY_ROUTE_MILES, 5, 'Explorer guidance-readiness threshold should remain 5 miles.');
+assert.strictEqual(
+  MIN_DISCOVERY_ROUTE_MILES,
+  MIN_GUIDANCE_READY_ROUTE_MILES,
+  'The legacy exported threshold should remain compatible without acting as a discovery gate.',
+);
+assert.strictEqual(
+  isDiscoverableRoute(shortTrail),
+  true,
+  'A positive route under 5 miles should remain discoverable even when it is not guidance-ready.',
+);
 assert.strictEqual(isDiscoverableRoute(exactMinimumTrail), true, 'A 5.0 mile trail should remain eligible.');
 assert.strictEqual(isDiscoverableRoute(longerTrail), true, 'Trails longer than 5 miles should remain eligible.');
+assert.strictEqual(isDiscoverableRoute(zeroLengthTrail), false, 'A zero-length record should remain excluded.');
 assert.strictEqual(isDiscoverableRoute(missingDistanceTrail), false, 'Missing trail distance should not enter Explore recommendations.');
 assert.strictEqual(isDiscoverableRoute(missingTrailhead), false, 'Missing trailhead coordinates should remain excluded.');
 
 assert.deepStrictEqual(
-  filterDiscoverableRoutes([shortTrail, exactMinimumTrail, longerTrail, missingDistanceTrail]).map((item) => item.id),
-  ['exact-minimum-trail', 'longer-trail'],
-  'Drivable Trails should exclude short and incomplete-distance routes from counts.',
+  filterDiscoverableRoutes([
+    shortTrail,
+    exactMinimumTrail,
+    longerTrail,
+    zeroLengthTrail,
+    missingDistanceTrail,
+  ]).map((item) => item.id),
+  ['short-trail', 'exact-minimum-trail', 'longer-trail'],
+  'Drivable Trails should retain positive short routes while excluding invalid or missing lengths.',
 );
 
 assert.deepStrictEqual(
   filterByRadius([shortTrail, exactMinimumTrail, longerTrail], 100).map((item) => item.id),
-  ['exact-minimum-trail', 'longer-trail'],
-  'Radius filtering should preserve the 5-mile minimum filter.',
+  ['short-trail', 'exact-minimum-trail', 'longer-trail'],
+  'Radius filtering should not reinterpret the 5-mile guidance threshold as a discovery gate.',
 );
 
 assert.deepStrictEqual(
@@ -114,8 +135,27 @@ assert.deepStrictEqual(
     radiusMiles: 100,
     pageSize: 10,
   }).map((item) => item.id),
-  ['exact-minimum-trail', 'longer-trail'],
-  'The background popularity classifier should use the same discoverable-route minimum.',
+  ['exact-minimum-trail', 'longer-trail', 'short-trail'],
+  'The background popularity classifier should retain positive short discoverable routes.',
+);
+
+const shortHiddenGem = route('short-hidden-gem', {
+  distanceMiles: 2,
+  popularityScore: 8,
+  remotenessScore: 9,
+  elevationGainFt: 5200,
+  terrainType: 'remote 4x4 two-track',
+  highlights: ['remote shelf', 'scenic ridge', 'technical wash'],
+});
+const shortHiddenGemPage = getHiddenGemRecommendations(
+  [shortHiddenGem],
+  new Map(),
+  { radiusMiles: 100, pageSize: 10 },
+);
+assert.strictEqual(shortHiddenGemPage.evaluatedCandidates.length, 1);
+assert(
+  !shortHiddenGemPage.evaluatedCandidates[0].disqualificationReasons.includes('too_short'),
+  'Hidden Gem discovery must not reinterpret the guidance minimum as a terminal route exclusion.',
 );
 
 const discoverSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'discover.tsx'), 'utf8');
@@ -129,10 +169,10 @@ assert.ok(
 );
 assert.ok(
   discoverSource.includes('const mapInventory = buildExploreGuidanceReadyInventory') &&
-    readyInventorySource.includes('MIN_DISCOVERY_ROUTE_MILES') &&
-    readyInventorySource.includes('distanceMiles < MIN_DISCOVERY_ROUTE_MILES') &&
+    readyInventorySource.includes('MIN_GUIDANCE_READY_ROUTE_MILES') &&
+    readyInventorySource.includes('distanceMiles < MIN_GUIDANCE_READY_ROUTE_MILES') &&
     !discoverSource.includes('ECS filters out trails under ${MIN_DISCOVERY_ROUTE_MILES} miles'),
-  'Explorer should preserve the actual minimum-length filter without showing the removed footer disclaimer.',
+  'Explorer should retain the 5-mile guidance-readiness check without presenting it as a discovery filter.',
 );
 
 console.log('Explore minimum trail length checks passed.');

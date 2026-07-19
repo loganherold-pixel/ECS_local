@@ -185,7 +185,8 @@ const IMPORTED_TRACE_MIN_DISTANCE_RATIO = 0.5;
 const IMPORTED_TRACE_MAX_DISTANCE_RATIO = 2.5;
 const SEARCHBOX_SUGGEST_TIMEOUT_MS = 2000;
 const FORWARD_GEOCODE_TIMEOUT_MS = 2500;
-const SEARCHBOX_SUGGEST_LIMIT = 5;
+const SEARCHBOX_SUGGEST_DEFAULT_LIMIT = 5;
+const SEARCHBOX_SUGGEST_MAX_LIMIT = 10;
 
 export class RoadNavRouteRequestError extends Error {
   readonly safeCode: string;
@@ -361,7 +362,7 @@ export async function searchRoadDestinations(params: {
 
   const limit = Math.max(
     1,
-    Math.min(params.limit ?? SEARCHBOX_SUGGEST_LIMIT, SEARCHBOX_SUGGEST_LIMIT),
+    Math.min(params.limit ?? SEARCHBOX_SUGGEST_DEFAULT_LIMIT, SEARCHBOX_SUGGEST_MAX_LIMIT),
   );
   const requestSignature = params.billingContext?.requestSignature ?? buildMapboxSearchRequestSignature({
     query: trimmed,

@@ -105,15 +105,22 @@ async function runAdapterSessionReuseRegression() {
         suggestions: [
           {
             mapbox_id: 'place.1',
-            name: 'Trailhead Fuel',
+            name: 'Approach Fuel Stop',
             place_formatted: 'Moab, UT',
             feature_type: 'poi',
           },
           {
             mapbox_id: 'place.2',
-            name: 'Rim Grocery',
+            name: 'Rim Fuel Station',
             place_formatted: 'Moab, UT',
             feature_type: 'poi',
+          },
+          {
+            mapbox_id: 'place.3',
+            name: 'Fuel Cafe',
+            place_formatted: 'Moab, UT',
+            feature_type: 'poi',
+            poi_category: ['restaurant'],
           },
         ],
       });
@@ -123,7 +130,7 @@ async function runAdapterSessionReuseRegression() {
       return jsonResponse({
         features: [{
           properties: {
-            name: 'Trailhead Fuel',
+            name: 'Approach Fuel Stop',
             full_address: '1 Trail Rd, Moab, UT',
           },
           geometry: { coordinates: [-109.55, 38.57] },
@@ -135,10 +142,23 @@ async function runAdapterSessionReuseRegression() {
       return jsonResponse({
         features: [{
           properties: {
-            name: 'Rim Grocery',
+            name: 'Rim Fuel Station',
             full_address: '2 Rim Rd, Moab, UT',
           },
           geometry: { coordinates: [-109.56, 38.58] },
+        }],
+      });
+    }
+
+    if (url.includes('/search/searchbox/v1/retrieve/place.3')) {
+      return jsonResponse({
+        features: [{
+          properties: {
+            name: 'Fuel Cafe',
+            full_address: '3 Cafe Rd, Moab, UT',
+            poi_category: ['restaurant'],
+          },
+          geometry: { coordinates: [-109.57, 38.59] },
         }],
       });
     }
@@ -160,7 +180,8 @@ async function runAdapterSessionReuseRegression() {
       center: { lat: 38.57, lng: -109.55 },
     });
 
-    assert.strictEqual(places.length, 2, 'The adapter should still resolve both Search Box suggestions.');
+    assert.strictEqual(places.length, 2, 'The adapter should keep valid fuel POIs and reject a restaurant returned for the fuel query.');
+    assert.ok(places.every((place) => !/cafe/i.test(place.name)));
   });
 
   assert.strictEqual(
@@ -183,12 +204,40 @@ async function runAdapterSessionReuseRegression() {
 function runSearchFallbackLatencyContract() {
   const source = fs.readFileSync(path.join(root, 'lib', 'mapboxRoadNavigation.ts'), 'utf8');
   assert(
-    source.includes('const SEARCHBOX_SUGGEST_TIMEOUT_MS = 2000;') &&
+      source.includes('const SEARCHBOX_SUGGEST_TIMEOUT_MS = 2000;') &&
       source.includes('const FORWARD_GEOCODE_TIMEOUT_MS = 2500;') &&
-      source.includes('const SEARCHBOX_SUGGEST_LIMIT = 5;') &&
-      source.includes('params.limit ?? SEARCHBOX_SUGGEST_LIMIT') &&
-      source.includes('Math.min(params.limit ?? SEARCHBOX_SUGGEST_LIMIT, SEARCHBOX_SUGGEST_LIMIT)'),
-    'Road search should keep bounded timeouts and request a compact result window for mobile search feedback.',
+      source.includes('const SEARCHBOX_SUGGEST_DEFAULT_LIMIT = 5;') &&
+      source.includes('const SEARCHBOX_SUGGEST_MAX_LIMIT = 10;') &&
+      source.includes('params.limit ?? SEARCHBOX_SUGGEST_DEFAULT_LIMIT') &&
+      source.includes('Math.min(params.limit ?? SEARCHBOX_SUGGEST_DEFAULT_LIMIT, SEARCHBOX_SUGGEST_MAX_LIMIT)'),
+    'Road search should keep bounded timeouts, retain the compact default, and allow the provider-supported ten-result maximum.',
+  );
+}
+
+async function runExpandedSuggestLimitContract() {
+  let requestedUrl = null;
+  global.fetch = async (input) => {
+    requestedUrl = String(input);
+    return jsonResponse({ suggestions: [] });
+  };
+  const suggestions = await searchRoadDestinations({
+    accessToken: 'mapbox-token',
+    query: 'fuel station',
+    sessionToken: 'expanded-limit-session',
+    proximity: { lat: 38.56, lng: -109.54 },
+    limit: 20,
+    forwardGeocodeFallback: false,
+    billingContext: {
+      flow: 'trip_builder_smart_resupply',
+      surface: 'Trip Builder',
+      operatorAction: 'expanded result window regression',
+    },
+  });
+  assert.deepStrictEqual(suggestions, []);
+  assert.strictEqual(
+    new URL(requestedUrl).searchParams.get('limit'),
+    '10',
+    'Smart Resupply should receive the provider-supported ten suggestions instead of the old five-result clamp.',
   );
 }
 
@@ -429,6 +478,7 @@ function runFlowLevelRiskFixtureRegression() {
   runMobileInteractionBudgetContract();
   runBillingReadinessGateContract();
   await runAdapterSessionReuseRegression();
+  await runExpandedSuggestLimitContract();
   await runQuotaFallbackRegression();
   await runSearchboxFailureSurfaceContract();
   runFlowLevelRiskFixtureRegression();

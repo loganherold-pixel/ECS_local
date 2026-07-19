@@ -4,23 +4,34 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { attachCurrentConditionOverlays } from '../_shared/routeCatalogCurrentConditionOverlay.ts';
 import {
   buildSafeRouteCatalogDiagnostic,
+  decodeRouteCatalogPageCursor,
+  encodeRouteCatalogPageCursor,
+  expandRouteCatalogCandidateLimit,
   hasRestrictedRouteCatalogSource,
   normalizeRouteCatalogPagination,
-  partitionRestrictedRouteCatalogRecords,
+  partitionRouteCatalogRecordsForPage,
+  routeCatalogCursorFingerprint,
   ROUTE_CATALOG_MAX_PAGINATION_WINDOW,
+  type RouteCatalogPageCursor,
   type RouteCatalogSafeDiagnosticRecord,
 } from './providerContract.ts';
+import {
+  ECS_ROUTE_CATALOG_REQUEST_ID_HEADER,
+  createRouteCatalogEdgeTrace,
+  resolveRouteCatalogRequestId,
+  routeCatalogCorrelationResponseHeaders,
+  routeCatalogResponseMetadata,
+  traceNearbyRouteCatalogRpc,
+  type RouteCatalogEdgeTrace,
+} from './correlation.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-ecs-request-id',
+  'Access-Control-Expose-Headers': 'x-ecs-request-id',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Content-Type': 'application/json',
 };
-
-function jsonResponse(body: Record<string, unknown>, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: corsHeaders });
-}
 
 function getEnvAny(names: string[]): string {
   for (const name of names) {
@@ -89,6 +100,10 @@ function cleanSourceAdapter(value: unknown): string {
   const text = cleanText(value).toLowerCase();
   return /^[a-z0-9_]+$/.test(text) ? text : '';
 }
+
+const ROUTE_CATALOG_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ROUTE_CATALOG_CURSOR_CONTRACT_VERSION = 'route_catalog_public_cursor_page_v2';
 
 async function requestParams(req: Request): Promise<Record<string, unknown>> {
   const url = new URL(req.url);
@@ -553,6 +568,63 @@ function filterRecordsWithinSearchRadius(
   };
 }
 
+function annotateIndexedRadiusPage(
+  records: Record<string, unknown>[],
+  criteria: { latitude: number; longitude: number; radiusMiles: number },
+): ReturnType<typeof filterRecordsWithinSearchRadius> {
+  const searchCenter = { latitude: criteria.latitude, longitude: criteria.longitude };
+  const annotatedRecords = records.map((record) => {
+    const geometryDistance = geometryDistanceMiles(record, searchCenter);
+    const trailhead = routeTrailhead(record);
+    const trailheadDistance = trailhead ? haversineMiles(searchCenter, trailhead) : null;
+    const centerDistance = readNumber(record.center_distance_miles);
+    const distances = [geometryDistance, trailheadDistance, centerDistance]
+      .filter((value): value is number => value != null && Number.isFinite(value));
+    const matchReasons = ['centroid_within_radius'];
+    if (geometryDistance != null && geometryDistance <= criteria.radiusMiles) {
+      matchReasons.push('geometry_within_radius');
+    }
+    if (trailheadDistance != null && trailheadDistance <= criteria.radiusMiles) {
+      matchReasons.push('trailhead_within_radius');
+    }
+    const haystack = recordHaystack(record);
+    const knownAlias = ROUTE_CATALOG_KNOWN_FEATURED_ROUTES.some((route) =>
+      route.aliases.some((alias) => haystack.includes(alias))
+    );
+    if (knownAlias) matchReasons.push('known_route_alias');
+
+    return {
+      ...record,
+      search_distance_miles: roundDistance(distances.length > 0 ? Math.min(...distances) : centerDistance),
+      geometry_distance_miles: roundDistance(geometryDistance),
+      trailhead_distance_miles: roundDistance(trailheadDistance),
+      center_distance_miles: roundDistance(centerDistance),
+      search_match_reasons: unique(matchReasons),
+      featured_route_score: featuredRouteScore(record),
+      catalog_trip_classification: classifyRouteCatalogTrip(record),
+    };
+  });
+
+  return {
+    records: annotatedRecords,
+    radiusFilterApplied: true,
+    radiusMatchedCount: annotatedRecords.length,
+    geometryMatchedCount: annotatedRecords.filter((record) =>
+      readStringArray(record.search_match_reasons).includes('geometry_within_radius')
+    ).length,
+    trailheadMatchedCount: annotatedRecords.filter((record) =>
+      readStringArray(record.search_match_reasons).includes('trailhead_within_radius')
+    ).length,
+    centerMatchedCount: annotatedRecords.length,
+    aliasMatchedCount: annotatedRecords.filter((record) =>
+      readStringArray(record.search_match_reasons).includes('known_route_alias')
+    ).length,
+    featuredMatchedCount: annotatedRecords.filter((record) =>
+      (readNumber(record.featured_route_score) ?? 0) > 0
+    ).length,
+  };
+}
+
 function compareDiscoveryRecords(a: Record<string, unknown>, b: Record<string, unknown>): number {
   const featuredDelta = (readNumber(b.featured_route_score) ?? 0) - (readNumber(a.featured_route_score) ?? 0);
   if (featuredDelta !== 0) return featuredDelta;
@@ -599,6 +671,7 @@ async function inspectRouteCatalogCurationCandidates(
       longitude: args.longitude,
       radiusMiles: args.radiusMiles,
       limit: Math.min(args.queryLimit, 50),
+      pageSize: Math.min(args.queryLimit, 50),
       recommendationFilter: 'non_recommendable',
       includeGeometry: false,
       includePreviewGeometry: false,
@@ -921,10 +994,18 @@ async function attachSourceRecords(
 }
 
 type NearbyRouteCatalogSearchArgs = {
+  trace?: RouteCatalogEdgeTrace | null;
   latitude: number;
   longitude: number;
   radiusMiles: number;
+  offset?: number;
   limit: number;
+  pageSize: number;
+  publicPage?: boolean;
+  cursorPage?: boolean;
+  continuationCursor?: RouteCatalogPageCursor | null;
+  cursorFingerprint?: string;
+  cursorSigningSecret?: string;
   recommendationFilter: 'recommendable' | 'non_recommendable' | 'all';
   includeGeometry: boolean;
   includePreviewGeometry: boolean;
@@ -959,10 +1040,9 @@ async function fetchNearbyRouteCatalogCandidates(
   records: Record<string, unknown>[];
   lookupCount: number;
   lookupBounded: boolean;
+  nextCursor: string | null;
 }> {
-  const { data: nearbyData, error: nearbyError } = await admin.rpc(
-    'route_catalog_nearby_route_ids',
-    {
+  const rpcArguments = {
       p_latitude: args.latitude,
       p_longitude: args.longitude,
       p_radius_miles: args.radiusMiles,
@@ -982,7 +1062,25 @@ async function fetchNearbyRouteCatalogCandidates(
       p_route_type: args.routeType || null,
       p_difficulty: args.difficulty || null,
       p_source_adapter: args.sourceAdapter || null,
-    },
+  };
+  const cursorArguments = args.cursorPage
+    ? {
+        ...rpcArguments,
+        p_cursor_route_id: args.continuationCursor?.routeId ?? null,
+      }
+    : null;
+  const { data: nearbyData, error: nearbyError } = await traceNearbyRouteCatalogRpc(
+    args.trace,
+    () => admin.rpc(
+      args.cursorPage
+        ? 'route_catalog_nearby_public_route_cursor_page'
+        : args.publicPage
+          ? 'route_catalog_nearby_public_route_page'
+          : 'route_catalog_nearby_route_ids',
+      cursorArguments ?? (args.publicPage
+        ? { ...rpcArguments, p_offset: Math.max(0, Math.floor(args.offset ?? 0)) }
+        : rpcArguments),
+    ),
   );
   if (nearbyError) throw new Error('Unable to search the indexed nearby route catalog.');
 
@@ -996,8 +1094,22 @@ async function fetchNearbyRouteCatalogCandidates(
       .map((row) => cleanText(row.route_id ?? row.routeId))
       .filter(Boolean),
   );
+  const lookupBounded = nearbyRows.length >= args.limit;
+  const cursorRow = lookupBounded
+    ? nearbyRows[Math.max(0, Math.min(args.pageSize, nearbyRows.length) - 1)]
+    : null;
+  const cursorRouteId = cleanText(cursorRow?.cursor_route_id ?? cursorRow?.cursorRouteId);
+  const nextCursor =
+    args.cursorPage &&
+    args.cursorFingerprint &&
+    args.cursorSigningSecret &&
+    ROUTE_CATALOG_UUID_PATTERN.test(cursorRouteId)
+      ? await encodeRouteCatalogPageCursor({
+          routeId: cursorRouteId,
+        }, args.cursorFingerprint, args.cursorSigningSecret)
+      : null;
   if (orderedRouteIds.length === 0) {
-    return { records: [], lookupCount: 0, lookupBounded: false };
+    return { records: [], lookupCount: 0, lookupBounded: false, nextCursor: null };
   }
 
   const recordBatches = await Promise.all(
@@ -1039,24 +1151,48 @@ async function fetchNearbyRouteCatalogCandidates(
   return {
     records,
     lookupCount: nearbyRows.length,
-    lookupBounded: nearbyRows.length >= args.limit,
+    lookupBounded,
+    nextCursor,
   };
 }
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
-  if (req.method !== 'GET' && req.method !== 'POST') return jsonResponse({ ok: false, error: 'GET or POST required' }, 405);
+  const requestId = resolveRouteCatalogRequestId(
+    req.headers.get(ECS_ROUTE_CATALOG_REQUEST_ID_HEADER),
+  );
+  const trace = createRouteCatalogEdgeTrace({ requestId });
+  let responseCandidateCount = 0;
+  let responseReturnedCount = 0;
+  let responseBlockedCount = 0;
+  const completeResponse = (body: Record<string, unknown>, status = 200): Response => {
+    const responseBody = routeCatalogResponseMetadata(body, requestId);
+    trace.emit('response_complete', {
+      candidateCount: responseCandidateCount,
+      returnedCount: responseReturnedCount,
+      blockedCount: responseBlockedCount,
+      rpcUsed: trace.nearbyRpcStarted,
+      durationMs: trace.now() - trace.startedAtMs,
+    });
+    return new Response(JSON.stringify(responseBody), {
+      status,
+      headers: routeCatalogCorrelationResponseHeaders(corsHeaders, requestId),
+    });
+  };
+  trace.emit('request_start', {
+    candidateCount: 0,
+    returnedCount: 0,
+    blockedCount: 0,
+    rpcUsed: false,
+    durationMs: 0,
+  });
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return completeResponse({ ok: false, error: 'GET or POST required' }, 405);
+  }
 
   try {
     const params = await requestParams(req);
     const pagination = normalizeRouteCatalogPagination(params);
-    if (pagination.windowExceeded) {
-      return jsonResponse({
-        ok: false,
-        error: `Requested route catalog page exceeds the bounded ${ROUTE_CATALOG_MAX_PAGINATION_WINDOW}-record search window.`,
-        safeErrorCode: 'ROUTE_CATALOG_PAGINATION_WINDOW_EXCEEDED',
-      }, 400);
-    }
     const { page, pageSize, offset, windowEnd } = pagination;
     const includeGeometry = readBoolean(params.includeGeometry ?? params.include_geometry, false);
     const includePreviewGeometry = readBoolean(
@@ -1084,7 +1220,7 @@ serve(async (req) => {
       radiusMiles > 0 &&
       radiusMiles <= ROUTE_CATALOG_MAX_RADIUS_MILES;
     if (hasAnyRadiusCriterion && !hasValidRadiusCriteria) {
-      return jsonResponse({
+      return completeResponse({
         ok: false,
         error: `Latitude, longitude, and a radius from 0 to ${ROUTE_CATALOG_MAX_RADIUS_MILES} miles are required together.`,
         safeErrorCode: 'ROUTE_CATALOG_INVALID_SEARCH_AREA',
@@ -1110,87 +1246,198 @@ serve(async (req) => {
       ? []
       : expectedKnownRoutes(params.expectedKnownRoutes ?? params.expected_known_routes);
     const hasRadiusCriteria = hasValidRadiusCriteria;
-    // Fetch one record beyond the requested page so `hasMore` remains
-    // evidence-backed. Radius-qualified IDs are selected by PostGIS before
-    // this bound is applied; distant high-confidence records can no longer
-    // consume the candidate window.
-    const queryLimit = Math.min(ROUTE_CATALOG_MAX_PAGINATION_WINDOW, windowEnd + 1);
+    const cursorFingerprint = await routeCatalogCursorFingerprint([
+      latitude,
+      longitude,
+      radiusMiles,
+      recommendationOnly,
+      vehicleClass || null,
+      minDistanceMiles,
+      maxDistanceMiles,
+      minDurationMinutes,
+      maxDurationMinutes,
+      minConfidenceScore,
+      minRemotenessScore,
+      maxRemotenessScore,
+      minCampabilityScore,
+      availableFuelRangeMiles,
+      availableWaterCapacityGallons,
+      routeType || null,
+      difficulty || null,
+      sourceAdapter || null,
+    ]);
+    const rawContinuationCursor = params.continuationCursor ?? params.continuation_cursor;
+    const requestedPaginationContract = cleanText(
+      params.paginationContractVersion ?? params.pagination_contract_version,
+    );
+    const requestsCursorContract =
+      requestedPaginationContract === ROUTE_CATALOG_CURSOR_CONTRACT_VERSION;
+    const hasContinuationCursor = cleanText(rawContinuationCursor).length > 0;
+    const cursorSigningSecret = getEnvAny(['ECS_SERVICE_ROLE_KEY', 'SUPABASE_SERVICE_ROLE_KEY']);
+    const continuationCursor = hasContinuationCursor
+      ? await decodeRouteCatalogPageCursor(
+          rawContinuationCursor,
+          cursorFingerprint,
+          cursorSigningSecret,
+        )
+      : null;
+    if (hasContinuationCursor && (!continuationCursor || page <= 1)) {
+      return completeResponse({
+        ok: false,
+        error: 'The route catalog continuation is invalid for this search.',
+        safeErrorCode: 'ROUTE_CATALOG_INVALID_CONTINUATION',
+      }, 400);
+    }
+    if (
+      requestsCursorContract &&
+      hasRadiusCriteria &&
+      recommendationOnly &&
+      page > 1 &&
+      !continuationCursor
+    ) {
+      return completeResponse({
+        ok: false,
+        error: 'The route catalog continuation is required for this search page.',
+        safeErrorCode: 'ROUTE_CATALOG_CONTINUATION_REQUIRED',
+      }, 400);
+    }
+    const useCursorPage =
+      hasRadiusCriteria &&
+      recommendationOnly &&
+      (page === 1 || continuationCursor != null);
+    if (pagination.windowExceeded && !useCursorPage) {
+      return completeResponse({
+        ok: false,
+        error: `Requested route catalog page exceeds the bounded ${ROUTE_CATALOG_MAX_PAGINATION_WINDOW}-record legacy search window.`,
+        safeErrorCode: 'ROUTE_CATALOG_PAGINATION_WINDOW_EXCEEDED',
+      }, 400);
+    }
+    // Cursor radius pages use a bounded ordered scan and one lookahead row.
+    // Legacy offset/no-radius clients retain the existing bounded fallback.
+    let queryLimit = hasRadiusCriteria
+      ? Math.min(ROUTE_CATALOG_MAX_PAGINATION_WINDOW, pageSize + 1)
+      : Math.min(ROUTE_CATALOG_MAX_PAGINATION_WINDOW, windowEnd + 1);
 
     const admin = createAdminClient();
     let candidates: Record<string, unknown>[] = [];
     let nearbyLookupCount = 0;
     let nearbyLookupBounded = false;
-    if (hasRadiusCriteria) {
-      const nearby = await fetchNearbyRouteCatalogCandidates(admin, {
-        latitude,
-        longitude,
-        radiusMiles,
-        limit: queryLimit,
-        recommendationFilter: recommendationOnly ? 'recommendable' : 'all',
-        includeGeometry,
-        includePreviewGeometry,
-        vehicleClass,
-        minDistanceMiles,
-        maxDistanceMiles,
-        minDurationMinutes,
-        maxDurationMinutes,
-        minConfidenceScore,
-        minRemotenessScore,
-        maxRemotenessScore,
-        minCampabilityScore,
-        availableFuelRangeMiles,
-        availableWaterCapacityGallons,
-        routeType,
-        difficulty,
-        sourceAdapter,
-      });
-      candidates = nearby.records;
-      nearbyLookupCount = nearby.lookupCount;
-      nearbyLookupBounded = nearby.lookupBounded;
-    } else {
-      let query = admin
-        .from('verified_routes')
-        .select(searchSelect(includeGeometry, includePreviewGeometry))
-        .eq('review_status', 'approved')
-        .order('confidence_score', { ascending: false })
-        .order('updated_at', { ascending: false })
-        .order('id', { ascending: true })
-        .limit(queryLimit);
-
-      if (recommendationOnly) query = query.eq('recommendation_status', 'recommendable');
-      if (vehicleClass) query = query.contains('vehicle_fit', [vehicleClass]);
-      if (minDistanceMiles != null) query = query.gte('distance_miles', minDistanceMiles);
-      if (maxDistanceMiles != null) query = query.lte('distance_miles', maxDistanceMiles);
-      if (minDurationMinutes != null) query = query.gte('estimated_duration_minutes', minDurationMinutes);
-      if (maxDurationMinutes != null) query = query.lte('estimated_duration_minutes', maxDurationMinutes);
-      if (minConfidenceScore != null) query = query.gte('confidence_score', minConfidenceScore);
-      if (minRemotenessScore != null) query = query.gte('remoteness_score', minRemotenessScore);
-      if (maxRemotenessScore != null) query = query.lte('remoteness_score', maxRemotenessScore);
-      if (minCampabilityScore != null) query = query.gte('campability_score', minCampabilityScore);
-      if (availableFuelRangeMiles != null && availableFuelRangeMiles > 0) {
-        query = query.lte('minimum_fuel_range_miles', availableFuelRangeMiles);
-      }
-      if (availableWaterCapacityGallons != null && availableWaterCapacityGallons > 0) {
-        query = query.lte('minimum_water_capacity_gallons', availableWaterCapacityGallons);
-      }
-      if (routeType) query = query.eq('route_type', routeType);
-      if (difficulty) query = query.eq('difficulty', difficulty);
-
-      const { data, error } = await query;
-      if (error) throw new Error('Unable to search verified route catalog.');
-      candidates = Array.isArray(data) ? data as Record<string, unknown>[] : [];
-    }
-    const radiusFiltered = filterRecordsWithinSearchRadius(candidates, { latitude, longitude, radiusMiles });
-    let limitedRecords: Record<string, unknown>[];
+    let nextCursor: string | null = null;
+    let radiusFiltered = filterRecordsWithinSearchRadius([], { latitude, longitude, radiusMiles });
     let sourceMatchedCount: number | null = null;
-    if (sourceAdapter) {
+    let sourceEligibleRecords: Record<string, unknown>[] = [];
+    let revealablePage = partitionRouteCatalogRecordsForPage([], { offset, pageSize });
+    let candidateQueryBounded = false;
+
+    // A provider diagnostic must not occupy a public route slot. Grow only the
+    // bounded candidate prefix needed to find one revealable lookahead row,
+    // then paginate the partitioned public records. Normal pages without
+    // restricted rows keep the existing windowEnd + 1 RPC cost.
+    while (true) {
+      if (hasRadiusCriteria) {
+        const nearby = await fetchNearbyRouteCatalogCandidates(admin, {
+          trace,
+          latitude,
+          longitude,
+          radiusMiles,
+          offset,
+          limit: queryLimit,
+          pageSize,
+          publicPage: true,
+          cursorPage: useCursorPage,
+          continuationCursor,
+          cursorFingerprint,
+          cursorSigningSecret,
+          recommendationFilter: recommendationOnly ? 'recommendable' : 'all',
+          includeGeometry,
+          includePreviewGeometry,
+          vehicleClass,
+          minDistanceMiles,
+          maxDistanceMiles,
+          minDurationMinutes,
+          maxDurationMinutes,
+          minConfidenceScore,
+          minRemotenessScore,
+          maxRemotenessScore,
+          minCampabilityScore,
+          availableFuelRangeMiles,
+          availableWaterCapacityGallons,
+          routeType,
+          difficulty,
+          sourceAdapter,
+        });
+        candidates = nearby.records;
+        nearbyLookupCount = nearby.lookupCount;
+        nearbyLookupBounded = nearby.lookupBounded;
+        nextCursor = nearby.nextCursor;
+        if (useCursorPage && nearbyLookupBounded && !nextCursor) {
+          throw new Error('Unable to continue the route catalog cursor page.');
+        }
+      } else {
+        let query = admin
+          .from('verified_routes')
+          .select(searchSelect(includeGeometry, includePreviewGeometry))
+          .eq('review_status', 'approved')
+          .order('confidence_score', { ascending: false })
+          .order('updated_at', { ascending: false })
+          .order('id', { ascending: true })
+          .limit(queryLimit);
+
+        if (recommendationOnly) query = query.eq('recommendation_status', 'recommendable');
+        if (vehicleClass) query = query.contains('vehicle_fit', [vehicleClass]);
+        if (minDistanceMiles != null) query = query.gte('distance_miles', minDistanceMiles);
+        if (maxDistanceMiles != null) query = query.lte('distance_miles', maxDistanceMiles);
+        if (minDurationMinutes != null) query = query.gte('estimated_duration_minutes', minDurationMinutes);
+        if (maxDurationMinutes != null) query = query.lte('estimated_duration_minutes', maxDurationMinutes);
+        if (minConfidenceScore != null) query = query.gte('confidence_score', minConfidenceScore);
+        if (minRemotenessScore != null) query = query.gte('remoteness_score', minRemotenessScore);
+        if (maxRemotenessScore != null) query = query.lte('remoteness_score', maxRemotenessScore);
+        if (minCampabilityScore != null) query = query.gte('campability_score', minCampabilityScore);
+        if (availableFuelRangeMiles != null && availableFuelRangeMiles > 0) {
+          query = query.lte('minimum_fuel_range_miles', availableFuelRangeMiles);
+        }
+        if (availableWaterCapacityGallons != null && availableWaterCapacityGallons > 0) {
+          query = query.lte('minimum_water_capacity_gallons', availableWaterCapacityGallons);
+        }
+        if (routeType) query = query.eq('route_type', routeType);
+        if (difficulty) query = query.eq('difficulty', difficulty);
+
+        const { data, error } = await query;
+        if (error) throw new Error('Unable to search verified route catalog.');
+        candidates = Array.isArray(data) ? data as Record<string, unknown>[] : [];
+      }
+
+      responseCandidateCount = candidates.length;
+      radiusFiltered = hasRadiusCriteria
+        ? annotateIndexedRadiusPage(candidates, { latitude, longitude, radiusMiles })
+        : filterRecordsWithinSearchRadius(candidates, { latitude, longitude, radiusMiles });
       const sourcedRadiusRecords = await attachSourceRecords(admin, radiusFiltered.records);
-      const sourceMatchedRecords = filterRecordsBySourceAdapter(sourcedRadiusRecords, sourceAdapter);
-      sourceMatchedCount = sourceMatchedRecords.length;
-      limitedRecords = sourceMatchedRecords.slice(offset, windowEnd);
-    } else {
-      limitedRecords = await attachSourceRecords(admin, radiusFiltered.records.slice(offset, windowEnd));
+      sourceEligibleRecords = sourceAdapter
+        ? filterRecordsBySourceAdapter(sourcedRadiusRecords, sourceAdapter)
+        : sourcedRadiusRecords;
+      sourceMatchedCount = sourceAdapter
+        ? (hasRadiusCriteria ? offset + sourceEligibleRecords.length : sourceEligibleRecords.length)
+        : null;
+      revealablePage = partitionRouteCatalogRecordsForPage(
+        attachCurrentConditionOverlays(sourceEligibleRecords),
+        { offset: hasRadiusCriteria ? 0 : offset, pageSize },
+      );
+      candidateQueryBounded = hasRadiusCriteria
+        ? nearbyLookupBounded
+        : candidates.length >= queryLimit;
+
+      if (hasRadiusCriteria || (
+        revealablePage.hasMoreRevealable ||
+        !candidateQueryBounded ||
+        queryLimit >= ROUTE_CATALOG_MAX_PAGINATION_WINDOW
+      )) {
+        break;
+      }
+      const expandedLimit = expandRouteCatalogCandidateLimit(queryLimit, pageSize);
+      if (expandedLimit === queryLimit) break;
+      queryLimit = expandedLimit;
     }
+    const limitedRecords = revealablePage.records;
     let knownRouteDiagnostics: Record<string, unknown>[] = [];
     let curationCoverage = {
       curationCandidateCount: 0,
@@ -1204,7 +1451,7 @@ serve(async (req) => {
         knownRouteDiagnostics = await inspectKnownRouteDiagnostics(
           admin,
           expectedKnownRouteKeys,
-          sourceAdapter ? limitedRecords : radiusFiltered.records,
+          sourceAdapter ? sourceEligibleRecords : radiusFiltered.records,
         );
         curationCoverage = await inspectRouteCatalogCurationCandidates(admin, {
           latitude,
@@ -1230,17 +1477,18 @@ serve(async (req) => {
         coverageDiagnosticsUnavailable = true;
       }
     }
-    const anySourceBackedCandidateCount = radiusFiltered.radiusMatchedCount + curationCoverage.curationCandidateCount;
+    const matchedCount = hasRadiusCriteria
+      ? offset + nearbyLookupCount
+      : revealablePage.revealableMatchedCount;
+    const anySourceBackedCandidateCount = matchedCount + curationCoverage.curationCandidateCount;
 
-    const conditionAwareRecords = attachCurrentConditionOverlays(limitedRecords);
-    const restrictedPartition = partitionRestrictedRouteCatalogRecords(conditionAwareRecords);
     const records = shapeSearchRecords(
-      restrictedPartition.records,
+      limitedRecords,
       includeGeometry,
       includePreviewGeometry,
     );
     const diagnosticRecordsByRouteId = new Map<string, RouteCatalogSafeDiagnosticRecord>();
-    [...restrictedPartition.diagnosticRecords, ...curationCoverage.diagnosticRecords].forEach((diagnostic) => {
+    [...revealablePage.diagnosticRecords, ...curationCoverage.diagnosticRecords].forEach((diagnostic) => {
       const existing = diagnosticRecordsByRouteId.get(diagnostic.routeId);
       diagnosticRecordsByRouteId.set(diagnostic.routeId, existing
         ? {
@@ -1255,15 +1503,17 @@ serve(async (req) => {
     });
     const diagnosticRecords = Array.from(diagnosticRecordsByRouteId.values()).slice(0, 50);
     const diagnosticCandidateCount = curationCoverage.curationCandidateCount
-      + restrictedPartition.diagnosticRecords.length;
-    const matchedCount = sourceAdapter
-      ? sourceMatchedCount ?? 0
-      : radiusFiltered.radiusMatchedCount;
-    const hasMore = matchedCount > windowEnd;
-    const totalMatchedCountBounded = hasRadiusCriteria
+      + revealablePage.diagnosticRecords.length;
+    const hasMore = hasRadiusCriteria
       ? nearbyLookupBounded
-      : candidates.length >= queryLimit;
-    return jsonResponse({
+      : revealablePage.hasMoreRevealable;
+    const totalMatchedCountBounded = hasRadiusCriteria
+      ? hasMore
+      : candidateQueryBounded;
+    responseCandidateCount = candidates.length;
+    responseReturnedCount = records.length;
+    responseBlockedCount = diagnosticRecords.length;
+    return completeResponse({
       ok: true,
       records,
       diagnosticRecords,
@@ -1271,15 +1521,25 @@ serve(async (req) => {
       coverageState: coverageState(records, { curationCandidateCount: diagnosticCandidateCount }),
       meta: {
         source: 'verified_routes',
+        paginationContractVersion: useCursorPage
+          ? ROUTE_CATALOG_CURSOR_CONTRACT_VERSION
+          : 'route_catalog_public_page_v1',
+        nearbyRouteRpcUsed: hasRadiusCriteria,
+        nearbyRouteRpc: hasRadiusCriteria
+          ? useCursorPage
+            ? 'route_catalog_nearby_public_route_cursor_page'
+            : 'route_catalog_nearby_public_route_page'
+          : null,
+        fallbackQueryUsed: !hasRadiusCriteria,
         recommendationOnly,
         includeCoverageDiagnostics,
-        bboxFilterApplied: false,
+        bboxFilterApplied: useCursorPage,
         spatialIndexFilterApplied: hasRadiusCriteria,
         radiusFilterApplied: radiusFiltered.radiusFilterApplied,
         candidateLimit: queryLimit,
         candidateCount: candidates.length,
-        spatialIndexCandidateCount: nearbyLookupCount,
-        radiusMatchedCount: radiusFiltered.radiusMatchedCount,
+        spatialIndexCandidateCount: hasRadiusCriteria ? matchedCount : nearbyLookupCount,
+        radiusMatchedCount: hasRadiusCriteria ? matchedCount : radiusFiltered.radiusMatchedCount,
         geometryMatchedCount: radiusFiltered.geometryMatchedCount,
         trailheadMatchedCount: radiusFiltered.trailheadMatchedCount,
         centerMatchedCount: radiusFiltered.centerMatchedCount,
@@ -1299,9 +1559,10 @@ serve(async (req) => {
         returnedCount: records.length,
         hasMore,
         nextPage: hasMore ? page + 1 : null,
+        nextCursor: hasMore ? nextCursor : null,
         totalMatchedCount: matchedCount,
         totalMatchedCountBounded,
-        maxPaginationWindow: ROUTE_CATALOG_MAX_PAGINATION_WINDOW,
+        maxPaginationWindow: useCursorPage ? null : ROUTE_CATALOG_MAX_PAGINATION_WINDOW,
         geometryMode: includeGeometry ? 'full' : includePreviewGeometry ? 'preview_simplified' : 'omitted',
         previewMaxPoints: includePreviewGeometry && !includeGeometry ? PREVIEW_MAX_POINTS : null,
         criteria: {
@@ -1321,11 +1582,8 @@ serve(async (req) => {
         },
       },
     });
-  } catch (error) {
-    console.error('[route-catalog-search]', {
-      message: error instanceof Error ? error.message : 'Unknown route catalog search failure.',
-    });
-    return jsonResponse({
+  } catch {
+    return completeResponse({
       ok: false,
       error: 'Verified route catalog is temporarily unavailable. No seed or mock routes are shown as verified.',
       coverageState: {

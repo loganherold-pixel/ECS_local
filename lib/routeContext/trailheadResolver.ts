@@ -26,6 +26,8 @@ export type TrailheadResolverInput = {
   selected_access_point?: unknown;
   selectedAccessPointCoordinate?: unknown;
   selected_access_point_coordinate?: unknown;
+  trailheadStart?: unknown;
+  trailhead_start?: unknown;
   explicitTrailhead?: unknown;
   trailheadCoordinate?: unknown;
   trailhead_coordinate?: unknown;
@@ -86,6 +88,8 @@ const USER_SELECTED_TRAILHEAD_KEYS = [
 ];
 
 const TRAILHEAD_KEYS = [
+  'trailheadStart',
+  'trailhead_start',
   'explicitTrailhead',
   'trailheadCoordinate',
   'trailhead_coordinate',

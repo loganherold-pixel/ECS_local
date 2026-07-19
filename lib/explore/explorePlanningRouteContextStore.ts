@@ -117,6 +117,7 @@ export function saveExplorePlanningRouteContext(args: {
   radiusMiles: number | null;
   refinementLabel?: string | null;
   source?: ExplorePlanningRouteContextSource;
+  persist?: boolean;
 }): ExplorePlanningRouteContext {
   const context: ExplorePlanningRouteContext = {
     schemaVersion: EXPLORE_PLANNING_CONTEXT_VERSION,
@@ -127,6 +128,7 @@ export function saveExplorePlanningRouteContext(args: {
     createdAt: new Date().toISOString(),
   };
   memoryContext = context;
+  if (args.persist === false) return context;
   try {
     const serialized = JSON.stringify(context);
     if (Platform.OS === 'web') getStorage()?.setItem(EXPLORE_PLANNING_ROUTE_CONTEXT_KEY, serialized);
@@ -153,13 +155,13 @@ export function loadExplorePlanningRouteContext(): ExplorePlanningRouteContext |
   }
 }
 
-export function clearExplorePlanningRouteContext(): void {
+export async function clearExplorePlanningRouteContext(): Promise<void> {
   memoryContext = null;
   try {
     if (Platform.OS === 'web') getStorage()?.removeItem(EXPLORE_PLANNING_ROUTE_CONTEXT_KEY);
     else {
       planningContextPersistence.delete(EXPLORE_PLANNING_ROUTE_CONTEXT_KEY);
-      void planningContextPersistence.flush();
+      await planningContextPersistence.flush();
     }
   } catch {
     // No-op.

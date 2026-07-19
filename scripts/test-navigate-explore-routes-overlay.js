@@ -141,21 +141,21 @@ assert(
   'Explorer should replace the old Map Active Trails / Display on Map container.',
 );
 assert(
-  discover.includes('Guidance Ready Routes') &&
+  discover.includes('Available Routes') &&
     discover.includes('canonicalExplorePlanningRoutes') &&
     discover.includes('const mapInventory = buildExploreGuidanceReadyInventory') &&
     discover.includes('mapInventory.candidateSet.candidates') &&
+    discover.includes('exploreGuidanceReadyInventory.discoverableCandidateSet') &&
     discover.includes('exploreMapPreviewRouteCounts') &&
     discover.includes('Hidden Gems') &&
     discover.includes('Trail Packs') &&
     discover.includes('ECS Ideas') &&
     discover.includes('source-backed route') &&
-    discover.includes('with usable geometry match') &&
     discover.includes('confidence') &&
-    discover.includes('source and freshness labels remain visible') &&
+    discover.includes('Review source and freshness before handoff') &&
     !discover.includes("label: 'Popular Trails'") &&
     !discover.includes('popularTrailRoutes: exploreMapPreviewRouteSets.popularTrailRoutes'),
-  'Explorer guidance-ready route set should summarize source-backed Hidden Gems, Trail Packs, Favorites, and ECS Ideas without the Popular Trails container.',
+  'Explorer should expose discoverable source-backed cards while keeping map-preview routes guidance-ready and omitting the Popular Trails container.',
 );
 assert(
   discover.includes('exploreMapPreviewRouteSets') &&
@@ -182,8 +182,9 @@ assert(
 );
 assert(
   discover.includes('buildExploreGuidanceReadyInventory({') &&
-    readyInventory.includes('MIN_DISCOVERY_ROUTE_MILES'),
-  'Explorer Display on Map must preserve the shared minimum five-mile route filter.',
+    readyInventory.includes('MIN_GUIDANCE_READY_ROUTE_MILES') &&
+    readyInventory.includes("if (reason.code === 'too_short') return false"),
+  'Explorer map preview should retain the five-mile guidance threshold without treating it as a card-discovery gate.',
 );
 assert(
   navigate.includes('consumeExploreRoutesMapHandoff') &&

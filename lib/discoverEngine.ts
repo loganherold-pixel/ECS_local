@@ -76,9 +76,11 @@ function debugDiscoverEngine(message: string): void {
 export const DISTANCE_RADIUS_OPTIONS = [25, 50, 100, 250, 500] as const;
 export type DistanceRadius = typeof DISTANCE_RADIUS_OPTIONS[number];
 export const DEFAULT_DISTANCE_RADIUS: DistanceRadius = 100;
-// Minimum drivable trail length for Explorer discovery surfaces.
-// Trails shorter than this are filtered out to reduce low-value route noise.
-export const MIN_DISCOVERY_ROUTE_MILES = 5;
+// Minimum route length for advanced guidance preparation. Shorter approved
+// routes may still be discovered and used in Trip Builder.
+export const MIN_GUIDANCE_READY_ROUTE_MILES = 5;
+// Backward-compatible alias for callers that still import the former name.
+export const MIN_DISCOVERY_ROUTE_MILES = MIN_GUIDANCE_READY_ROUTE_MILES;
 
 // ── Hard distance cap ────────────────────────────────────────
 // Trails beyond this distance NEVER appear in default Discovery results.
@@ -456,7 +458,7 @@ export function isDiscoverableRoute(opportunity: ExpeditionOpportunity): boolean
   return (
     hasValidRouteEntryPoint(opportunity) &&
     Number.isFinite(opportunity.distanceMiles) &&
-    opportunity.distanceMiles >= MIN_DISCOVERY_ROUTE_MILES
+    opportunity.distanceMiles > 0
   );
 }
 

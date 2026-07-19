@@ -152,12 +152,14 @@ import {
 } from '../../lib/explore/trailPacks';
 import { trailPackToOfflinePrepCatalogInput } from '../../lib/explore/trailPackOfflineCache';
 import {
+  buildRouteCatalogPaginationProgress,
   createLiveTrailPackCatalogRefreshKey,
   fetchRouteCatalogTrailPackDetail,
   liveTrailPackCatalogStore,
   refreshLiveTrailPackCatalog,
   setLiveTrailPackCatalogDisabled,
 } from '../../lib/explore/liveTrailPackCatalog';
+import { logRouteCatalogClientCorrelationDiagnostic } from '../../lib/explore/routeCatalogRequestCorrelation';
 import {
   ROUTE_CATALOG_COVERAGE_AREAS,
   ROUTE_CATALOG_PRESET_SEARCH_AREAS,
@@ -335,6 +337,7 @@ const EXPLORE_MAP_HANDOFF_MAX_ROUTES = 60;
 const EXPLORE_SECTION_CARD_VIEWPORT_HEIGHT = 368;
 const ANDROID_DRAW_OPTIMIZED_SURFACE = Platform.OS === 'android';
 const HIDDEN_GEM_AI_TIMEOUT_MS = 4500;
+const EXPLORE_ROUTE_CATALOG_PAGINATION_TIMEOUT_MS = 30_000;
 const EXPLORE_ENTRY_CHROME_DELAY_MS = 160;
 const EXPLORE_ENTRY_CHROME_MAX_WAIT_MS = 420;
 const EXPLORE_ENTRY_HEAVY_CHROME_DELAY_MS = 520;
@@ -1026,6 +1029,7 @@ function DiscoverScreenInner() {
   const lastHiddenGemDiagnosticsSignatureRef = useRef<string | null>(null);
   const lastExploreSourceDiagnosticsSignatureRef = useRef<string | null>(null);
   const lastExploreGuidanceDiagnosticsSignatureRef = useRef<string | null>(null);
+  const lastRouteCatalogCorrelationRenderSignatureRef = useRef<string | null>(null);
   const explorePerformanceFirstVisibleLoggedRef = useRef<string | null>(null);
   const explorePerformanceFullListLoggedRef = useRef<string | null>(null);
   const explorePerformanceImageFetchCacheRef = useRef<{
@@ -1575,6 +1579,10 @@ function DiscoverScreenInner() {
     void refreshLiveTrailPackCatalog(routeCatalogSearchCriteria, {
       signal: controller.signal,
       cancellationReason: 'unmount',
+      retryEcsRequestId:
+        liveTrailPackCatalogSnapshot.ecsRequestKey === routeCatalogSearchRefreshKey
+          ? liveTrailPackCatalogSnapshot.ecsRequestId
+          : null,
     })
       .catch((error: unknown) => {
         if (controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')) return;
@@ -1595,7 +1603,14 @@ function DiscoverScreenInner() {
           routeCatalogManualRetryAbortRef.current = null;
         }
       });
-  }, [routeCatalogHasSearchArea, routeCatalogSearchCriteria, suggestedRoutesFeatureEnabled]);
+  }, [
+    liveTrailPackCatalogSnapshot.ecsRequestId,
+    liveTrailPackCatalogSnapshot.ecsRequestKey,
+    routeCatalogHasSearchArea,
+    routeCatalogSearchCriteria,
+    routeCatalogSearchRefreshKey,
+    suggestedRoutesFeatureEnabled,
+  ]);
 
   const handleLoadNextRouteCatalogPage = useCallback(() => {
     const searchMeta = liveTrailPackCatalogSnapshot.searchMeta;
@@ -1623,14 +1638,22 @@ function DiscoverScreenInner() {
     setRouteCatalogPaginationError(null);
 
     const pageSize = searchMeta.pageSize || EXPLORE_ROUTE_CATALOG_REQUEST_LIMIT;
-    void refreshLiveTrailPackCatalog({
+    const pageCriteria = {
       ...routeCatalogSearchCriteria,
       page: nextPage,
       pageSize,
       limit: pageSize,
-    }, {
+      continuationCursor: searchMeta.nextCursor ?? null,
+    };
+    const pageRequestKey = createLiveTrailPackCatalogRefreshKey(pageCriteria);
+    void refreshLiveTrailPackCatalog(pageCriteria, {
       signal: controller.signal,
       cancellationReason: 'consumer_cancelled',
+      timeoutMs: EXPLORE_ROUTE_CATALOG_PAGINATION_TIMEOUT_MS,
+      retryEcsRequestId:
+        liveTrailPackCatalogSnapshot.ecsRequestKey === pageRequestKey
+          ? liveTrailPackCatalogSnapshot.ecsRequestId
+          : null,
     })
       .then((pageSnapshot) => {
         const activeRequest = routeCatalogPaginationRequestRef.current;
@@ -1674,7 +1697,7 @@ function DiscoverScreenInner() {
           severity: 'low',
           issueTitle: 'Explore route catalog pagination unavailable',
           ecsArea: 'explore',
-          message: 'The next bounded route catalog page could not be loaded.',
+          message: 'The next route catalog page could not be loaded.',
           signature: `explore_route_catalog_page_unavailable:${nextPage}`,
           metadata: {
             safeErrorCode: 'EXPLORE_ROUTE_CATALOG_PAGE_UNAVAILABLE',
@@ -2745,10 +2768,12 @@ function DiscoverScreenInner() {
         requireFullCatalogDetail: true,
         signal: options.signal,
       });
-      const eligibility = defaultExploreReadyRouteEligibility(routeForPlanning);
-      if (!eligibility.eligible) {
+      const availability = classifyExploreRouteAvailability(routeForPlanning);
+      if (!availability.discoverability.eligible || !availability.tripBuilder.eligible) {
         throw new Error(
-          eligibility.reason ?? 'The authoritative route detail is not guidance ready for planning.',
+          availability.tripBuilder.reason ??
+            availability.discoverability.reason ??
+            'The authoritative route detail is not eligible for Trip Builder planning.',
         );
       }
       const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(routeForPlanning);
@@ -2761,8 +2786,12 @@ function DiscoverScreenInner() {
         navigationPayload: payload,
         title: payload.title || candidate.title,
         subtitle: payload.subtitle ?? candidate.subtitle,
-        guidanceReady: true,
-        unavailableReason: null,
+        tripBuilderEligible: true,
+        guidanceReady: availability.guidance.eligible,
+        detailState: availability.detailState,
+        tripBuilderUnavailableReason: null,
+        guidanceUnavailableReason: availability.guidance.reason,
+        unavailableReason: availability.guidance.reason,
       };
     },
     [hydrateRouteCatalogOpportunityForHandoff],
@@ -4034,6 +4063,16 @@ function DiscoverScreenInner() {
     ],
   );
   const exploreWizardCandidateSet = exploreGuidanceReadyInventory.discoverableCandidateSet;
+  useEffect(() => {
+    if (liveTrailPackCatalogSnapshot.routeCatalogSummaries.length === 0) return;
+    setExploreGuidanceReadyVisibleLimit((current) => Math.max(
+      current,
+      exploreWizardCandidateSet.candidates.length,
+    ));
+  }, [
+    exploreWizardCandidateSet.candidates.length,
+    liveTrailPackCatalogSnapshot.routeCatalogSummaries.length,
+  ]);
   const canonicalExplorePlanningRoutes = useMemo<ExpeditionOpportunity[]>(
     () => exploreWizardCandidateSet.candidates.map((candidate) => candidate.route),
     [exploreWizardCandidateSet.candidates],
@@ -4045,11 +4084,16 @@ function DiscoverScreenInner() {
       radiusMiles: activeDistanceRadius,
       refinementLabel: selectedExploreRefinementLabel,
       source: 'suggested_routes',
+      persist:
+        (liveTrailPackCatalogSnapshot.searchMeta?.page ?? 1) <= 1 ||
+        liveTrailPackCatalogSnapshot.searchMeta?.hasMore !== true,
     });
   }, [
     activeDistanceRadius,
     canonicalExplorePlanningRoutes,
     exploreFilterHydrated,
+    liveTrailPackCatalogSnapshot.searchMeta?.hasMore,
+    liveTrailPackCatalogSnapshot.searchMeta?.page,
     selectedExploreRefinementLabel,
   ]);
   const exploreWizardSourceCounts = exploreGuidanceReadyInventory.discoverableSourceCounts;
@@ -4148,6 +4192,54 @@ function DiscoverScreenInner() {
         : exploreWizardCandidateSet.candidates.filter((candidate) => candidate.sourceKind === exploreWizardSourceFilter),
     [exploreWizardCandidateSet.candidates, exploreWizardSourceFilter],
   );
+  const loadedRouteCatalogIds = useMemo(() => {
+    const ids = new Set<string>();
+    liveTrailPackCatalogSnapshot.routeCatalogSummaries.forEach((summary) => {
+      const id = String(summary.routeId || '').trim();
+      if (id) ids.add(id);
+    });
+    liveTrailPackCatalogSnapshot.trailPacks.forEach((trailPack) => {
+      const id = String(trailPack.id || '').trim();
+      if (id) ids.add(id);
+    });
+    return ids;
+  }, [
+    liveTrailPackCatalogSnapshot.routeCatalogSummaries,
+    liveTrailPackCatalogSnapshot.trailPacks,
+  ]);
+  const visibleRouteCatalogCardCount = useMemo(
+    () => visibleExploreWizardCandidates.filter((candidate) => {
+      const metadata = candidate.route.routeMetadata && typeof candidate.route.routeMetadata === 'object'
+        ? candidate.route.routeMetadata as Record<string, unknown>
+        : {};
+      const trailPackId = String(metadata.trailPackId || '').trim();
+      const candidateId = String(candidate.id || '').replace(/^trail-pack:/, '').trim();
+      const routeId = String(candidate.route.id || '').replace(/^trail-pack:/, '').trim();
+      return (
+        (trailPackId && loadedRouteCatalogIds.has(trailPackId)) ||
+        (candidateId && loadedRouteCatalogIds.has(candidateId)) ||
+        (routeId && loadedRouteCatalogIds.has(routeId))
+      );
+    }).length,
+    [loadedRouteCatalogIds, visibleExploreWizardCandidates],
+  );
+  const routeCatalogPaginationProgress = useMemo(() => {
+    const searchMeta = liveTrailPackCatalogSnapshot.searchMeta;
+    if (liveTrailPackCatalogSnapshot.source !== 'route_catalog' || !searchMeta) return null;
+    return buildRouteCatalogPaginationProgress({
+      loadedCatalogCount: loadedRouteCatalogIds.size,
+      totalMatchedCount: searchMeta.totalMatchedCount,
+      totalMatchedCountBounded: searchMeta.totalMatchedCountBounded,
+      visibleCatalogCardCount: visibleRouteCatalogCardCount,
+      visibleCandidateCount: visibleExploreWizardCandidates.length,
+    });
+  }, [
+    liveTrailPackCatalogSnapshot.searchMeta,
+    liveTrailPackCatalogSnapshot.source,
+    loadedRouteCatalogIds,
+    visibleExploreWizardCandidates.length,
+    visibleRouteCatalogCardCount,
+  ]);
   const exploreGuidanceFilteredCount = Math.max(
     exploreDiscoverableCount - visibleExploreWizardCandidates.length,
     0,
@@ -4590,6 +4682,52 @@ function DiscoverScreenInner() {
     isLoading: showInitialLoading || showSectionLoading || showTrailPackSectionLoading,
     validEmpty: routeCatalogValidEmpty,
   });
+  useEffect(() => {
+    const renderedRequestId = liveTrailPackCatalogSnapshot.searchMeta?.ecsRequestId
+      ?? liveTrailPackCatalogSnapshot.ecsRequestId;
+    if (!renderedRequestId) return;
+    const revalidationRequestId =
+      liveTrailPackCatalogSnapshot.ecsRequestId &&
+      liveTrailPackCatalogSnapshot.ecsRequestId !== renderedRequestId
+        ? liveTrailPackCatalogSnapshot.ecsRequestId
+        : null;
+    const diagnosticInput = {
+      event: 'explorer_surface_render' as const,
+      requestId: renderedRequestId,
+      responseRequestId: liveTrailPackCatalogSnapshot.searchMeta?.ecsRequestId ?? null,
+      revalidationRequestId,
+      status: liveTrailPackCatalogSnapshot.status,
+      surfaceKind: exploreRouteSurfaceState.kind,
+      candidateCount: liveTrailPackCatalogSnapshot.searchMeta?.candidateCount,
+      returnedCount:
+        liveTrailPackCatalogSnapshot.trailPacks.length +
+        liveTrailPackCatalogSnapshot.guidanceDiagnosticTrailPacks.length,
+      blockedCount: liveTrailPackCatalogSnapshot.guidanceDiagnosticRecords.length,
+      normalizedCount: exploreWizardCandidateSet.candidates.length,
+      discoverableCount: exploreDiscoverableCount,
+      guidanceReadyCount: exploreGuidanceReadyCount,
+      visibleCount: visibleExploreWizardCandidates.length,
+      rpcUsed: liveTrailPackCatalogSnapshot.searchMeta?.nearbyRouteRpcUsed,
+    };
+    const signature = JSON.stringify(diagnosticInput);
+    if (lastRouteCatalogCorrelationRenderSignatureRef.current === signature) return;
+    lastRouteCatalogCorrelationRenderSignatureRef.current = signature;
+    logRouteCatalogClientCorrelationDiagnostic(diagnosticInput);
+  }, [
+    exploreDiscoverableCount,
+    exploreGuidanceReadyCount,
+    exploreRouteSurfaceState.kind,
+    exploreWizardCandidateSet.candidates.length,
+    liveTrailPackCatalogSnapshot.ecsRequestId,
+    liveTrailPackCatalogSnapshot.guidanceDiagnosticRecords.length,
+    liveTrailPackCatalogSnapshot.guidanceDiagnosticTrailPacks.length,
+    liveTrailPackCatalogSnapshot.searchMeta?.candidateCount,
+    liveTrailPackCatalogSnapshot.searchMeta?.ecsRequestId,
+    liveTrailPackCatalogSnapshot.searchMeta?.nearbyRouteRpcUsed,
+    liveTrailPackCatalogSnapshot.status,
+    liveTrailPackCatalogSnapshot.trailPacks.length,
+    visibleExploreWizardCandidates.length,
+  ]);
   const exploreGuidanceReadyBlockedReasons = useMemo(
     () =>
       Array.from(
@@ -6021,6 +6159,15 @@ function DiscoverScreenInner() {
                       </>
                     )}
                   </View>
+                  {routeCatalogPaginationProgress ? (
+                    <Text
+                      style={s.routeCatalogPaginationProgressText}
+                      accessibilityLabel={routeCatalogPaginationProgress.label}
+                      testID="explore-route-catalog-pagination-progress"
+                    >
+                      {routeCatalogPaginationProgress.label}
+                    </Text>
+                  ) : null}
                   {exploreWizardSaveNotice ? (
                     <Text style={s.exploreWizardNotice} numberOfLines={2}>{exploreWizardSaveNotice}</Text>
                   ) : null}
@@ -6516,6 +6663,8 @@ function DiscoverScreenInner() {
                       Math.min(current + EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT, visibleExploreWizardCandidates.length),
                     );
                   }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Show more loaded Explore routes"
                 >
                   <Ionicons name="chevron-down-outline" size={14} color={TACTICAL.amber} />
                   <Text style={s.hiddenGemPagerText}>SHOW MORE ROUTES</Text>
@@ -6564,11 +6713,12 @@ function DiscoverScreenInner() {
                 </View>
               ) : null}
 
-              {liveTrailPackCatalogSnapshot.searchMeta?.totalMatchedCountBounded ? (
+              {liveTrailPackCatalogSnapshot.searchMeta?.totalMatchedCountBounded &&
+              liveTrailPackCatalogSnapshot.searchMeta.hasMore ? (
                 <View style={s.inlineSectionNotice} testID="explore-guidance-ready-bounded-catalog-notice">
                   <Ionicons name="funnel-outline" size={13} color={TACTICAL.amber} />
                   <Text style={s.inlineSectionNoticeText}>
-                    PROVIDER EVALUATION WINDOW REACHED. ADDITIONAL MATCHES MAY EXIST; NARROW THE AREA OR FILTERS.
+                    MORE VERIFIED CATALOG ROUTES ARE AVAILABLE. LOAD THE NEXT PAGE TO CONTINUE.
                   </Text>
                 </View>
               ) : null}
@@ -7844,6 +7994,14 @@ const s = StyleSheet.create({
     lineHeight: 9,
     fontWeight: '900',
     letterSpacing: 0.7,
+  },
+  routeCatalogPaginationProgressText: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '800',
+    letterSpacing: 0.35,
+    marginTop: 4,
   },
   exploreWizardCountPlate: {
     minWidth: 68,

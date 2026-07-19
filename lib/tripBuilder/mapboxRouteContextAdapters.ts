@@ -22,6 +22,7 @@ import type {
   RouteContextProviderMetadata,
   RouteGeometryBounds,
 } from '../routeContext/routeContextTypes';
+import { classifyLiveSmartResupplyPoiCandidate } from './liveSmartResupplyPoiFilter';
 
 const DIRECTIONS_URL = 'https://api.mapbox.com/directions/v5/mapbox/driving';
 const MATRIX_URL = 'https://api.mapbox.com/directions-matrix/v1/mapbox/driving';
@@ -264,6 +265,23 @@ function placeFromRoadDestination(args: {
     label: args.destination.title,
   };
   if (!isValidCoordinate(coordinate)) return null;
+  const smartResupplyCategory = args.category === 'gas'
+    ? 'fuel'
+    : args.category === 'grocery'
+      ? 'food_supplies'
+      : null;
+  const smartResupplyClassification = smartResupplyCategory
+    ? classifyLiveSmartResupplyPoiCandidate({
+        suggestion: args.suggestion,
+        destination: args.destination,
+      })
+    : null;
+  if (
+    smartResupplyCategory &&
+    !smartResupplyClassification?.categoryCoverage.includes(smartResupplyCategory)
+  ) {
+    return null;
+  }
   return {
     id: `mapbox-${String(args.destination.id || args.suggestion.id)}`,
     providerPlaceId: args.destination.mapboxId ?? args.suggestion.mapboxId ?? args.destination.id ?? args.suggestion.id,
@@ -281,6 +299,12 @@ function placeFromRoadDestination(args: {
       ...(args.metadata ?? {}),
       source: 'mapbox_search',
       sourceType: args.destination.sourceType,
+      ...(smartResupplyClassification
+        ? {
+            smartResupplyCategoryCoverage: smartResupplyClassification.categoryCoverage,
+            smartResupplyCategoryUsefulness: smartResupplyClassification.usefulness,
+          }
+        : {}),
     }),
   };
 }
