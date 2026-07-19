@@ -12,6 +12,7 @@ import {
   type TripBuilderRouteHandoff,
 } from './tripBuilderSuggestedRouteHandoff';
 import type { TripBuilderRouteInput } from './tripBuilderTypes';
+import { normalizeSmartResupplyCoordinate } from './smartResupplyEvaluationInput';
 
 const TRIP_BUILDER_ROUTE_HANDOFF_KEY = 'ecs_trip_builder_route_handoff';
 const handoffPersistence = createPersistedKeyValueCache('ecs_trip_builder_route_handoff');
@@ -38,6 +39,8 @@ function normalizeHandoff(value: unknown): TripBuilderRouteHandoff | null {
     : new Date(0).toISOString();
   const metadataLifecycle = readJourneyLinkageFromMetadata(parsed.route.routeMetadata);
   const tripPlanId = canonicalJourneyEntityId('trip_plan', sourceId);
+  const userLocation = normalizeSmartResupplyCoordinate(parsed.userLocation) ??
+    normalizeSmartResupplyCoordinate(parsed.draftItinerary?.userStart);
   const lifecycle = mergeJourneyLinkage(parsed.lifecycle ?? metadataLifecycle, {
     phase: 'planned',
     identity: { tripPlanId },
@@ -51,7 +54,8 @@ function normalizeHandoff(value: unknown): TripBuilderRouteHandoff | null {
     draftItinerary: parsed.draftItinerary ?? null,
     lifecycle,
     createdAt,
-    userLocationState: parsed.userLocationState ?? 'unknown',
+    userLocationState: parsed.userLocationState ?? (userLocation ? 'live' : 'unknown'),
+    userLocation,
   };
 }
 

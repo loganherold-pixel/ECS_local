@@ -24,6 +24,7 @@ export * from './tripBuilderGuidanceItinerary';
 export * from './tripBuilderPlanOutputSpine';
 export * from './tripBuilderNavigationOutput';
 export * from './smartResupplyPlanner';
+export * from './smartResupplyEvaluationInput';
 export * from './routeContextTripBuilderAdapter';
 export * from './mapboxRouteContextAdapters';
 export * from './approachResupplyPlanner';

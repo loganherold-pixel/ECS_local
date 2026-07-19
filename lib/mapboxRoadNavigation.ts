@@ -1,4 +1,5 @@
 import { computeBounds } from './mapConfig';
+import { MAPBOX_ROAD_NAVIGATION_DIRECTIONS_PROFILE } from './mapboxRoadNavigationPolicy';
 import {
   buildSyntheticEcsGuidanceRouteFromGeometry,
   normalizeMapboxDirectionsRouteToEcsGuidanceRoute,
@@ -171,7 +172,7 @@ export interface RoadNavRoute {
 const SEARCHBOX_URL = 'https://api.mapbox.com/search/searchbox/v1/suggest';
 const SEARCHBOX_RETRIEVE_URL = 'https://api.mapbox.com/search/searchbox/v1/retrieve';
 const FORWARD_GEOCODE_URL = 'https://api.mapbox.com/geocoding/v5/mapbox.places';
-const DIRECTIONS_PROFILE = 'driving-traffic';
+export const DIRECTIONS_PROFILE = MAPBOX_ROAD_NAVIGATION_DIRECTIONS_PROFILE;
 const DIRECTIONS_URL = `https://api.mapbox.com/directions/v5/mapbox/${DIRECTIONS_PROFILE}`;
 export const ROAD_NAV_MAX_INTERMEDIATE_WAYPOINTS = 23;
 export const ROAD_NAV_TOO_MANY_WAYPOINTS_SAFE_CODE = 'ROAD_ROUTE_TOO_MANY_WAYPOINTS';

@@ -387,11 +387,19 @@ function lineCoordinates(route) {
   const firstHandoffStore = require(handoffStorePath);
   firstHandoffStore.saveTripBuilderRouteHandoff(shortReady.canonicalRoute, {
     createdAt: '2026-07-18T12:03:00.000Z',
+    deferItineraryBuild: true,
+    userLocation: { latitude: 37.81, longitude: -110.31, accuracyMeters: 15 },
   });
   delete require.cache[require.resolve(handoffStorePath)];
   const shortRestartedHandoffStore = require(handoffStorePath);
   const hydratedShortHandoff = await shortRestartedHandoffStore.loadTripBuilderRouteHandoffAsync();
   assert.strictEqual(hydratedShortHandoff.route.id, shortReady.canonicalRoute.id);
+  assert.strictEqual(hydratedShortHandoff.draftItinerary, null);
+  assert.deepStrictEqual(
+    hydratedShortHandoff.userLocation,
+    { latitude: 37.81, longitude: -110.31, accuracyMeters: 15 },
+    'A deferred Explorer origin must survive handoff-store hydration without requiring a new Trip Builder GPS fix.',
+  );
   const restoredShortHandoff = restoreTripBuilderRoutePreparation(
     hydratedShortHandoff.route,
     10,

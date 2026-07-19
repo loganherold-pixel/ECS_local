@@ -120,6 +120,7 @@ const summaryOnlyHandoff = buildTripBuilderSuggestedRouteHandoff({
   },
 }, {
   deferItineraryBuild: true,
+  userLocation: { latitude: 37.8, longitude: -110.3, accuracyMeters: 18 },
   createdAt: '2026-07-16T12:00:00.000Z',
 });
 
@@ -129,6 +130,11 @@ assert.strictEqual(
   'Explore summary handoff must not prebuild an itinerary or detailed geometry.',
 );
 assert.strictEqual(summaryOnlyHandoff.route.itinerary, undefined);
+assert.deepStrictEqual(
+  summaryOnlyHandoff.userLocation,
+  { latitude: 37.8, longitude: -110.3, accuracyMeters: 18 },
+  'A deferred summary handoff must preserve the Explorer GPS origin without prebuilding detail geometry.',
+);
 assert.strictEqual(
   summaryOnlyHandoff.route.routeMetadata.tripBuilderDraftItineraryId,
   null,

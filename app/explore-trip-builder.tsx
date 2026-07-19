@@ -74,6 +74,10 @@ import {
   getTripConfidenceSummary,
   isUsableRouteContext,
   prioritizeApproachSearchResults,
+  prepareSmartResupplyEvaluationInput,
+  resolveSmartResupplyEvaluationOrigin,
+  SMART_RESUPPLY_PROVIDER_POLICY,
+  smartResupplySelectionDisabledReason,
   loadTripBuilderRouteHandoffAsync,
   saveTripBuilderRouteHandoff,
   loadTripBuilderPlanState,
@@ -503,20 +507,18 @@ const BAILOUT_PLAN_OPTIONS: { value: BailoutPlanPreference; label: string }[] = 
 ];
 const TRIP_BUILDER_PICKER_MAP_HEIGHT = 300;
 const TRIP_BUILDER_PICKER_ROUTE_PREVIEW_MAX_POINTS = 96;
-const SMART_RESUPPLY_FUEL_QUERIES = ['gas station', 'fuel station', 'truck stop'] as const;
-const SMART_RESUPPLY_SUPPLY_QUERIES = ['grocery store', 'supermarket', 'convenience store', 'general store'] as const;
-const SMART_RESUPPLY_OPTION_LIMIT = 3;
+const SMART_RESUPPLY_OPTION_LIMIT = SMART_RESUPPLY_PROVIDER_POLICY.optionLimit;
 const SMART_RESUPPLY_OPTION_LIST_HEIGHT = 56;
 const TRIP_SETUP_BUILD_BUTTON_CLEARANCE = 108;
 const TRIP_SETUP_SAVED_PIN_SCROLL_CLEARANCE = 84;
-const SMART_RESUPPLY_SEARCH_LIMIT = 10;
-const SMART_RESUPPLY_SEARCH_RADIUS_MILES = 10;
-const SMART_RESUPPLY_SEARCH_MAX_ANCHORS = 12;
-const SMART_RESUPPLY_LOOKUP_TIMEOUT_MS = 20000;
-const SMART_RESUPPLY_RETRIEVE_TIMEOUT_MS = 2200;
-const SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET = 48;
-const SMART_RESUPPLY_RETRIEVE_REQUEST_BUDGET = 32;
-const SMART_RESUPPLY_ACCESS_VALIDATION_CONCURRENCY = 4;
+const SMART_RESUPPLY_SEARCH_LIMIT = SMART_RESUPPLY_PROVIDER_POLICY.searchBoxLimit;
+const SMART_RESUPPLY_SEARCH_RADIUS_MILES = SMART_RESUPPLY_PROVIDER_POLICY.searchRadiusMiles;
+const SMART_RESUPPLY_SEARCH_MAX_ANCHORS = SMART_RESUPPLY_PROVIDER_POLICY.maxApproachWindows;
+const SMART_RESUPPLY_LOOKUP_TIMEOUT_MS = SMART_RESUPPLY_PROVIDER_POLICY.lookupTimeoutMs;
+const SMART_RESUPPLY_RETRIEVE_TIMEOUT_MS = SMART_RESUPPLY_PROVIDER_POLICY.retrieveTimeoutMs;
+const SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET = SMART_RESUPPLY_PROVIDER_POLICY.suggestRequestBudget;
+const SMART_RESUPPLY_RETRIEVE_REQUEST_BUDGET = SMART_RESUPPLY_PROVIDER_POLICY.retrieveRequestBudget;
+const SMART_RESUPPLY_ACCESS_VALIDATION_CONCURRENCY = SMART_RESUPPLY_PROVIDER_POLICY.accessValidationConcurrency;
 const SMART_RESUPPLY_LOOKUP_TIMEOUT_MESSAGE =
   'Live pre-trail POI lookup is taking too long; itinerary continuity is preserved with manual verification.';
 const IDLE_SMART_RESUPPLY_REQUEST: SmartResupplyRequestState = Object.freeze({ status: 'idle', error: null });
@@ -3311,7 +3313,7 @@ function smartResupplyAnchorSearchOrder(
 type SmartResupplyLookupParams = {
   accessToken: string;
   sessionToken: string;
-  queries: readonly string[];
+  routeId: string;
   category: SmartResupplyPoi['category'];
   routeStart: TripMapCoordinate;
   approachRoute: TripMapCoordinate[];
@@ -3412,7 +3414,30 @@ async function validateSmartResupplyRoutedAccess(
 
 const smartResupplyLookupInFlight = new Map<string, Promise<SmartResupplyPoi[]>>();
 
-async function loadSmartResupplyOptions(params: SmartResupplyLookupParams): Promise<SmartResupplyPoi[]> {
+async function loadSmartResupplyOptions(rawParams: SmartResupplyLookupParams): Promise<SmartResupplyPoi[]> {
+  const preparedInput = prepareSmartResupplyEvaluationInput({
+    routeId: rawParams.routeId,
+    category: rawParams.category,
+    currentGpsOrigin: rawParams.origin,
+    preparedTrailheadStart: rawParams.routeStart,
+    approachGeometry: rawParams.approachRoute,
+  });
+  if (preparedInput.status !== 'ready') {
+    throw new Error(
+      preparedInput.status === 'missing_origin'
+        ? 'Current GPS is unavailable, so ECS cannot prepare the origin-to-entry Smart Resupply search.'
+        : preparedInput.status === 'missing_prepared_entry'
+          ? 'The prepared trailhead start is unavailable for Smart Resupply.'
+          : 'The origin-to-entry driving approach is not ready for Smart Resupply.',
+    );
+  }
+  const params = {
+    ...rawParams,
+    origin: preparedInput.origin!,
+    routeStart: preparedInput.trailheadStart!,
+    approachRoute: preparedInput.approachGeometry,
+    queries: preparedInput.queryVariants,
+  };
   const lookupStartedAt = Date.now();
   const searchAnchors = buildApproachResupplySearchAnchors({
     origin: params.origin ?? null,
@@ -4912,6 +4937,15 @@ export default function ExploreTripBuilderScreen() {
           acceptedHandoffRoute?.id ? String(acceptedHandoffRoute.id) : null
         );
         setSelectedRouteId(selectedRouteIdForState);
+        const handoffOrigin = acceptedHandoffRoute &&
+          selectedRouteIdForState === String(acceptedHandoffRoute.id)
+          ? resolveSmartResupplyEvaluationOrigin({
+              handoffOrigin: handoff?.userLocation ?? handoffDraftItinerary?.userStart ?? null,
+            })
+          : null;
+        setCapturedTripOrigin(handoffOrigin && selectedRouteIdForState
+          ? { routeId: selectedRouteIdForState, coordinate: handoffOrigin }
+          : null);
         if (
           lastTripBuilderPlanState.visible &&
           lastTripBuilderPlanState.plan &&
@@ -4967,9 +5001,16 @@ export default function ExploreTripBuilderScreen() {
       (selectedRoute as unknown as { itinerary?: { userStart?: unknown } | null } | null)?.itinerary?.userStart,
     )
   ), [selectedRoute]);
-  const selectedTripOrigin = itineraryTripOrigin ??
-    (capturedTripOrigin?.routeId === selectedRouteId ? capturedTripOrigin.coordinate : null) ??
-    liveTripBuilderUserLocation;
+  const selectedTripOrigin = useMemo(
+    () => resolveSmartResupplyEvaluationOrigin({
+      itineraryOrigin: itineraryTripOrigin,
+      handoffOrigin: capturedTripOrigin?.routeId === selectedRouteId
+        ? capturedTripOrigin.coordinate
+        : null,
+      currentGpsOrigin: liveTripBuilderUserLocation,
+    }),
+    [capturedTripOrigin, itineraryTripOrigin, liveTripBuilderUserLocation, selectedRouteId],
+  );
   useEffect(() => {
     if (!selectedRouteId) {
       setCapturedTripOrigin(null);
@@ -5247,6 +5288,15 @@ export default function ExploreTripBuilderScreen() {
       : null,
     [selectedTrailheadResupplyAnchorLatitude, selectedTrailheadResupplyAnchorLongitude],
   );
+  const smartResupplyEndpointInput = useMemo(
+    () => prepareSmartResupplyEvaluationInput({
+      routeId: selectedRouteId,
+      category: 'fuel',
+      itineraryOrigin: selectedTripOrigin,
+      preparedTrailheadStart: selectedTrailheadResupplyAnchorCoordinate,
+    }),
+    [selectedRouteId, selectedTripOrigin, selectedTrailheadResupplyAnchorCoordinate],
+  );
   const selectedRouteRemoteEntry = useMemo(
     () => remoteEntryForResupply(selectedTrailheadResupplyAnchorCoordinate),
     [selectedTrailheadResupplyAnchorCoordinate],
@@ -5263,13 +5313,9 @@ export default function ExploreTripBuilderScreen() {
     [selectedSmartFuelLatitude, selectedSmartFuelLongitude, selectedTrailheadResupplyAnchorCoordinate],
   );
   const liveApproachRouteFingerprint = useMemo(() => {
-    if (!tripSetupStarted || !selectedTripOrigin || !selectedRouteStartCoordinate) return null;
-    return [
-      selectedRouteId ?? 'selected-route',
-      smartResupplyCoordinateSignature(selectedTripOrigin),
-      smartResupplyCoordinateSignature(selectedRouteStartCoordinate),
-    ].join(':');
-  }, [selectedRouteId, selectedRouteStartCoordinate, selectedTripOrigin, tripSetupStarted]);
+    if (!tripSetupStarted) return null;
+    return smartResupplyEndpointInput.endpointFingerprint;
+  }, [smartResupplyEndpointInput.endpointFingerprint, tripSetupStarted]);
   const liveApproachRouteMatchesRequest = liveApproachRouteState.fingerprint === liveApproachRouteFingerprint;
   const liveApproachRouteStatus = liveApproachRouteFingerprint == null
     ? 'idle'
@@ -5288,7 +5334,6 @@ export default function ExploreTripBuilderScreen() {
   const liveApproachRouteDurationS = liveApproachRouteMatchesRequest && liveApproachRouteState.status === 'ready'
     ? liveApproachRouteState.durationS ?? null
     : null;
-
   const selectedRouteEndCoordinate = useMemo(() => {
     if (!selectedRoute) return null;
     if (
@@ -5897,6 +5942,22 @@ export default function ExploreTripBuilderScreen() {
   }, [routeContextSnapshot, selectedPreTrailSupplyAnchorCoordinate, selectedTrailheadResupplyAnchorCoordinate]);
   const bailoutPlanReady = bailoutPlanPreference === 'no' || !!selectedBailoutPoint || bailoutPlanPins.length > 0;
   const campPlanReady = campPlanPreference === 'skip' || campPlanPins.length > 0;
+  const smartResupplyBuildDisabledReason = smartResupplySelectionDisabledReason({
+    preference: smartResupplyPreference,
+    pending: smartResupplyPending,
+    missingCategories: selectedSmartResupplyStopPlan.missingCategories,
+  });
+  const tripBuilderBuildDisabledReason = !selectedRoute
+    ? 'Select and prepare a route before building a trip plan.'
+    : generating
+      ? 'Trip Builder is generating the plan.'
+      : smartResupplyBuildDisabledReason
+        ? smartResupplyBuildDisabledReason
+        : !bailoutPlanReady
+          ? 'Select a bailout reference or choose Skip for Bailout Plan.'
+          : !campPlanReady
+            ? 'Select a camp reference or choose Skip for Camp Plan.'
+            : null;
   const tripSetupHasSavedReferencePins = bailoutPlanPins.length > 0 || campPlanPins.length > 0;
   const tripSetupContentStyle = useMemo(
     () => [
@@ -6098,7 +6159,6 @@ export default function ExploreTripBuilderScreen() {
       setSmartResupplyFuelRequest({ status: 'deferred', error: null });
       return;
     }
-
     const searchSignature = smartResupplySearchSignature(
       selectedTrailheadResupplyAnchorCoordinate,
       'fuel',
@@ -6179,7 +6239,7 @@ export default function ExploreTripBuilderScreen() {
           const options = await loadSmartResupplyOptionsSingleFlight(searchSignature, {
             accessToken: token,
             sessionToken: roadSearchSessionTokenRef.current,
-            queries: SMART_RESUPPLY_FUEL_QUERIES,
+            routeId: selectedRouteId ?? 'selected-route',
             category: 'fuel',
             routeStart: selectedTrailheadResupplyAnchorCoordinate,
             approachRoute: liveApproachRoutePoints,
@@ -6263,6 +6323,7 @@ export default function ExploreTripBuilderScreen() {
     liveApproachRoutePoints,
     liveApproachRouteStatus,
     selectedTripOrigin,
+    selectedRouteId,
     selectedRouteRemoteEntry,
     selectedTrailheadResupplyAnchorCoordinate,
     smartResupplyPreference,
@@ -6406,7 +6467,7 @@ export default function ExploreTripBuilderScreen() {
           const options = await loadSmartResupplyOptionsSingleFlight(searchSignature, {
             accessToken: token,
             sessionToken: roadSearchSessionTokenRef.current,
-            queries: SMART_RESUPPLY_SUPPLY_QUERIES,
+            routeId: selectedRouteId ?? 'selected-route',
             category: 'food_supplies',
             routeStart: selectedTrailheadResupplyAnchorCoordinate ?? selectedPreTrailSupplyAnchorCoordinate,
             approachRoute: liveApproachRoutePoints,
@@ -6492,6 +6553,7 @@ export default function ExploreTripBuilderScreen() {
     liveApproachRouteStatus,
     selectedTripOrigin,
     selectedPreTrailSupplyAnchorCoordinate,
+    selectedRouteId,
     selectedRouteRemoteEntry,
     selectedTrailheadResupplyAnchorCoordinate,
     selectedSmartFuelCoversSupplies,
@@ -8576,6 +8638,8 @@ export default function ExploreTripBuilderScreen() {
                           onPress={handleGenerate}
                           accessibilityRole="button"
                           accessibilityLabel="Build Trip Plan"
+                          accessibilityHint={tripBuilderBuildDisabledReason ?? 'Build the trip plan from the selected route and planning choices.'}
+                          accessibilityState={{ disabled: tripBuilderBuildDisabledReason != null }}
                           testID="trip-builder-generate"
                         >
                           {generating ? <ActivityIndicator size="small" color="#081014" /> : null}

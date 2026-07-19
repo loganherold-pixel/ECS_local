@@ -1,7 +1,26 @@
 const fs = require('fs');
 const path = require('path');
+const ts = require('typescript');
 
 const root = path.resolve(__dirname, '..');
+
+require.extensions['.ts'] = function compileTs(module, filename) {
+  const source = fs.readFileSync(filename, 'utf8');
+  const transpiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: filename,
+  });
+  module._compile(transpiled.outputText, filename);
+};
+
+const {
+  SMART_RESUPPLY_PROVIDER_POLICY,
+  SMART_RESUPPLY_QUERY_VARIANTS,
+} = require(path.join(root, 'lib', 'tripBuilder', 'smartResupplyEvaluationInput.ts'));
 
 function read(file) {
   return fs.readFileSync(path.join(root, file), 'utf8').replace(/\r\n/g, '\n');
@@ -70,8 +89,15 @@ assertIncludes(screen, 'Fuel only', 'Trip Builder should offer fuel-only smart r
 assertIncludes(screen, 'Fuel + groceries/supplies', 'Trip Builder should offer fuel and supplies smart resupply.');
 assertIncludes(screen, 'Skip smart resupply planning.', 'Trip Builder should offer no smart resupply.');
 assertIncludes(screen, 'testID={`trip-builder-resupply-${option.value}`}', 'Trip Builder should expose smart resupply choices.');
-assertIncludes(screen, 'SMART_RESUPPLY_FUEL_QUERIES', 'Trip Builder should search relevant fuel categories along the full driving approach.');
-assertIncludes(screen, 'SMART_RESUPPLY_SUPPLY_QUERIES', 'Trip Builder should search grocery, supermarket, convenience, and general-store categories.');
+assert(
+  JSON.stringify(SMART_RESUPPLY_QUERY_VARIANTS.fuel) === JSON.stringify(['gas station', 'fuel station', 'truck stop']),
+  'Trip Builder should search relevant fuel categories along the full driving approach.',
+);
+assert(
+  JSON.stringify(SMART_RESUPPLY_QUERY_VARIANTS.food_supplies) ===
+    JSON.stringify(['grocery store', 'supermarket', 'convenience store', 'general store']),
+  'Trip Builder should search grocery, supermarket, convenience, and general-store categories.',
+);
 assertIncludes(screen, 'loadSmartResupplyOptions', 'Trip Builder should load approach-aware smart resupply options from map search.');
 assertIncludes(screen, 'resolveRoadDestination', 'Trip Builder should resolve smart resupply suggestions before adding them to a plan.');
 assertIncludes(screen, 'hasDieselSupport', 'Trip Builder should mark fuel options with diesel only when place text supports it.');
@@ -285,7 +311,10 @@ assertIncludes(screen, 'buildPreparedTripRoutePreview(routeForSetup)', 'Open Tri
   );
 }
 assertIncludes(screen, 'SMART_RESUPPLY_SEARCH_LIMIT', 'Trip Builder should request enough nearby resupply candidates before ranking the closest five.');
-assertIncludes(screen, 'const SMART_RESUPPLY_SEARCH_RADIUS_MILES = 10', 'Trip Builder should use overlapping fixed-radius provider windows along the driving approach.');
+assert(
+  SMART_RESUPPLY_PROVIDER_POLICY.searchRadiusMiles === 10,
+  'Trip Builder should use overlapping fixed-radius provider windows along the driving approach.',
+);
 assertIncludes(screen, 'APPROACH_RESUPPLY_POLICY.preferredRouteBufferMiles', 'Trip Builder should use the centralized practical approach-route buffer.');
 assertIncludes(screen, 'APPROACH_RESUPPLY_POLICY.maximumRouteDetourMiles', 'Trip Builder should use the centralized maximum route detour policy.');
 assertIncludes(screen, 'smartResupplyOptionsFromRouteContext(', 'RouteContext fuel and grocery candidates should flow through the shared Smart Resupply adapter.');
@@ -295,9 +324,15 @@ assertIncludes(screen, 'liveApproachRoutePoints', 'RouteContext fuel candidates 
 assertIncludes(screen, 'selectedPreTrailSupplyAnchorCoordinate', 'RouteContext grocery candidates should be measured with the selected refuel fallback anchor.');
 assertIncludes(screen, 'selectedRouteRemoteEntry', 'RouteContext resupply candidates should use the typed selected-route remote-entry boundary.');
 assertIncludes(screen, 'buildApproachResupplySearchAnchors', 'Trip Builder should sample approach-route search anchors for Smart Resupply.');
-assertIncludes(screen, 'const SMART_RESUPPLY_SEARCH_MAX_ANCHORS = 12', 'Trip Builder Smart Resupply should allow enough bounded samples for complete typical approach coverage.');
+assert(
+  SMART_RESUPPLY_PROVIDER_POLICY.maxApproachWindows === 12,
+  'Trip Builder Smart Resupply should allow enough bounded samples for complete typical approach coverage.',
+);
 assertIncludes(screen, 'maxAnchors: SMART_RESUPPLY_SEARCH_MAX_ANCHORS', 'Trip Builder Smart Resupply should use the bounded approach-anchor budget when searching live POIs.');
-assertIncludes(screen, 'SMART_RESUPPLY_LOOKUP_TIMEOUT_MS = 20000', 'Trip Builder Smart Resupply should bound the expanded coverage and access-validation workflow.');
+assert(
+  SMART_RESUPPLY_PROVIDER_POLICY.lookupTimeoutMs === 20_000,
+  'Trip Builder Smart Resupply should bound the expanded coverage and access-validation workflow.',
+);
 assertIncludes(screen, 'SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET', 'Trip Builder Smart Resupply should cap Search Box suggest cycles during setup.');
 assertIncludes(screen, 'SMART_RESUPPLY_RETRIEVE_REQUEST_BUDGET', 'Trip Builder Smart Resupply should cap Search Box retrieve cycles during setup.');
 assertIncludes(screen, 'rankApproachResupplyOptions', 'Trip Builder should rank Smart Resupply options with approach-route context.');

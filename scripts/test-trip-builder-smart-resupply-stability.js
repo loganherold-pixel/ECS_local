@@ -1,8 +1,26 @@
 const fs = require('fs');
 const path = require('path');
+const ts = require('typescript');
 
 const root = path.resolve(__dirname, '..');
 const screen = fs.readFileSync(path.join(root, 'app', 'explore-trip-builder.tsx'), 'utf8');
+
+require.extensions['.ts'] = function compileTs(module, filename) {
+  const source = fs.readFileSync(filename, 'utf8');
+  const transpiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: filename,
+  });
+  module._compile(transpiled.outputText, filename);
+};
+
+const {
+  SMART_RESUPPLY_PROVIDER_POLICY,
+} = require(path.join(root, 'lib', 'tripBuilder', 'smartResupplyEvaluationInput.ts'));
 
 function assert(condition, message) {
   if (!condition) {
@@ -286,19 +304,16 @@ assertIncludes(
   'rankApproachResupplyOptions',
   'Smart resupply refreshes should run all candidates through the shared approach-aware ranker',
 );
-assertIncludes(
-  screen,
-  'const SMART_RESUPPLY_LOOKUP_TIMEOUT_MS = 20000;',
+assert(
+  SMART_RESUPPLY_PROVIDER_POLICY.lookupTimeoutMs === 20_000,
   'Smart resupply lookup should have a bounded wall-clock budget so setup does not spin for many seconds.',
 );
-assertIncludes(
-  screen,
-  'const SMART_RESUPPLY_SUGGEST_REQUEST_BUDGET = 48;',
+assert(
+  SMART_RESUPPLY_PROVIDER_POLICY.suggestRequestBudget === 48,
   'Smart resupply lookup should cover every bounded corridor window with each configured category variant.',
 );
-assertIncludes(
-  screen,
-  'const SMART_RESUPPLY_RETRIEVE_REQUEST_BUDGET = 32;',
+assert(
+  SMART_RESUPPLY_PROVIDER_POLICY.retrieveRequestBudget === 32,
   'Smart resupply lookup should leave enough detail capacity for the provider-supported final-approach result windows.',
 );
 assertIncludes(

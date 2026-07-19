@@ -16,7 +16,7 @@ import {
   type ECSJourneyLinkage,
 } from '../lifecycle/routeTripExpeditionLifecycle';
 
-export const TRIP_BUILDER_HANDOFF_SCHEMA_VERSION = 2;
+export const TRIP_BUILDER_HANDOFF_SCHEMA_VERSION = 3;
 
 export type TripBuilderHandoffUserLocationState = 'live' | 'pending' | 'unknown';
 
@@ -29,6 +29,7 @@ export type TripBuilderRouteHandoff = {
   lifecycle: ECSJourneyLinkage;
   createdAt: string;
   userLocationState: TripBuilderHandoffUserLocationState;
+  userLocation: GeoPoint | null;
 };
 
 export type BuildTripBuilderSuggestedRouteHandoffOptions = {
@@ -138,5 +139,6 @@ export function buildTripBuilderSuggestedRouteHandoff(
     lifecycle,
     createdAt,
     userLocationState: locationState,
+    userLocation: options.userLocation ?? null,
   };
 }
