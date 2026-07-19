@@ -20,6 +20,10 @@ import {
 } from '../routeDataContracts';
 import { createPersistedKeyValueCache } from '../keyValuePersistence';
 import {
+  EXPLORE_ANONYMOUS_ACCESS_PARTITION,
+  normalizeExploreAccessContextPartition,
+} from '../auth/exploreAccessContextPartition';
+import {
   beginECSAsyncSurfaceRequest,
   cancelECSAsyncSurfaceRequest,
   createECSAsyncRequestFingerprint,
@@ -34,6 +38,7 @@ import {
   EXPLORE_CATALOG_SUMMARY_CACHE_KEY,
   EXPLORE_CATALOG_SUMMARY_CACHE_STALE_MS,
   EXPLORE_CATALOG_SUMMARY_CACHE_TTL_MS,
+  exploreCatalogAccessCacheKey,
   exploreCatalogRegionCacheKey,
 } from './routeCatalogSummaryCache';
 import {
@@ -51,10 +56,10 @@ import {
   resolveECSRouteCatalogResponseRequestCorrelation,
 } from './routeCatalogRequestCorrelation';
 import {
-  ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE,
-  ECS_ROUTE_SEARCH_RESULT_LIMIT,
-  capUniqueRankedRoutes,
-  normalizeRouteSearchResultLimit,
+  ECS_ROUTE_SEARCH_DEFAULT_PAGE_SIZE,
+  ECS_ROUTE_SEARCH_MAX_PAGE_SIZE,
+  dedupeUniqueRankedRoutes,
+  normalizeRouteSearchPageSize,
 } from './routeSearchResultPolicy';
 import {
   trailMatchesExploreRefinement,
@@ -124,8 +129,10 @@ export type LiveTrailPackCatalogSearchCriteria = {
   expectedKnownRoutes?: string[] | null;
   includePreviewGeometry?: boolean | null;
   includeCoverageDiagnostics?: boolean | null;
-  /** Complete non-location UI search identity (query/category/refinement/source/access context). */
+  /** Complete non-location UI search identity (query/category/refinement/source). */
   searchFingerprint?: string | null;
+  /** Privacy-safe local-only auth/cache partition. Never sent to the backend. */
+  accessContextPartition?: string | null;
   exploreRefinement?: 'remoteness' | 'dayTrip' | 'weekendTrip' | 'expedition' | string | null;
 };
 
@@ -145,6 +152,8 @@ export type LiveTrailPackCatalogSnapshot = {
   /** In-memory-only semantic request key used to constrain exact-request retries. */
   ecsRequestKey: string | null;
   source: 'route_catalog' | 'trail_packs_fallback' | 'unavailable';
+  /** Privacy-safe local partition that owns every route and diagnostic in this snapshot. */
+  accessContextPartition: string;
   refreshKey: string | null;
   preservedFromEmptyRefresh: boolean;
   preservedReason: string | null;
@@ -161,7 +170,7 @@ export type RouteCatalogPaginationProgress = {
 };
 
 export const ROUTE_CATALOG_PAGINATION_CONTRACT_VERSION =
-  'route_catalog_total_search_v1';
+  'route_catalog_ranked_page_v1';
 
 export function buildRouteCatalogPaginationProgress(args: {
   loadedCatalogCount: number;
@@ -185,9 +194,13 @@ export function buildRouteCatalogPaginationProgress(args: {
   );
   const matchedCatalogCountIsLowerBound = args.totalMatchedCountBounded === true;
   const hasAdditionalMatches = matchedCatalogCount > loadedCatalogCount;
-  const loadedLabel = hasAdditionalMatches
-    ? ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE
-    : `${loadedCatalogCount} CATALOG ROUTES SHOWN`;
+  const matchedSuffix = matchedCatalogCountIsLowerBound ? '+' : '';
+  const catalogLabel = hasAdditionalMatches
+    ? `${loadedCatalogCount} OF ${matchedCatalogCount}${matchedSuffix} CATALOG ROUTES LOADED`
+    : `${loadedCatalogCount} CATALOG ROUTES LOADED`;
+  const loadedLabel = nonCatalogCandidateCount > 0
+    ? `${catalogLabel} • ${nonCatalogCandidateCount} NON-CATALOG CANDIDATES IN THE CURRENT VIEW`
+    : catalogLabel;
 
   return {
     loadedCatalogCount,
@@ -228,29 +241,35 @@ const routeCatalogDetailCache = new Map<
   { trailPack: ECSTrailPack; routeId: string; sourceVersion: string; storedAtMs: number }
 >();
 const routeCatalogDetailGenerations = new Map<string, number>();
-const initialAsyncState = createECSAsyncSurfaceState<LiveTrailPackCatalogData>({
-  surfaceId: 'explore_guidance_ready_routes',
-  provider: 'route-catalog-search',
-});
-let snapshot: LiveTrailPackCatalogSnapshot = {
-  trailPacks: [],
-  guidanceDiagnosticTrailPacks: [],
-  guidanceDiagnosticRecords: [],
-  routeCatalogSummaries: [],
-  status: 'idle',
-  error: null,
-  lastLoadedAt: null,
-  lastRefreshAttemptAt: null,
-  coverageState: getRouteCatalogCoverageState([], { userHasCriteria: false }),
-  searchMeta: null,
-  ecsRequestId: null,
-  ecsRequestKey: null,
-  source: 'unavailable',
-  refreshKey: null,
-  preservedFromEmptyRefresh: false,
-  preservedReason: null,
-  asyncState: initialAsyncState,
-};
+function emptyLiveTrailPackCatalogSnapshot(
+  accessContextPartition: unknown,
+): LiveTrailPackCatalogSnapshot {
+  return {
+    trailPacks: [],
+    guidanceDiagnosticTrailPacks: [],
+    guidanceDiagnosticRecords: [],
+    routeCatalogSummaries: [],
+    status: 'idle',
+    error: null,
+    lastLoadedAt: null,
+    lastRefreshAttemptAt: null,
+    coverageState: getRouteCatalogCoverageState([], { userHasCriteria: false }),
+    searchMeta: null,
+    ecsRequestId: null,
+    ecsRequestKey: null,
+    source: 'unavailable',
+    accessContextPartition: normalizeExploreAccessContextPartition(accessContextPartition),
+    refreshKey: null,
+    preservedFromEmptyRefresh: false,
+    preservedReason: null,
+    asyncState: createECSAsyncSurfaceState<LiveTrailPackCatalogData>({
+      surfaceId: 'explore_guidance_ready_routes',
+      provider: 'route-catalog-search',
+    }),
+  };
+}
+
+let snapshot = emptyLiveTrailPackCatalogSnapshot(EXPLORE_ANONYMOUS_ACCESS_PARTITION);
 
 const TRAIL_PACK_SELECT = [
   'id',
@@ -277,9 +296,9 @@ const TRAIL_PACK_SELECT = [
   'updated_at',
 ].join(',');
 
-const ROUTE_CATALOG_DEFAULT_SEARCH_LIMIT = ECS_ROUTE_SEARCH_RESULT_LIMIT;
-const ROUTE_CATALOG_SUMMARY_PAGE_SIZE = ECS_ROUTE_SEARCH_RESULT_LIMIT;
-const ROUTE_CATALOG_STAGED_REFRESH_LIMIT = ECS_ROUTE_SEARCH_RESULT_LIMIT;
+const ROUTE_CATALOG_DEFAULT_SEARCH_LIMIT = ECS_ROUTE_SEARCH_MAX_PAGE_SIZE;
+const ROUTE_CATALOG_SUMMARY_PAGE_SIZE = ECS_ROUTE_SEARCH_DEFAULT_PAGE_SIZE;
+const ROUTE_CATALOG_STAGED_REFRESH_LIMIT = ECS_ROUTE_SEARCH_DEFAULT_PAGE_SIZE;
 const routeCatalogSummaryPersistentCache = createPersistedKeyValueCache(EXPLORE_CATALOG_SUMMARY_CACHE_KEY);
 
 class InvalidRouteCatalogSearchResponseError extends Error {
@@ -413,6 +432,20 @@ function catalogResultCount(data: LiveTrailPackCatalogData): number {
     + data.guidanceDiagnosticRecords.length;
 }
 
+function catalogUniqueRouteCount(data: LiveTrailPackCatalogData | null | undefined): number {
+  if (!data) return 0;
+  const ids = new Set<string>();
+  data.trailPacks.forEach((trailPack) => {
+    const id = String(trailPack.id ?? '').trim();
+    if (id) ids.add(id);
+  });
+  data.routeCatalogSummaries.forEach((summary) => {
+    const id = String(summary.routeId ?? '').trim();
+    if (id) ids.add(id);
+  });
+  return ids.size;
+}
+
 function hasUsableCatalogData(data: LiveTrailPackCatalogData | null | undefined): data is LiveTrailPackCatalogData {
   return Boolean(data && catalogResultCount(data) > 0);
 }
@@ -432,24 +465,24 @@ function mergeCatalogItemsById<T>(
   pageItems.forEach((item) => {
     if (!baseIds.has(getId(item).trim())) merged.push(item);
   });
-  return capUniqueRankedRoutes(merged, getId);
+  return dedupeUniqueRankedRoutes(merged, getId);
 }
 
-function capLiveTrailPackCatalogData(
+function normalizeLiveTrailPackCatalogData(
   data: LiveTrailPackCatalogData | null | undefined,
 ): LiveTrailPackCatalogData | null {
   if (!data) return null;
   return {
-    trailPacks: capUniqueRankedRoutes(data.trailPacks, (trailPack) => trailPack.id),
-    guidanceDiagnosticTrailPacks: capUniqueRankedRoutes(
+    trailPacks: dedupeUniqueRankedRoutes(data.trailPacks, (trailPack) => trailPack.id),
+    guidanceDiagnosticTrailPacks: dedupeUniqueRankedRoutes(
       data.guidanceDiagnosticTrailPacks,
       (trailPack) => trailPack.id,
     ),
-    guidanceDiagnosticRecords: capUniqueRankedRoutes(
+    guidanceDiagnosticRecords: dedupeUniqueRankedRoutes(
       data.guidanceDiagnosticRecords,
       (diagnostic) => diagnostic.routeId,
     ),
-    routeCatalogSummaries: capUniqueRankedRoutes(
+    routeCatalogSummaries: dedupeUniqueRankedRoutes(
       data.routeCatalogSummaries,
       (summary) => summary.routeId,
     ),
@@ -461,7 +494,7 @@ function mergeLiveTrailPackCatalogData(
   pageData: LiveTrailPackCatalogData | null | undefined,
 ): LiveTrailPackCatalogData | null {
   if (!baseData && !pageData) return null;
-  return capLiveTrailPackCatalogData({
+  return normalizeLiveTrailPackCatalogData({
     trailPacks: mergeCatalogItemsById(
       baseData?.trailPacks ?? [],
       pageData?.trailPacks ?? [],
@@ -550,11 +583,11 @@ function mergeRouteCatalogSearchMeta(
     nextCursor: page.nextCursor ?? null,
     totalMatchedCount: Math.max(base.totalMatchedCount, page.totalMatchedCount),
     totalMatchedCountBounded: page.totalMatchedCountBounded,
-    resultLimit: normalizeRouteSearchResultLimit(page.resultLimit ?? base.resultLimit),
+    resultLimit: normalizeRouteSearchPageSize(page.resultLimit ?? base.resultLimit),
     additionalMatchesAvailable:
-      base.additionalMatchesAvailable === true ||
       page.additionalMatchesAvailable === true ||
-      Math.max(base.totalMatchedCount, page.totalMatchedCount) > ECS_ROUTE_SEARCH_RESULT_LIMIT,
+      page.hasMore === true,
+    paginationWarning: page.paginationWarning ?? base.paginationWarning ?? null,
     clientInvalidRecordCount:
       (base.clientInvalidRecordCount ?? 0) + (page.clientInvalidRecordCount ?? 0),
     knownRouteDiagnostics: mergeKnownRouteDiagnostics(
@@ -588,6 +621,17 @@ function cloneLiveTrailPackCatalogSnapshot(
   };
 }
 
+export function scopeLiveTrailPackCatalogSnapshotToAccessContext(
+  value: LiveTrailPackCatalogSnapshot,
+  accessContextPartition: unknown,
+): LiveTrailPackCatalogSnapshot {
+  const expectedPartition = normalizeExploreAccessContextPartition(accessContextPartition);
+  if (value.accessContextPartition !== expectedPartition) {
+    return emptyLiveTrailPackCatalogSnapshot(expectedPartition);
+  }
+  return cloneLiveTrailPackCatalogSnapshot(value);
+}
+
 export function mergeLiveTrailPackCatalogPageSnapshots(
   baseSnapshot: LiveTrailPackCatalogSnapshot,
   pageSnapshot: LiveTrailPackCatalogSnapshot,
@@ -596,13 +640,22 @@ export function mergeLiveTrailPackCatalogPageSnapshots(
   const expectedFamily = routeCatalogRefreshFamilyKey(baseRefreshKey);
   const baseFamily = routeCatalogRefreshFamilyKey(baseSnapshot.refreshKey);
   const pageFamily = routeCatalogRefreshFamilyKey(pageSnapshot.refreshKey);
+  const expectedAccessContextPartition = normalizeExploreAccessContextPartition(
+    baseSnapshot.accessContextPartition,
+  );
   const pageIsTerminal =
     pageSnapshot.status === 'ready' ||
     pageSnapshot.status === 'empty' ||
     pageSnapshot.status === 'stale' ||
     pageSnapshot.status === 'degraded' ||
     pageSnapshot.status === 'error';
-  if (!expectedFamily || baseFamily !== expectedFamily || pageFamily !== expectedFamily || !pageIsTerminal) {
+  if (
+    !expectedFamily ||
+    baseFamily !== expectedFamily ||
+    pageFamily !== expectedFamily ||
+    pageSnapshot.accessContextPartition !== expectedAccessContextPartition ||
+    !pageIsTerminal
+  ) {
     return cloneLiveTrailPackCatalogSnapshot(baseSnapshot);
   }
 
@@ -632,7 +685,12 @@ export function mergeLiveTrailPackCatalogPageSnapshots(
     (baseHasPersistentIssue && baseSnapshot.status === 'degraded') || pageSnapshot.status === 'degraded';
   const hasStalePage =
     (baseHasPersistentIssue && baseSnapshot.status === 'stale') || pageSnapshot.status === 'stale';
-  const status: LiveTrailPackCatalogStatus = pageFailed && hasMergedData
+  const noPaginationProgress =
+    !pageFailed &&
+    (pageSnapshot.searchMeta?.page ?? 1) > 1 &&
+    pageSnapshot.searchMeta?.hasMore === true &&
+    catalogUniqueRouteCount(mergedData) <= catalogUniqueRouteCount(catalogDataFromSnapshot(baseSnapshot));
+  const mergedStatus: LiveTrailPackCatalogStatus = pageFailed && hasMergedData
     ? 'degraded'
     : hasDegradedPage
       ? 'degraded'
@@ -641,14 +699,41 @@ export function mergeLiveTrailPackCatalogPageSnapshots(
         : pageSnapshot.status === 'empty' && hasMergedData
           ? 'ready'
           : pageSnapshot.status;
-  const searchMeta = mergeRouteCatalogSearchMeta(baseSnapshot.searchMeta, pageSnapshot.searchMeta);
+  const status: LiveTrailPackCatalogStatus = noPaginationProgress && hasMergedData
+    ? 'degraded'
+    : mergedStatus;
+  const mergedSearchMeta = mergeRouteCatalogSearchMeta(baseSnapshot.searchMeta, pageSnapshot.searchMeta);
+  const searchMeta = noPaginationProgress && mergedSearchMeta
+    ? {
+        ...mergedSearchMeta,
+        hasMore: false,
+        nextPage: null,
+        nextCursor: null,
+        additionalMatchesAvailable: false,
+        paginationWarning: 'no_progress',
+      }
+    : mergedSearchMeta;
+  if (noPaginationProgress) {
+    logRouteCatalogVisibilityDiagnostic('pagination_no_progress', {
+      safeErrorCode: 'ROUTE_CATALOG_PAGINATION_NO_PROGRESS',
+      page: pageSnapshot.searchMeta?.page ?? null,
+      loadedCatalogCount: catalogUniqueRouteCount(mergedData),
+      totalMatchedCount: searchMeta?.totalMatchedCount ?? null,
+    }, {
+      fingerprint: `${baseRefreshKey}:pagination_no_progress`,
+    });
+  }
   const retainedBaseIssue = baseHasPersistentIssue;
-  const error = pageFailed || pageSnapshot.status === 'degraded' || pageSnapshot.status === 'stale'
+  const error = noPaginationProgress
+    ? 'Route catalog continuation returned no new unique routes. Continuation stopped to prevent a request loop.'
+    : pageFailed || pageSnapshot.status === 'degraded' || pageSnapshot.status === 'stale'
     ? pageSnapshot.error ?? (retainedBaseIssue ? baseSnapshot.error : null)
     : retainedBaseIssue
       ? baseSnapshot.error
       : null;
-  const safeErrorCode = pageFailed || pageSnapshot.status === 'degraded' || pageSnapshot.status === 'stale'
+  const safeErrorCode = noPaginationProgress
+    ? 'ROUTE_CATALOG_PAGINATION_NO_PROGRESS'
+    : pageFailed || pageSnapshot.status === 'degraded' || pageSnapshot.status === 'stale'
     ? pageSnapshot.asyncState.safeErrorCode ?? (retainedBaseIssue ? baseSnapshot.asyncState.safeErrorCode : null)
     : retainedBaseIssue
       ? baseSnapshot.asyncState.safeErrorCode
@@ -697,7 +782,9 @@ export function mergeLiveTrailPackCatalogPageSnapshots(
       ? hasMergedData
       : pageSnapshot.preservedFromEmptyRefresh ||
         (baseHasPersistentIssue && baseSnapshot.preservedFromEmptyRefresh),
-    preservedReason: pageFailed && hasMergedData
+    preservedReason: noPaginationProgress
+      ? 'pagination_no_progress'
+      : pageFailed && hasMergedData
       ? 'pagination_page_unavailable'
       : pageSnapshot.preservedReason ?? (baseHasPersistentIssue ? baseSnapshot.preservedReason : null),
     asyncState: {
@@ -932,14 +1019,13 @@ function positiveNumber(value: unknown): number | undefined {
 }
 
 function routeCatalogSearchLimit(value: unknown): number {
-  return normalizeRouteSearchResultLimit(value);
+  return normalizeRouteSearchPageSize(value);
 }
 
 function routeCatalogSearchPage(value: unknown): number {
-  // A user search is one ranked result set. Provider cursors remain an internal
-  // implementation detail and are never exposed as a second consumer page.
-  void value;
-  return 1;
+  const page = finiteNumber(value);
+  if (page == null || page < 1) return 1;
+  return Math.max(1, Math.min(10_000, Math.floor(page)));
 }
 
 function hasRouteCatalogRadiusCriteria(criteria: LiveTrailPackCatalogSearchCriteria): boolean {
@@ -1220,22 +1306,45 @@ type RouteCatalogSummaryCachePayload = {
   coverageState: RouteCatalogCoverageState;
   searchMeta: RouteCatalogSearchMeta | null;
   source: LiveTrailPackCatalogSnapshot['source'];
+  accessContextPartition: string;
   refreshKey: string;
 };
 
-function routeCatalogSummaryCacheKeys(criteria: LiveTrailPackCatalogSearchCriteria): string[] {
-  const keys = [EXPLORE_CATALOG_SUMMARY_CACHE_KEY];
+export function routeCatalogSummaryCacheKeys(criteria: LiveTrailPackCatalogSearchCriteria): string[] {
+  const accessContextPartition = normalizeExploreAccessContextPartition(
+    criteria.accessContextPartition,
+  );
+  const keys = [exploreCatalogAccessCacheKey(
+    EXPLORE_CATALOG_SUMMARY_CACHE_KEY,
+    accessContextPartition,
+  )];
   const regionId = cleanText(criteria.regionId ?? criteria.locationSource);
-  if (regionId) keys.push(exploreCatalogRegionCacheKey(regionId));
+  if (regionId) {
+    keys.push(exploreCatalogAccessCacheKey(
+      exploreCatalogRegionCacheKey(regionId),
+      accessContextPartition,
+    ));
+  }
   return Array.from(new Set(keys));
 }
 
-function parseRouteCatalogSummaryCachePayload(raw: string | null, nowMs = Date.now()): RouteCatalogSummaryCachePayload | null {
+function parseRouteCatalogSummaryCachePayload(
+  raw: string | null,
+  expectedAccessContextPartition: string,
+  nowMs = Date.now(),
+): RouteCatalogSummaryCachePayload | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw);
     const record = readRecord(parsed);
     if (!record) return null;
+    const accessContextPartition = cleanText(record.accessContextPartition);
+    if (
+      !accessContextPartition ||
+      normalizeExploreAccessContextPartition(accessContextPartition) !== expectedAccessContextPartition
+    ) {
+      return null;
+    }
     const cachedAt = cleanText(record.cachedAt);
     if (!cachedAt) return null;
     const cachedAtMs = Date.parse(cachedAt);
@@ -1244,7 +1353,7 @@ function parseRouteCatalogSummaryCachePayload(raw: string | null, nowMs = Date.n
       return null;
     }
     const summaries = Array.isArray(record.summaries)
-      ? capUniqueRankedRoutes(record.summaries
+      ? dedupeUniqueRankedRoutes(record.summaries
           .map(normalizeRouteCatalogSummary)
           .filter((summary): summary is RouteCatalogSummary => !!summary),
           (summary) => summary.routeId)
@@ -1261,6 +1370,7 @@ function parseRouteCatalogSummaryCachePayload(raw: string | null, nowMs = Date.n
           : getRouteCatalogCoverageState([], { userHasCriteria: true }),
       searchMeta: searchMetaRecord as unknown as RouteCatalogSearchMeta | null,
       source: record.source === 'trail_packs_fallback' ? 'trail_packs_fallback' : 'route_catalog',
+      accessContextPartition,
       refreshKey: cleanText(record.refreshKey) ?? '',
     };
   } catch {
@@ -1273,8 +1383,14 @@ async function readCachedRouteCatalogSummarySnapshot(
   refreshKey: string,
 ): Promise<LiveTrailPackCatalogSnapshot | null> {
   await routeCatalogSummaryPersistentCache.waitForHydration();
+  const accessContextPartition = normalizeExploreAccessContextPartition(
+    criteria.accessContextPartition,
+  );
   for (const key of routeCatalogSummaryCacheKeys(criteria)) {
-    const cached = parseRouteCatalogSummaryCachePayload(routeCatalogSummaryPersistentCache.get(key));
+    const cached = parseRouteCatalogSummaryCachePayload(
+      routeCatalogSummaryPersistentCache.get(key),
+      accessContextPartition,
+    );
     if (!cached || cached.refreshKey !== refreshKey) continue;
     return {
       trailPacks: [],
@@ -1290,6 +1406,7 @@ async function readCachedRouteCatalogSummarySnapshot(
       ecsRequestId: cached.searchMeta?.ecsRequestId ?? null,
       ecsRequestKey: null,
       source: cached.source,
+      accessContextPartition: cached.accessContextPartition,
       refreshKey,
       preservedFromEmptyRefresh: false,
       preservedReason: 'stale_summary_revalidate',
@@ -1335,7 +1452,7 @@ function writeRouteCatalogSummaryCache(
     return;
   }
   const payload: RouteCatalogSummaryCachePayload = {
-    summaries: capUniqueRankedRoutes(
+    summaries: dedupeUniqueRankedRoutes(
       nextSnapshot.routeCatalogSummaries,
       (summary) => summary.routeId,
     ),
@@ -1343,6 +1460,9 @@ function writeRouteCatalogSummaryCache(
     coverageState: nextSnapshot.coverageState,
     searchMeta: nextSnapshot.searchMeta,
     source: nextSnapshot.source,
+    accessContextPartition: normalizeExploreAccessContextPartition(
+      nextSnapshot.accessContextPartition,
+    ),
     refreshKey: nextSnapshot.refreshKey ?? createLiveTrailPackCatalogRefreshKey(criteria),
   };
   const serialized = JSON.stringify(payload);
@@ -1353,7 +1473,7 @@ function writeRouteCatalogSummaryCache(
 }
 
 function setSnapshot(next: LiveTrailPackCatalogSnapshot): LiveTrailPackCatalogSnapshot {
-  const cappedData = capLiveTrailPackCatalogData(catalogDataFromSnapshot(next)) ?? {
+  const normalizedData = normalizeLiveTrailPackCatalogData(catalogDataFromSnapshot(next)) ?? {
     trailPacks: [],
     guidanceDiagnosticTrailPacks: [],
     guidanceDiagnosticRecords: [],
@@ -1361,13 +1481,14 @@ function setSnapshot(next: LiveTrailPackCatalogSnapshot): LiveTrailPackCatalogSn
   };
   snapshot = {
     ...next,
-    ...cappedData,
+    ...normalizedData,
+    accessContextPartition: normalizeExploreAccessContextPartition(next.accessContextPartition),
     asyncState: {
       ...next.asyncState,
-      data: capLiveTrailPackCatalogData(next.asyncState.data),
-      lastGoodData: capLiveTrailPackCatalogData(next.asyncState.lastGoodData),
+      data: normalizeLiveTrailPackCatalogData(next.asyncState.data),
+      lastGoodData: normalizeLiveTrailPackCatalogData(next.asyncState.lastGoodData),
       resultCount: next.asyncState.data
-        ? catalogResultCount(capLiveTrailPackCatalogData(next.asyncState.data) ?? cappedData)
+        ? catalogResultCount(normalizeLiveTrailPackCatalogData(next.asyncState.data) ?? normalizedData)
         : next.asyncState.resultCount,
     },
   };
@@ -1664,13 +1785,15 @@ export function buildRouteCatalogSearchBody(
   const pageSize = routeCatalogSearchLimit(
     criteria.pageSize ?? criteria.limit ?? ROUTE_CATALOG_SUMMARY_PAGE_SIZE,
   );
-  const page = 1;
-  const offset = 0;
+  const page = routeCatalogSearchPage(criteria.page);
+  const offset = (page - 1) * pageSize;
+  const continuationCursor = cleanText(criteria.continuationCursor);
   return {
     limit: pageSize,
     page,
     pageSize,
     offset,
+    ...(continuationCursor ? { continuationCursor } : {}),
     paginationContractVersion: ROUTE_CATALOG_PAGINATION_CONTRACT_VERSION,
     includeGeometry: false,
     includePreviewGeometry,
@@ -1759,7 +1882,12 @@ function readRouteCatalogSafeDiagnostics(value: unknown): LiveTrailPackCatalogSa
 export function createLiveTrailPackCatalogRefreshKey(
   criteria: LiveTrailPackCatalogSearchCriteria = {},
 ): string {
-  return JSON.stringify(stableRecord(buildRouteCatalogSearchBody(criteria)));
+  return JSON.stringify(stableRecord({
+    ...buildRouteCatalogSearchBody(criteria),
+    accessContextPartition: normalizeExploreAccessContextPartition(
+      criteria.accessContextPartition,
+    ),
+  }));
 }
 
 type RouteCatalogNetworkRequestOptions = LiveTrailPackCatalogRefreshOptions & {
@@ -1789,7 +1917,7 @@ async function fetchRouteCatalogTrailPacks(
   });
   const perfRun = createExplorePerformanceRun({
     flow: 'route_catalog_refresh',
-    searchKey: createECSAsyncRequestFingerprint(buildRouteCatalogSearchBody(criteria)),
+    searchKey: createECSAsyncRequestFingerprint(createLiveTrailPackCatalogRefreshKey(criteria)),
     startedAtMs,
     metadata: {
       radiusMiles: criteria.radiusMiles ?? null,
@@ -1853,16 +1981,20 @@ async function fetchRouteCatalogTrailPacks(
     ecsRequestId: responseCorrelation.requestId,
     clientInvalidRecordCount,
   };
-  searchMeta.resultLimit = normalizeRouteSearchResultLimit(requestBody.limit);
+  searchMeta.resultLimit = normalizeRouteSearchPageSize(requestBody.limit);
   searchMeta.additionalMatchesAvailable =
     searchMeta.additionalMatchesAvailable === true ||
-    searchMeta.totalMatchedCount > normalized.trailPacks.length;
-  searchMeta.hasMore = false;
-  searchMeta.page = 1;
-  searchMeta.pageSize = searchMeta.resultLimit;
-  searchMeta.offset = 0;
-  searchMeta.nextPage = null;
-  searchMeta.nextCursor = null;
+    searchMeta.hasMore ||
+    searchMeta.totalMatchedCount > searchMeta.offset + normalized.trailPacks.length;
+  const requestedPage = routeCatalogSearchPage(criteria.page);
+  if (
+    searchMeta.page !== requestedPage ||
+    searchMeta.pageSize !== searchMeta.resultLimit ||
+    searchMeta.offset !== (requestedPage - 1) * searchMeta.pageSize ||
+    (searchMeta.hasMore && (searchMeta.nextPage == null || searchMeta.nextPage <= searchMeta.page))
+  ) {
+    throw new InvalidRouteCatalogSearchResponseError();
+  }
   const normalizeEndedAtMs = getExplorePerformanceNow();
   recordExplorePerformancePhase(perfRun, 'filter_sort', {
     startedAtMs: normalizeStartedAtMs,
@@ -2096,7 +2228,7 @@ async function fetchLegacyTrailPacks(
     throw new Error(error.message || 'Live Trail Pack catalog unavailable.');
   }
 
-  return capUniqueRankedRoutes(normalizeLiveTrailPackRecords(data)
+  return dedupeUniqueRankedRoutes(normalizeLiveTrailPackRecords(data)
     .filter((trailPack) => legacyTrailPackMatchesCriteria(trailPack, criteria))
     .sort((left, right) => compareLegacyTrailPacksForSearch(left, right, criteria))
     .map((trailPack) => ({
@@ -2122,6 +2254,12 @@ export function refreshLiveTrailPackCatalog(
   criteria: LiveTrailPackCatalogSearchCriteria = {},
   options: LiveTrailPackCatalogRefreshOptions = {},
 ): Promise<LiveTrailPackCatalogSnapshot> {
+  const accessContextPartition = normalizeExploreAccessContextPartition(
+    criteria.accessContextPartition,
+  );
+  if (snapshot.accessContextPartition !== accessContextPartition) {
+    transitionLiveTrailPackCatalogAccessContext(accessContextPartition);
+  }
   const refreshKey = createLiveTrailPackCatalogRefreshKey(criteria);
   const pendingRefresh = pendingRefreshesByKey.get(refreshKey);
   if (pendingRefresh && !pendingRefresh.controller.signal.aborted) {
@@ -2186,7 +2324,7 @@ export function refreshLiveTrailPackCatalog(
       : null,
   };
   const requestState = beginECSAsyncSurfaceRequest(stateBeforeRequest, {
-    fingerprintInput: buildRouteCatalogSearchBody(criteria),
+    fingerprintInput: createLiveTrailPackCatalogRefreshKey(criteria),
     provider: 'route-catalog-search',
     preserveData: Boolean(presentationSnapshot),
     preserveLastGood: Boolean(presentationSnapshot),
@@ -2207,6 +2345,7 @@ export function refreshLiveTrailPackCatalog(
     refreshKey: presentationRefreshKey,
     ecsRequestId: primaryEcsRequestId,
     ecsRequestKey: refreshKey,
+    accessContextPartition,
     preservedFromEmptyRefresh: false,
     preservedReason: null,
     asyncState: requestState,
@@ -2278,6 +2417,7 @@ export function refreshLiveTrailPackCatalog(
       ecsRequestId: snapshot.ecsRequestId,
       ecsRequestKey: snapshot.ecsRequestKey,
       source: args.catalogSource ?? snapshot.source,
+      accessContextPartition,
       refreshKey,
       preservedFromEmptyRefresh: Boolean(args.preservedReason),
       preservedReason: args.preservedReason ?? null,
@@ -2365,6 +2505,7 @@ export function refreshLiveTrailPackCatalog(
               ecsRequestId: staged.searchMeta.ecsRequestId ?? snapshot.ecsRequestId,
               ecsRequestKey: createLiveTrailPackCatalogRefreshKey(stagedCriteria),
               source: 'route_catalog',
+              accessContextPartition,
               refreshKey,
               preservedFromEmptyRefresh: false,
               preservedReason: 'staged_result_revalidate',
@@ -2642,6 +2783,24 @@ export function setLiveTrailPackCatalogDisabled(args: {
   });
 }
 
+export function transitionLiveTrailPackCatalogAccessContext(
+  accessContextPartition: unknown,
+): LiveTrailPackCatalogSnapshot {
+  const nextAccessContextPartition = normalizeExploreAccessContextPartition(
+    accessContextPartition,
+  );
+  if (snapshot.accessContextPartition === nextAccessContextPartition) {
+    return liveTrailPackCatalogStore.getSnapshot();
+  }
+
+  refreshRequestSequence += 1;
+  pendingRefreshesByKey.forEach((pending) => pending.controller.abort('superseded'));
+  pendingRefreshesByKey.clear();
+  activeCatalogRefresh = null;
+  invalidateRouteCatalogTrailPackDetail();
+  return setSnapshot(emptyLiveTrailPackCatalogSnapshot(nextAccessContextPartition));
+}
+
 export const liveTrailPackCatalogStore = {
   getSnapshot(): LiveTrailPackCatalogSnapshot {
     return {
@@ -2658,6 +2817,7 @@ export const liveTrailPackCatalogStore = {
       ecsRequestId: snapshot.ecsRequestId,
       ecsRequestKey: snapshot.ecsRequestKey,
       source: snapshot.source,
+      accessContextPartition: snapshot.accessContextPartition,
       refreshKey: snapshot.refreshKey,
       preservedFromEmptyRefresh: snapshot.preservedFromEmptyRefresh,
       preservedReason: snapshot.preservedReason,
@@ -2698,4 +2858,5 @@ export const liveTrailPackCatalogStore = {
 
   refresh: refreshLiveTrailPackCatalog,
   disable: setLiveTrailPackCatalogDisabled,
+  transitionAccessContext: transitionLiveTrailPackCatalogAccessContext,
 };

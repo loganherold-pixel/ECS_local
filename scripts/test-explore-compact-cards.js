@@ -114,18 +114,19 @@ assert.ok(
 );
 
 assert.ok(
-  discoverSource.includes('EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT = ECS_ROUTE_SEARCH_RESULT_LIMIT') &&
+  discoverSource.includes('EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT = ECS_ROUTE_SEARCH_RENDER_WINDOW_SIZE') &&
     discoverSource.includes('exploreGuidanceReadyVisibleLimit') &&
     discoverSource.includes('visibleExploreWizardCardCandidates') &&
     discoverSource.includes('visibleExploreWizardCandidates.slice(0, exploreGuidanceReadyVisibleLimit)') &&
-    !discoverSource.includes('SHOW MORE ROUTES') &&
-    discoverSource.includes('testID="explore-route-search-cap-notice"') &&
+    discoverSource.includes('hasMoreExploreWizardCandidates') &&
+    discoverSource.includes('testID="explore-guidance-ready-show-more-loaded"') &&
+    discoverSource.includes('setExploreGuidanceReadyVisibleLimit((current) =>') &&
+    discoverSource.includes('testID="explore-guidance-ready-load-next-provider-page"') &&
+    discoverSource.includes('onPress={handleLoadNextRouteCatalogPage}') &&
     discoverSource.includes('setExploreGuidanceReadyVisibleLimit(EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT)') &&
-    discoverSource.includes('liveTrailPackCatalogSnapshot.routeCatalogSummaries.length === 0') &&
-    discoverSource.includes('Math.max(\n      current,\n      exploreWizardCandidateSet.candidates.length') &&
     discoverSource.includes('initialNumToRender={EXPLORE_ROUTE_CARD_INITIAL_RENDER_COUNT}') &&
     discoverSource.includes('maxToRenderPerBatch={EXPLORE_ROUTE_CARD_BATCH_SIZE}'),
-  'Guidance Ready should virtualize the single capped result set and expose no user-facing continuation.',
+  'Guidance Ready should virtualize its initial render window while keeping loaded-result and provider-page continuation accessible.',
 );
 
 assert.ok(

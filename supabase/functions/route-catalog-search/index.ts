@@ -104,7 +104,7 @@ function cleanSourceAdapter(value: unknown): string {
 
 const ROUTE_CATALOG_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const ROUTE_CATALOG_TOTAL_SEARCH_CONTRACT_VERSION = 'route_catalog_total_search_v1';
+const ROUTE_CATALOG_PAGINATION_CONTRACT_VERSION = 'route_catalog_ranked_page_v1';
 
 async function requestParams(req: Request): Promise<Record<string, unknown>> {
   const url = new URL(req.url);
@@ -1661,7 +1661,14 @@ serve(async (req) => {
   try {
     const params = await requestParams(req);
     const pagination = normalizeRouteCatalogPagination(params);
-    const { page, pageSize, offset } = pagination;
+    const { page, pageSize, offset, windowExceeded } = pagination;
+    if (windowExceeded) {
+      return completeResponse({
+        ok: false,
+        error: `Requested route catalog page exceeds the bounded ${ROUTE_CATALOG_MAX_PAGINATION_WINDOW}-record search window.`,
+        safeErrorCode: 'ROUTE_CATALOG_PAGINATION_WINDOW_EXCEEDED',
+      }, 400);
+    }
     const includeGeometry = readBoolean(params.includeGeometry ?? params.include_geometry, false);
     const includePreviewGeometry = readBoolean(
       params.includePreviewGeometry ?? params.include_preview_geometry,
@@ -1767,8 +1774,9 @@ serve(async (req) => {
     let candidateBatchLimit: number | null = null;
 
     // Inspect the complete bounded candidate window before filtering, ranking,
-    // deduping, and slicing. Cursor/offset continuation remains an internal
-    // provider mechanism and never becomes a consumer continuation contract.
+    // deduping, and selecting the requested public page. The nearby RPC cursor
+    // remains internal; the consumer contract uses deterministic page/offset
+    // continuation over the ranked revealable set.
     if (hasRadiusCriteria) {
       let internalContinuationCursor: RouteCatalogPageCursor | null = null;
       let internalOffset = 0;
@@ -1898,7 +1906,8 @@ serve(async (req) => {
     const selectedRefinementResults = selectRouteCatalogSearchResults(
       refinementEligibleRecords,
       {
-        requestedLimit: pageSize,
+        offset,
+        pageSize,
         compareRecords: compareDiscoveryRecords,
       },
     );
@@ -1974,7 +1983,8 @@ serve(async (req) => {
     const diagnosticRecords = Array.from(diagnosticRecordsByRouteId.values()).slice(0, 50);
     const diagnosticCandidateCount = curationCoverage.curationCandidateCount
       + resultSelection.diagnosticRecords.length;
-    const additionalMatchesAvailable = resultSelection.additionalMatchesAvailable;
+    const hasMore = resultSelection.hasMoreRevealable;
+    const additionalMatchesAvailable = hasMore;
     const totalMatchedCountBounded = candidateQueryBounded;
     responseCandidateCount = candidates.length;
     responseReturnedCount = records.length;
@@ -1987,7 +1997,7 @@ serve(async (req) => {
       coverageState: coverageState(records, { curationCandidateCount: diagnosticCandidateCount }),
       meta: {
         source: 'verified_routes',
-        paginationContractVersion: ROUTE_CATALOG_TOTAL_SEARCH_CONTRACT_VERSION,
+        paginationContractVersion: ROUTE_CATALOG_PAGINATION_CONTRACT_VERSION,
         nearbyRouteRpcUsed: hasRadiusCriteria,
         nearbyRouteRpc: hasRadiusCriteria
           ? useCursorPage
@@ -2035,12 +2045,12 @@ serve(async (req) => {
         resultLimit: resultSelection.resultLimit,
         additionalMatchesAvailable,
         returnedCount: records.length,
-        hasMore: false,
-        nextPage: null,
+        hasMore,
+        nextPage: hasMore ? page + 1 : null,
         nextCursor: null,
         totalMatchedCount: matchedCount,
         totalMatchedCountBounded,
-        maxPaginationWindow: null,
+        maxPaginationWindow: ROUTE_CATALOG_MAX_PAGINATION_WINDOW,
         geometryMode: includeGeometry ? 'full' : includePreviewGeometry ? 'preview_simplified' : 'omitted',
         previewMaxPoints: includePreviewGeometry && !includeGeometry ? PREVIEW_MAX_POINTS : null,
         criteria: {

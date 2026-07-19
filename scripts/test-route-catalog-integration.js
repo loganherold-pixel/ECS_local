@@ -239,9 +239,10 @@ assert(
   'Route catalog search should honor server-side criteria for distance, duration, route type, difficulty, confidence, remoteness, Explore refinement, campability, and resource margins',
 );
 assert(
-  searchFunction.includes("from './providerContract.ts'") &&
+    searchFunction.includes("from './providerContract.ts'") &&
     searchFunction.includes('selectRouteCatalogSearchResults(') &&
-    searchFunction.includes('requestedLimit: pageSize') &&
+    searchFunction.includes('offset,') &&
+    searchFunction.includes('pageSize,') &&
     searchFunction.includes('compareRecords: compareDiscoveryRecords') &&
     searchFunction.indexOf('const sourceEligibleRecords =') <
       searchFunction.indexOf('const publicEligibilityPartition =') &&
@@ -258,13 +259,13 @@ assert(
     searchFunction.includes('diagnosticRecords,') &&
     searchFunction.includes('normalizeRouteCatalogPagination(params)') &&
     searchFunction.includes("'route_catalog_nearby_public_route_cursor_page'") &&
-    searchFunction.includes("'route_catalog_total_search_v1'") &&
+    searchFunction.includes("'route_catalog_ranked_page_v1'") &&
     searchFunction.includes('p_cursor_route_id: args.continuationCursor?.routeId ?? null') &&
     searchFunction.includes('continuationCursor: internalContinuationCursor') &&
     searchFunction.includes('resultLimit: resultSelection.resultLimit') &&
     searchFunction.includes('additionalMatchesAvailable,') &&
-    searchFunction.includes('hasMore: false') &&
-    searchFunction.includes('nextPage: null') &&
+    searchFunction.includes('hasMore,') &&
+    searchFunction.includes('nextPage: hasMore ? page + 1 : null') &&
     searchFunction.includes('nextCursor: null') &&
     searchFunction.includes('partitionRouteCatalogRecordsByPublicEligibility(') &&
     searchFunction.includes('normalizeRouteCatalogViewportFilter(params)') &&
@@ -275,7 +276,7 @@ assert(
     searchFunction.includes('{ includeGeometry, includePreviewGeometry }') &&
     !searchFunction.includes('sourceMatchedRecords.slice(offset, windowEnd)') &&
     !searchFunction.includes('radiusFiltered.records.slice(offset, windowEnd)'),
-  'Route catalog search should inspect candidates internally, then apply semantic viewport and eligibility filters before ranking, dedupe, and the one public top-20 result set.',
+  'Route catalog search should inspect candidates internally, then apply semantic viewport and eligibility filters before deterministic ranked-page selection.',
 );
 
 assert(
@@ -299,13 +300,12 @@ assert(
     liveCatalog.includes('includeGeometry: false') &&
     liveCatalog.includes('const includePreviewGeometry = criteria.includePreviewGeometry === true') &&
     liveCatalog.includes('includePreviewGeometry,') &&
-    liveCatalog.includes('const offset = 0') &&
-    !liveCatalog.includes('...(continuationCursor ? { continuationCursor } : {})') &&
+    liveCatalog.includes('const offset = (page - 1) * pageSize') &&
+    liveCatalog.includes('...(continuationCursor ? { continuationCursor } : {})') &&
     liveCatalog.includes('paginationContractVersion: ROUTE_CATALOG_PAGINATION_CONTRACT_VERSION') &&
-    liveCatalog.includes('searchMeta.hasMore = false') &&
+    liveCatalog.includes('searchMeta.hasMore') &&
     liveCatalog.includes('delete family.continuationCursor') &&
-    liveCatalog.includes('searchMeta.nextCursor = null') &&
-    liveCatalog.includes('capUniqueRankedRoutes') &&
+    liveCatalog.includes('dedupeUniqueRankedRoutes') &&
     liveCatalog.includes('includeCoverageDiagnostics: false') &&
     liveCatalog.includes("expectedKnownRoutes: criteria.expectedKnownRoutes ?? ['rubicon']") &&
     liveCatalog.includes('normalizeRouteCatalogSearchResponse') &&

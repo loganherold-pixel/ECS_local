@@ -267,9 +267,31 @@ assert(
     discoverSource.includes('trailPackSubmissionRoute'),
   'Explore saved route detail should keep Trail Pack submission modal wiring.',
 );
-assert(
-  discoverSource.includes('Submit to ECS Trail Packs'),
-  'Explore saved route detail should expose the requested submission action label',
+const favoriteSubmissionCall = discoverSource.indexOf('handleSubmitFavoriteTrailPack(favorite);');
+const favoriteSubmissionActionStart = discoverSource.lastIndexOf('<TouchableOpacity', favoriteSubmissionCall);
+const favoriteSubmissionActionEnd = discoverSource.indexOf('</TouchableOpacity>', favoriteSubmissionCall);
+assert.ok(
+  favoriteSubmissionCall > 0 &&
+    favoriteSubmissionActionStart >= 0 &&
+    favoriteSubmissionActionEnd > favoriteSubmissionCall,
+  'Explore should expose a saved-route submission action.',
+);
+const favoriteSubmissionAction = discoverSource.slice(favoriteSubmissionActionStart, favoriteSubmissionActionEnd);
+assert.ok(
+  favoriteSubmissionAction.includes('accessibilityRole="button"') &&
+    favoriteSubmissionAction.includes('accessibilityLabel=') &&
+    favoriteSubmissionAction.includes('accessibilityHint=') &&
+    favoriteSubmissionAction.includes('handleSubmitFavoriteTrailPack(favorite);'),
+  'The saved-route submission action should have button semantics and execute the supported submission handler.',
+);
+assert.ok(
+  favoriteSubmissionAction.includes('does not publish automatically'),
+  'The action accessibility contract should disclose that submission is not automatic publication.',
+);
+assert.strictEqual(
+  payloadInput.sourceEntryPoint,
+  'explore_saved_route',
+  'Executing the saved-route transformation should produce the semantic Explore submission entry point.',
 );
 
 const trailPackModalSource = fs.readFileSync(

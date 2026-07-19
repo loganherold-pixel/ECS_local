@@ -2,106 +2,168 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const Module = require('module');
 const path = require('path');
+const ts = require('typescript');
 
 const root = path.join(__dirname, '..');
-const discoverSource = fs.readFileSync(path.join(root, 'lib', 'discoverEngine.ts'), 'utf8');
-const trailPackSource = fs.readFileSync(path.join(root, 'lib', 'explore', 'trailPacks.ts'), 'utf8');
-const previewNormalizerSource = fs.readFileSync(path.join(root, 'lib', 'exploreRoutePreview.ts'), 'utf8');
-const previewModalSource = fs.readFileSync(
-  path.join(root, 'components', 'discover', 'ExploreRoutePreviewModal.tsx'),
-  'utf8',
-);
-const handoffSource = fs.readFileSync(path.join(root, 'lib', 'navigationHandoffStore.ts'), 'utf8');
+const storage = new Map();
 
-function extractBlock(source, startToken, endToken) {
-  const start = source.indexOf(startToken);
-  assert.ok(start >= 0, `Missing ${startToken}`);
-  const end = source.indexOf(endToken, start);
-  assert.ok(end > start, `Missing ${endToken}`);
-  return source.slice(start, end);
-}
+global.localStorage = {
+  getItem(key) {
+    return storage.has(key) ? storage.get(key) : null;
+  },
+  setItem(key, value) {
+    storage.set(key, String(value));
+  },
+  removeItem(key) {
+    storage.delete(key);
+  },
+};
 
-function unique(values) {
-  return new Set(values);
-}
+require.extensions['.ts'] = function compileTs(module, filename) {
+  const source = fs.readFileSync(filename, 'utf8');
+  const transpiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: filename,
+  });
+  module._compile(transpiled.outputText, filename);
+};
 
-const seedBlock = extractBlock(
-  discoverSource,
-  'const SEED_OPPORTUNITIES: ExpeditionOpportunity[] = [',
-  '// ── Compute Distance From User',
-);
-const seedIds = [...seedBlock.matchAll(/\bid:\s*['"`]([^'"`]+)['"`]/g)].map((match) => match[1]);
-assert.ok(seedIds.length > 0, 'Explore seed routes should be discoverable for audit.');
-assert.strictEqual(unique(seedIds).size, seedIds.length, 'Explore seed route IDs must be stable and unique.');
-assert.strictEqual(
-  (seedBlock.match(/\bstartLat:/g) ?? []).length,
-  seedIds.length,
-  'Every seed route should have a trailhead latitude.',
-);
-assert.strictEqual(
-  (seedBlock.match(/\bstartLng:/g) ?? []).length,
-  seedIds.length,
-  'Every seed route should have a trailhead longitude.',
-);
+const originalLoad = Module._load;
+Module._load = function loadWithPreviewContractStubs(request, parent, isMain) {
+  if (request === 'react-native') {
+    return { Platform: { OS: 'web' } };
+  }
+  if (request === 'expo-secure-store') {
+    return {
+      async getItemAsync(key) {
+        return storage.has(key) ? storage.get(key) : null;
+      },
+      async setItemAsync(key, value) {
+        storage.set(key, String(value));
+      },
+      async deleteItemAsync(key) {
+        storage.delete(key);
+      },
+    };
+  }
+  if (parent?.filename?.endsWith(path.join('lib', 'exploreRoutePreview.ts')) && request === './mapConfig') {
+    return {
+      computeBounds(points) {
+        if (!Array.isArray(points) || points.length === 0) return null;
+        const lats = points.map((point) => point.lat);
+        const lngs = points.map((point) => point.lng);
+        return {
+          minLat: Math.min(...lats),
+          maxLat: Math.max(...lats),
+          minLng: Math.min(...lngs),
+          maxLng: Math.max(...lngs),
+        };
+      },
+    };
+  }
+  return originalLoad(request, parent, isMain);
+};
 
-assert.ok(
-  discoverSource.includes('export function normalizeExploreOpportunityRoute') &&
-    discoverSource.includes('previewMetadataStatus') &&
-    discoverSource.includes('routePreviewUnavailableReason') &&
-    discoverSource.includes('normalizeExploreOpportunityRoutes([...SEED_OPPORTUNITIES])'),
-  'Explore seed routes should be normalized at read time with explicit preview metadata state.',
-);
+const {
+  buildExploreNavigationPayload,
+} = require(path.join(root, 'lib', 'navigationHandoffStore.ts'));
+const {
+  normalizeNavigationHandoffPreview,
+} = require(path.join(root, 'lib', 'exploreRoutePreview.ts'));
 
-const trailPackBlock = extractBlock(
-  trailPackSource,
-  'const DEFAULT_ECS_TRAIL_PACKS: ECSTrailPack[] = [',
-  '];',
-);
-const trailPackIds = [...trailPackBlock.matchAll(/\bid:\s*['"`]([^'"`]+)['"`]/g)].map((match) => match[1]);
-assert.ok(trailPackIds.length > 0, 'Trail Pack routes should be included in Explore route metadata audit.');
-assert.strictEqual(unique(trailPackIds).size, trailPackIds.length, 'Trail Pack route IDs must be stable and unique.');
-assert.strictEqual(
-  (trailPackBlock.match(/\bcenterCoordinate:/g) ?? []).length,
-  trailPackIds.length,
-  'Every Trail Pack should have a center coordinate fallback.',
-);
+const representativeRoute = {
+  id: 'preview-contract-route',
+  name: 'Preview Contract Route',
+  region: 'Synthetic Test Region',
+  terrainType: 'mixed',
+  startLat: 10,
+  startLng: 20,
+  distanceMiles: 12,
+  endpointCoordinate: { lat: 11, lng: 21 },
+  routeGeometry: {
+    type: 'LineString',
+    coordinates: [
+      [20.4, 10.4],
+      [20.2, 10.2],
+      [20, 10],
+    ],
+  },
+  routeMetadata: {
+    previewMetadataStatus: 'summary_ready',
+    source: 'synthetic_contract',
+  },
+};
 
-assert.ok(
-  trailPackSource.includes('routeGeometry: pack.routeGeometry') &&
-    trailPackSource.includes('routeMetadata:') &&
-    trailPackSource.includes("source: 'trail_pack'"),
-  'Trail Pack Explore records should preserve geometry and label/source metadata.',
-);
+const payload = buildExploreNavigationPayload(representativeRoute, {
+  approachOriginCoordinate: { lat: 10.01, lng: 20.01 },
+});
+const model = normalizeNavigationHandoffPreview(payload, null);
 
-assert.ok(
-  handoffSource.includes('function extractFinalCoordinate') &&
-    handoffSource.includes('destinationCoordinate') &&
-    handoffSource.includes('endpointCoordinate') &&
-    /function orientTrailGeometryFromEndpoint\([\s\S]*preferredStart/.test(handoffSource) &&
-    /const finalTrailCoordinate = trailGeometry\.length > 1[\s\S]*trailGeometry\[trailGeometry\.length - 1\]/.test(handoffSource) &&
-    /const coordinate =[\s\S]*finalTrailCoordinate \?\?[\s\S]*extractFinalCoordinate\(route\) \?\?[\s\S]*normalizeCoordinate\(routeRecord\.coordinate\) \?\?[\s\S]*trailheadCoordinate/.test(handoffSource),
-  'Navigation handoff should orient route geometry from the approach origin, prefer multi-point geometry endpoints, then fall back to explicit endpoint/destination metadata.',
+assert.strictEqual(payload.id, representativeRoute.id, 'The public preview payload should preserve route identity.');
+assert.strictEqual(payload.title, representativeRoute.name, 'The public preview payload should preserve its summary title.');
+assert.strictEqual(payload.routeMetadata.previewMetadataStatus, 'summary_ready');
+assert.strictEqual(payload.routeMetadata.source, 'synthetic_contract');
+assert.deepStrictEqual(
+  payload.trailGeometry[0],
+  { lat: 10, lng: 20 },
+  'Route geometry should orient from the approach-side route start.',
 );
-
-assert.ok(
-  previewNormalizerSource.includes('payload.trailWaypoints') &&
-    previewNormalizerSource.includes('routePoints.length >= 2') &&
-    previewNormalizerSource.includes('previewUnavailableReason') &&
-    previewNormalizerSource.includes('Route preview unavailable for this route until endpoint or route geometry is added.') &&
-    previewNormalizerSource.includes('computeBounds') &&
-    previewNormalizerSource.includes("mode: 'route_overview'") &&
-    previewNormalizerSource.includes('waypoints: []') &&
-    !previewNormalizerSource.includes('pushUniqueWaypoint'),
-  'Route preview normalizer should use geometry/endpoints/bounds while suppressing generated waypoint pins.',
+assert.deepStrictEqual(
+  payload.coordinate,
+  { lat: 10.4, lng: 20.4 },
+  'A multi-point geometry endpoint should take precedence over optional endpoint metadata.',
 );
+assert.strictEqual(model.hasRouteData, true);
+assert.strictEqual(model.hasFullGeometry, true);
+assert.strictEqual(model.routePoints.length, 3);
+assert.deepStrictEqual(model.waypoints, [], 'Summary previews must not invent waypoint pins.');
+assert.strictEqual(model.cameraCommand?.mode, 'route_overview');
+assert.ok(model.cameraCommand?.fitBounds, 'A representative route summary should produce overview bounds.');
+assert.strictEqual(model.previewUnavailableReason, null);
 
-assert.ok(
-  previewModalSource.includes('previewModel.hasRouteData ?') &&
-    previewModalSource.includes('Route geometry unavailable') &&
-    previewModalSource.includes('Build Route will use the best existing route handoff data') &&
-    previewModalSource.includes('MapRenderer'),
-  'Route preview modal should render either MapRenderer preview or a clear unavailable state without crashing.',
-);
+const summaryOnlyPayload = buildExploreNavigationPayload({
+  id: 'summary-first-route',
+  name: 'Summary First Route',
+  region: 'Synthetic Test Region',
+  terrainType: 'forest',
+  startLat: 30,
+  startLng: 40,
+  endpointCoordinate: { lat: 30.25, lng: 40.25 },
+  routeMetadata: { previewMetadataStatus: 'summary_ready' },
+});
+const summaryOnlyModel = normalizeNavigationHandoffPreview(summaryOnlyPayload, null);
+assert.strictEqual(summaryOnlyPayload.trailGeometry.length, 0, 'Summary-first preview should not require detail geometry.');
+assert.strictEqual(summaryOnlyModel.hasFullGeometry, false);
+assert.strictEqual(summaryOnlyModel.hasRouteData, true, 'Distinct summary start/end metadata should still support a preview.');
+assert.deepStrictEqual(summaryOnlyModel.routePoints, [
+  { lat: 30, lng: 40 },
+  { lat: 30.25, lng: 40.25 },
+]);
+assert.deepStrictEqual(summaryOnlyModel.waypoints, []);
 
-console.log(`Explore route preview metadata audit passed for ${seedIds.length} seed routes and ${trailPackIds.length} Trail Packs.`);
+const missingOptionalPayload = buildExploreNavigationPayload({
+  id: 'missing-optional-preview-fields',
+  name: 'Missing Optional Preview Fields',
+  region: 'Synthetic Test Region',
+  startLat: 50,
+  startLng: 60,
+  routeMetadata: {
+    previewMetadataStatus: 'unavailable',
+    routePreviewUnavailableReason: 'Synthetic preview metadata is incomplete.',
+  },
+});
+const missingOptionalModel = normalizeNavigationHandoffPreview(missingOptionalPayload, null);
+assert.strictEqual(missingOptionalModel.hasFullGeometry, false);
+assert.strictEqual(missingOptionalModel.hasRouteData, false);
+assert.strictEqual(missingOptionalModel.routePoints.length, 1, 'A lone trailhead should remain a safe map fallback.');
+assert.strictEqual(missingOptionalModel.previewUnavailableReason, 'Synthetic preview metadata is incomplete.');
+assert.ok(missingOptionalModel.cameraCommand, 'Missing optional endpoint fields should not crash camera normalization.');
+assert.deepStrictEqual(missingOptionalModel.waypoints, []);
+
+console.log('Explore route preview metadata contract checks passed.');

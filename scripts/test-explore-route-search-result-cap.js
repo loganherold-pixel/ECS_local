@@ -37,22 +37,24 @@ const { buildExploreGuidanceReadyInventory } = require(
   path.join(root, 'lib', 'explore', 'exploreGuidanceReadyInventory.ts'),
 );
 
-assert.strictEqual(policy.ECS_ROUTE_SEARCH_RESULT_LIMIT, 20);
+assert.strictEqual(policy.ECS_ROUTE_SEARCH_RENDER_WINDOW_SIZE, 20);
+assert.strictEqual(policy.ECS_ROUTE_SEARCH_DEFAULT_PAGE_SIZE, 50);
+assert.strictEqual(policy.ECS_ROUTE_SEARCH_MAX_PAGE_SIZE, 50);
 [undefined, null, NaN, Infinity, 0, -1, 'bad'].forEach((value) => {
-  assert.strictEqual(policy.normalizeRouteSearchResultLimit(value), 20);
+  assert.strictEqual(policy.normalizeRouteSearchPageSize(value), 50);
 });
-assert.strictEqual(policy.normalizeRouteSearchResultLimit(7.9), 7);
-assert.strictEqual(policy.normalizeRouteSearchResultLimit(51), 20);
+assert.strictEqual(policy.normalizeRouteSearchPageSize(7.9), 7);
+assert.strictEqual(policy.normalizeRouteSearchPageSize(51), 50);
 
 const rankedWithDuplicate = [
   { id: 'best', score: 100 },
   { id: 'best', score: 99 },
   ...Array.from({ length: 25 }, (_, index) => ({ id: `route-${index}`, score: 98 - index })),
 ];
-const capped = policy.capUniqueRankedRoutes(rankedWithDuplicate, (item) => item.id);
-assert.strictEqual(capped.length, 20);
-assert.strictEqual(new Set(capped.map((item) => item.id)).size, 20);
-assert.strictEqual(capped[0].id, 'best');
+const deduped = policy.dedupeUniqueRankedRoutes(rankedWithDuplicate, (item) => item.id);
+assert.strictEqual(deduped.length, 26);
+assert.strictEqual(new Set(deduped.map((item) => item.id)).size, 26);
+assert.strictEqual(deduped[0].id, 'best');
 
 function validCatalogRoute(index, overrides = {}) {
   const id = `catalog-route-${String(index).padStart(2, '0')}`;
@@ -95,34 +97,53 @@ const blockedRecords = Array.from({ length: 25 }, (_, index) => validCatalogRout
   recommendation_status: 'needs_review',
 }));
 const blockedIds = new Set(blockedRecords.map((route) => route.public_id));
-const rawRecords = [
+const pageOneRawRecords = [
   { name: 'invalid missing identity' },
   ...blockedRecords,
-  ...Array.from({ length: 51 }, (_, index) => validCatalogRoute(index)),
-  validCatalogRoute(50, { id: 'duplicate-db-row' }),
+  ...Array.from({ length: 50 }, (_, index) => validCatalogRoute(index)),
+  validCatalogRoute(49, { id: 'duplicate-db-row' }),
 ];
-const normalized = normalizeRouteCatalogSearchResponse({
-  records: rawRecords,
+const normalizedPageOne = normalizeRouteCatalogSearchResponse({
+  records: pageOneRawRecords,
   meta: {
-    resultLimit: 51,
+    paginationContractVersion: 'route_catalog_ranked_page_v1',
+    page: 1,
+    pageSize: 50,
+    offset: 0,
+    resultLimit: 50,
     totalMatchedCount: 51,
+    hasMore: true,
+    nextPage: 2,
     additionalMatchesAvailable: true,
   },
 });
-assert.strictEqual(normalized.normalizedRecordCount, 77, 'Structural validation must precede the cap.');
-assert.strictEqual(normalized.records.length, 20);
-assert.strictEqual(normalized.trailPacks.length, 20);
-assert.strictEqual(new Set(normalized.trailPacks.map((route) => route.id)).size, 20);
+assert.strictEqual(normalizedPageOne.normalizedRecordCount, 76, 'Structural validation must precede page materialization.');
+assert.strictEqual(normalizedPageOne.records.length, 50);
+assert.strictEqual(normalizedPageOne.trailPacks.length, 50);
+assert.strictEqual(new Set(normalizedPageOne.trailPacks.map((route) => route.id)).size, 50);
 assert(
-  normalized.trailPacks.some((route) => route.id === 'catalog-route-50'),
-  'The highest-ranked record at the end of the provider payload must survive the final slice.',
+  normalizedPageOne.trailPacks.every((route) => !blockedIds.has(route.id)),
+  'Moderation filtering must run before blocked rows could consume page positions.',
 );
-assert(
-  normalized.trailPacks.every((route) => !blockedIds.has(route.id)),
-  'Moderation filtering must run before blocked rows could consume result positions.',
-);
-assert.strictEqual(normalized.searchMeta.additionalMatchesAvailable, true);
-assert.strictEqual(normalized.searchMeta.resultLimit, 20);
+assert.strictEqual(normalizedPageOne.searchMeta.hasMore, true);
+assert.strictEqual(normalizedPageOne.searchMeta.nextPage, 2);
+assert.strictEqual(normalizedPageOne.searchMeta.resultLimit, 50);
+
+const normalizedPageTwo = normalizeRouteCatalogSearchResponse({
+  records: [validCatalogRoute(50)],
+  meta: {
+    paginationContractVersion: 'route_catalog_ranked_page_v1',
+    page: 2,
+    pageSize: 50,
+    offset: 50,
+    resultLimit: 50,
+    totalMatchedCount: 51,
+    hasMore: false,
+    nextPage: null,
+  },
+});
+assert.strictEqual(normalizedPageTwo.trailPacks.length, 1);
+assert.strictEqual(normalizedPageTwo.trailPacks[0].id, 'catalog-route-50');
 
 function wizardRoute(index) {
   return {
@@ -170,9 +191,9 @@ function wizardRoute(index) {
 }
 
 const wizardCandidates = wizard.normalizeExploreWizardRouteCandidates({
-  trailPacks: Array.from({ length: 20 }, (_, index) => wizardRoute(index)),
+  trailPacks: Array.from({ length: 51 }, (_, index) => wizardRoute(index)),
 });
-assert.strictEqual(wizardCandidates.candidates.length, 20);
+assert.strictEqual(wizardCandidates.candidates.length, 51);
 wizardCandidates.candidates.forEach((candidate) => {
   const draft = wizard.createExploreWizardDraft(candidate, { routeOnlyPlanning: true });
   assert.strictEqual(draft.route.id, candidate.id);
@@ -194,40 +215,39 @@ const hiddenGemLaneInventory = buildExploreGuidanceReadyInventory({
   hiddenGemRoutes: hiddenGemLaneRoutes,
   selectedSourceKind: 'hidden_gem',
 });
-assert.strictEqual(hiddenGemLaneInventory.discoverableCandidateSet.candidates.length, 20);
+assert.strictEqual(hiddenGemLaneInventory.discoverableCandidateSet.candidates.length, 25);
 assert(
   hiddenGemLaneInventory.discoverableCandidateSet.candidates.every(
     (candidate) => candidate.sourceKind === 'hidden_gem',
   ),
-  'Source-lane filtering must run before the combined inventory applies its top-20 slice.',
+  'Source-lane filtering must preserve every eligible candidate in the selected lane.',
 );
 const trailPackLaneInventory = buildExploreGuidanceReadyInventory({
   trailPacks: trailPackLaneRoutes,
   hiddenGemRoutes: hiddenGemLaneRoutes,
   selectedSourceKind: 'trail_pack',
 });
-assert.strictEqual(trailPackLaneInventory.discoverableCandidateSet.candidates.length, 20);
+assert.strictEqual(trailPackLaneInventory.discoverableCandidateSet.candidates.length, 25);
 assert(
   trailPackLaneInventory.discoverableCandidateSet.candidates.every(
     (candidate) => candidate.sourceKind === 'trail_pack',
   ),
-  'Changing source filters must start a new source-specific result set that remains capped at 20.',
+  'Changing source filters must start a new source-specific result set without inheriting the prior lane.',
 );
 
 const discoverSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'discover.tsx'), 'utf8');
-assert(discoverSource.includes('testID="explore-route-search-cap-notice"'));
 assert(discoverSource.includes('testID="explore-favorites-search-cap-notice"'));
-assert(discoverSource.includes('ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE'));
 assert(
   discoverSource.includes('return capUniqueRankedRoutes(ranked, (favorite) => favorite.sourceTrailId);'),
-  'Filtered Favorites route results must use the same total-search cap.',
+  'The unrelated Favorites render guard must remain unchanged.',
 );
 assert(
-  discoverSource.includes('Math.min(ECS_ROUTE_SEARCH_RESULT_LIMIT, totalQualifyingRouteCount)'),
-  'Explorer result messaging must not advertise more visible routes than the total-search cap.',
+  discoverSource.includes('const totalRouteCount = totalQualifyingRouteCount;'),
+  'Explorer result messaging must not truncate the loaded route count to a render window.',
 );
-assert(!discoverSource.includes('handleLoadNextRouteCatalogPage'));
-assert(!discoverSource.includes('testID="explore-guidance-ready-load-next-provider-page"'));
-assert(!discoverSource.includes('SHOW MORE ROUTES'));
+assert(discoverSource.includes('handleLoadNextRouteCatalogPage'));
+assert(discoverSource.includes('testID="explore-guidance-ready-load-next-provider-page"'));
+assert(discoverSource.includes('testID="explore-guidance-ready-show-more-loaded"'));
+assert(discoverSource.includes('LOAD MORE VERIFIED ROUTES'));
 
-console.log('Explore total-search route cap checks passed.');
+console.log('Explore ranked-page continuation and render-window checks passed.');

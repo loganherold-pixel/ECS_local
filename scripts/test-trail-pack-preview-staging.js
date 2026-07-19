@@ -62,6 +62,8 @@ require.extensions['.tsx'] = compileTypescript;
 
 const {
   buildExploreNavigationPayload,
+  canStageNavigationHandoffRoute,
+  getNavigationHandoffRouteUnavailableReason,
 } = require(path.join(root, 'lib', 'navigationHandoffStore.ts'));
 const {
   canStartTrailPackGuidance,
@@ -247,21 +249,38 @@ assert(
     !previewSource.includes('detailDataUsed'),
   'Trail Pack preview should show concise Route Assessment detail while removing separate Confidence Signals and Data Used containers',
 );
-assert(
-  discoverSource.includes('Trail Pack staged. Navigate to the route start before beginning guidance.') &&
-    discoverSource.includes('routeStartDistanceMiles') &&
-    discoverSource.includes('TrailPackPreviewModal') &&
-    discoverSource.includes('fetchRouteCatalogTrailPackDetail') &&
-    discoverSource.includes('trailPackPreviewDetailStatus') &&
-    discoverSource.includes('onCacheOffline={() =>') &&
-    discoverSource.includes('handleCacheTrailPackOffline(trailPackPreview)'),
-  'Explore should stage Trail Packs into Navigate with a clear far-from-start message, fetch detail metadata, and wire cache action for previews',
+assert.strictEqual(
+  canStageNavigationHandoffRoute(payload),
+  true,
+  'A valid Trail Pack transformation should produce a stageable navigation handoff.',
 );
-assert(
-  discoverSource.includes('confidenceScore: current.confidenceScore') &&
-    discoverSource.includes('confidenceReasons: current.confidenceReasons'),
-  'Trail Pack detail hydration should not overwrite the route-specific evaluated confidence already shown on the card.',
+assert.strictEqual(getNavigationHandoffRouteUnavailableReason(payload), null);
+assert.strictEqual(
+  payload.routeMetadata.confidenceScore,
+  loopTrailPack.confidenceScore,
+  'The staging transformation should preserve the route-specific confidence source of truth.',
 );
+
+const summaryOnlyPayload = buildExploreNavigationPayload(
+  trailPackToExpeditionOpportunity(missingGeometryPack),
+);
+assert.strictEqual(
+  canStageNavigationHandoffRoute(summaryOnlyPayload),
+  true,
+  'A summary Trail Pack with a safe center fallback may be staged without fabricating detail geometry.',
+);
+assert.strictEqual(
+  canStartTrailPackGuidance(missingGeometryPack),
+  false,
+  'Summary-first staging must not bypass the geometry gate for active guidance.',
+);
+assert.strictEqual(
+  canStartTrailPackGuidance(disconnectedAggregatePack),
+  false,
+  'The staging contract must continue to reject unsafe disconnected guidance geometry.',
+);
+assert.strictEqual(payload.routeMetadata.source, 'trail_pack');
+assert.strictEqual(payload.routeMetadata.trailPackId, loopTrailPack.id);
 assert(
   discoverSource.includes("handleTrailPackFeedback(trailPackPreview.id, 'saved')"),
   'Saving a Trail Pack from preview should keep structured feedback connected',

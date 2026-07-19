@@ -1,10 +1,11 @@
 import type { RouteCatalogSummary } from '../routeDataContracts';
+import { normalizeExploreAccessContextPartition } from '../auth/exploreAccessContextPartition';
 import {
-  capUniqueRankedRoutes,
-  normalizeRouteSearchResultLimit,
+  dedupeUniqueRankedRoutes,
+  normalizeRouteSearchPageSize,
 } from './routeSearchResultPolicy';
 
-export const EXPLORE_CATALOG_SUMMARY_CACHE_KEY = 'explore.catalog.summary.v3';
+export const EXPLORE_CATALOG_SUMMARY_CACHE_KEY = 'explore.catalog.summary.v5';
 export const EXPLORE_CATALOG_SUMMARY_CACHE_TTL_MS = 15 * 60 * 1000;
 export const EXPLORE_CATALOG_SUMMARY_CACHE_STALE_MS = 6 * 60 * 60 * 1000;
 
@@ -48,13 +49,22 @@ function normalizeRegionId(regionId: string): string {
 }
 
 export function exploreCatalogRegionCacheKey(regionId: string): string {
-  return `explore.catalog.region.${normalizeRegionId(regionId)}.v3`;
+  return `explore.catalog.region.${normalizeRegionId(regionId)}.v5`;
+}
+
+export function exploreCatalogAccessCacheKey(
+  baseKey: string,
+  accessContextPartition: unknown,
+): string {
+  const partition = normalizeExploreAccessContextPartition(accessContextPartition)
+    .replace(/[^a-z0-9]+/gi, '-');
+  return `${baseKey}.access.${partition}`;
 }
 
 function normalizeCachedSummaries(
   summaries: readonly RouteCatalogSummary[],
 ): RouteCatalogSummary[] {
-  return capUniqueRankedRoutes(summaries, (summary) => summary.routeId);
+  return dedupeUniqueRankedRoutes(summaries, (summary) => summary.routeId);
 }
 
 export function createRouteCatalogSummaryCache(
@@ -105,7 +115,7 @@ export function paginateRouteCatalogSummaries(
   options: { pageIndex?: number; pageSize?: number } = {},
 ): RouteCatalogSummaryPage {
   const rankedSummaries = normalizeCachedSummaries(summaries);
-  const pageSize = normalizeRouteSearchResultLimit(options.pageSize);
+  const pageSize = normalizeRouteSearchPageSize(options.pageSize);
   const totalItems = rankedSummaries.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
   const requestedPageIndex = Number(options.pageIndex);

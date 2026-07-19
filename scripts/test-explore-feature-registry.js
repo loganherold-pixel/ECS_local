@@ -204,10 +204,20 @@ assertIncludes(
 assertIncludes(tripBuilderSource, 'buildTripPlan({', 'Trip Builder screen should use the planning service.');
 assertIncludes(tripBuilderSource, 'testID="trip-builder-results"', 'Trip Builder screen should render generated results.');
 assertIncludes(offlinePrepSource, 'Offline Prep Pack', 'Offline Prep Pack screen should be clearly labeled.');
-assertIncludes(
-  offlinePrepSource,
-  'Save route essentials for low-service travel.',
-  'Offline Prep Pack should use concise field-oriented helper copy.',
+const offlinePrepFeature = registry.getExploreFeatureById('offline_prep_pack');
+assert.ok(offlinePrepFeature, 'Offline Prep Pack should be discoverable through the Explore feature registry API.');
+assert.strictEqual(offlinePrepFeature.category, 'planning');
+assert.strictEqual(offlinePrepFeature.status, 'live');
+assert.strictEqual(offlinePrepFeature.enabled, true);
+assert.strictEqual(offlinePrepFeature.route, '/explore-offline-prep-pack');
+assert.ok(
+  registry.getVisibleExploreFeatures().some((feature) => feature.id === offlinePrepFeature.id),
+  'An enabled Offline Prep Pack should be returned by the public visible-feature query.',
+);
+assert.strictEqual(
+  routeManifest.getRouteFeatureRequirement(offlinePrepFeature.route),
+  offlinePrepFeature.centralFeatureId,
+  'Offline Prep execution should target the route protected by the same registered capability.',
 );
 assertIncludes(offlinePrepSource, 'buildOfflinePrepPackManifest(selectedInput)', 'Offline Prep Pack screen should use the manifest service.');
 assertIncludes(offlinePrepSource, 'testID="offline-prep-manifest"', 'Offline Prep Pack screen should render generated manifests.');

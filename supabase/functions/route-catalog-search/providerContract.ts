@@ -1,9 +1,9 @@
-export const ROUTE_CATALOG_SEARCH_RESULT_LIMIT = 20;
-// Keep provider inspection capacity separate from the consumer-facing result
+export const ROUTE_CATALOG_DEFAULT_PAGE_SIZE = 50;
+// Keep provider inspection capacity separate from the consumer-facing page
 // contract. The Edge Function may inspect a wider bounded candidate set so
-// restricted rows and duplicate identities never consume one of the 20 slots.
+// restricted rows and duplicate identities never consume page slots.
 export const ROUTE_CATALOG_CANDIDATE_INSPECTION_LIMIT = 500;
-export const ROUTE_CATALOG_MAX_PAGE_SIZE = ROUTE_CATALOG_SEARCH_RESULT_LIMIT;
+export const ROUTE_CATALOG_MAX_PAGE_SIZE = 50;
 export const ROUTE_CATALOG_MAX_PAGINATION_WINDOW = 2_000;
 export const ROUTE_CATALOG_CURSOR_VERSION = 1;
 export const ROUTE_CATALOG_CURSOR_MAX_LENGTH = 512;
@@ -573,10 +573,10 @@ export function partitionRouteCatalogRecordsForPage(
 export function normalizeRouteCatalogResultLimit(value: unknown): number {
   const requestedLimit = readNumber(value);
   if (requestedLimit == null || requestedLimit <= 0) {
-    return ROUTE_CATALOG_SEARCH_RESULT_LIMIT;
+    return ROUTE_CATALOG_DEFAULT_PAGE_SIZE;
   }
   return Math.min(
-    ROUTE_CATALOG_SEARCH_RESULT_LIMIT,
+    ROUTE_CATALOG_MAX_PAGE_SIZE,
     Math.max(1, Math.floor(requestedLimit)),
   );
 }
@@ -597,12 +597,15 @@ function routeCatalogRecordIdentity(record: UnknownRecord): string {
 }
 
 /**
- * Applies the public total-search contract after provider filtering and ranking.
- * Candidate inspection remains wider and independently bounded by the caller.
+ * Applies one public page after provider filtering, deterministic ranking, and
+ * stable-identity deduplication. Candidate inspection remains wider and
+ * independently bounded by the caller.
  */
 export function selectRouteCatalogSearchResults(
   values: UnknownRecord[],
   options: {
+    offset?: unknown;
+    pageSize?: unknown;
     requestedLimit?: unknown;
     compareRecords?: (left: UnknownRecord, right: UnknownRecord) => number;
   } = {},
@@ -612,6 +615,7 @@ export function selectRouteCatalogSearchResults(
   revealableMatchedCount: number;
   additionalMatchesAvailable: boolean;
   resultLimit: number;
+  hasMoreRevealable: boolean;
 } {
   const partition = partitionRestrictedRouteCatalogRecords(values);
   const rankedRecords = [...partition.records].sort((left, right) => {
@@ -633,13 +637,18 @@ export function selectRouteCatalogSearchResults(
     seen.add(identity);
     uniqueRankedRecords.push(record);
   });
-  const resultLimit = normalizeRouteCatalogResultLimit(options.requestedLimit);
+  const resultLimit = normalizeRouteCatalogResultLimit(
+    options.pageSize ?? options.requestedLimit,
+  );
+  const offset = Math.max(0, Math.floor(readNumber(options.offset) ?? 0));
+  const windowEnd = offset + resultLimit;
   return {
-    records: uniqueRankedRecords.slice(0, resultLimit),
+    records: uniqueRankedRecords.slice(offset, windowEnd),
     diagnosticRecords: partition.diagnosticRecords,
     revealableMatchedCount: uniqueRankedRecords.length,
-    additionalMatchesAvailable: uniqueRankedRecords.length > resultLimit,
+    additionalMatchesAvailable: uniqueRankedRecords.length > windowEnd,
     resultLimit,
+    hasMoreRevealable: uniqueRankedRecords.length > windowEnd,
   };
 }
 
@@ -661,16 +670,20 @@ export function normalizeRouteCatalogPagination(
   windowEnd: number;
   windowExceeded: boolean;
 } {
+  const requestedPage = readNumber(value.page);
   const requestedPageSize = readNumber(value.pageSize ?? value.page_size ?? value.limit);
   const pageSize = normalizeRouteCatalogResultLimit(requestedPageSize);
+  const page = requestedPage != null && requestedPage >= 1 ? Math.floor(requestedPage) : 1;
+  const explicitOffset = readNumber(value.offset);
+  const offset = explicitOffset != null && explicitOffset >= 0
+    ? Math.floor(explicitOffset)
+    : (page - 1) * pageSize;
+  const windowEnd = offset + pageSize;
   return {
-    // Public route search is a single bounded result set. Page/offset inputs are
-    // intentionally normalized away so callers cannot accumulate more than 20
-    // routes by replaying the same search with continuation parameters.
-    page: 1,
+    page,
     pageSize,
-    offset: 0,
-    windowEnd: pageSize,
-    windowExceeded: false,
+    offset,
+    windowEnd,
+    windowExceeded: windowEnd > ROUTE_CATALOG_MAX_PAGINATION_WINDOW,
   };
 }

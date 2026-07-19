@@ -128,6 +128,10 @@ import {
   sanitizeAuthLogPayload,
 } from '../lib/auth/authLogRedaction';
 import {
+  createExploreAccessContextPartition,
+  EXPLORE_ANONYMOUS_ACCESS_PARTITION,
+} from '../lib/auth/exploreAccessContextPartition';
+import {
   canReuseOperatorInfoSnapshot,
   resolveCachedOperatorAccessSnapshot,
 } from '../lib/auth/offlineAccessPolicy';
@@ -163,6 +167,7 @@ import {
   markStartupPhase,
 } from '../lib/startupDiagnostics';
 import { ecsLog } from '../lib/ecsLogger';
+import { transitionLiveTrailPackCatalogAccessContext } from '../lib/explore/liveTrailPackCatalog';
 
 
 
@@ -620,6 +625,10 @@ async function ensureStartupHydration(): Promise<StartupHydrationResult> {
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<any | null>(null);
+  const exploreAccessContextPartition = useMemo(
+    () => createExploreAccessContextPartition(user),
+    [user],
+  );
   const [authLoading, setAuthLoading] = useState(true);
   const [signInPending, setSignInPending] = useState(false);
   const signInAttemptRef = useRef<Promise<SignInResult> | null>(null);
@@ -820,6 +829,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     realtimeSync.destroy();
     syncActionQueue.unbindActor();
     loadoutSyncQueue.stopAutoProcess();
+    transitionLiveTrailPackCatalogAccessContext(EXPLORE_ANONYMOUS_ACCESS_PARTITION);
     void import('../lib/convoy/convoyLocationPublisher')
       .then(({ stopConvoyLocationSharing }) =>
         stopConvoyLocationSharing('Auth session ended. Live sharing stopped.'),
@@ -856,6 +866,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setPersistedOfflineMode(true);
     setOfflineMode(true);
   }, []);
+
+  useEffect(() => {
+    transitionLiveTrailPackCatalogAccessContext(exploreAccessContextPartition);
+  }, [exploreAccessContextPartition]);
 
   const exitOfflineMode = useCallback(() => {
     setPersistedOfflineMode(false);

@@ -49,9 +49,6 @@ const {
   resolveRouteCatalogVehicleClass,
 } = require(path.join(root, 'lib', 'explore', 'liveTrailPackCatalog.ts'));
 const {
-  ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE,
-} = require(path.join(root, 'lib', 'explore', 'routeSearchResultPolicy.ts'));
-const {
   nextRouteCatalogCandidateInspectionBatch,
 } = require(path.join(
   root,
@@ -223,9 +220,9 @@ assert.deepStrictEqual(
     loadedCatalogCount: 20,
     matchedCatalogCount: 51,
     visibleCatalogCardCount: 20,
-    label: ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE,
+    label: '20 OF 51 CATALOG ROUTES LOADED',
   },
-  'Consumer pagination should keep loaded cards visible while truthfully reporting additional matches under the total-search cap.',
+  'Consumer pagination should keep loaded cards visible while truthfully reporting reachable additional matches.',
 );
 
 console.log('Explore route catalog field-test visibility checks passed');

@@ -1,4 +1,5 @@
 const assert = require('assert');
+const { spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const ts = require('typescript');
@@ -45,6 +46,9 @@ function route(id = 'telemetry-trail', origin = preciseOrigin) {
         [-110.554321, 38.223456],
       ],
     },
+    sourceUrl: 'https://private.example.test/source-record',
+    userEmail: 'private-person@example.test',
+    accessToken: 'private-user-token',
   };
 }
 
@@ -87,7 +91,18 @@ const placesAdapter = {
   },
 };
 
-async function main() {
+const DIAGNOSTICS_ENABLED_ENV = 'ECS_SUPPORT_DIAGNOSTICS_ENABLED';
+const DIAGNOSTICS_APPROVED_ENV = 'ECS_SUPPORT_DIAGNOSTICS_APPROVED';
+
+async function main(approvedDiagnostics) {
+  if (approvedDiagnostics) {
+    assert.strictEqual(process.env[DIAGNOSTICS_ENABLED_ENV], '1');
+    assert.strictEqual(process.env[DIAGNOSTICS_APPROVED_ENV], '1');
+  } else {
+    assert.strictEqual(process.env[DIAGNOSTICS_ENABLED_ENV], undefined);
+    assert.strictEqual(process.env[DIAGNOSTICS_APPROVED_ENV], undefined);
+  }
+
   clearRouteContextTelemetryEvents();
   const sinkEvents = [];
   setRouteContextTelemetrySink((event, properties) => {
@@ -128,6 +143,9 @@ async function main() {
   assert.ok(!serializedEvents.includes('secret-polyline-not-for-logs'));
   assert.ok(!serializedEvents.includes('123 Sensitive Address'));
   assert.ok(!serializedEvents.includes('Exact Place Name'));
+  assert.ok(!serializedEvents.includes('https://private.example.test/source-record'));
+  assert.ok(!serializedEvents.includes('private-person@example.test'));
+  assert.ok(!serializedEvents.includes('private-user-token'));
   assert.ok(events.every((entry) => entry.properties.providers == null || typeof entry.properties.providers.supplyAvailable === 'boolean'));
 
   clearRouteContextTelemetryEvents();
@@ -206,12 +224,32 @@ async function main() {
     selectedSupplyMode: 'none',
   });
   const debugLogs = ecsLog.getLogsByCategory('ROUTE_CONTEXT');
-  assert.ok(debugLogs.length > 0);
+  assert.strictEqual(
+    debugLogs.length > 0,
+    approvedDiagnostics,
+    approvedDiagnostics
+      ? 'Explicitly approved support diagnostics should capture detailed Route Context entries.'
+      : 'Detailed Route Context entries must remain suppressed by default.',
+  );
+  if (approvedDiagnostics) {
+    assert.ok(
+      debugLogs.every((entry) =>
+        entry.level === 'DEBUG' &&
+        entry.category === 'ROUTE_CONTEXT' &&
+        typeof entry.message === 'string' &&
+        entry.details != null &&
+        typeof entry.details === 'object'),
+      'Approved diagnostics should use structured Route Context debug entries.',
+    );
+  }
   const serializedDebugLogs = JSON.stringify(debugLogs);
   assert.ok(!serializedDebugLogs.includes('38.123456'));
   assert.ok(!serializedDebugLogs.includes('-110.654321'));
   assert.ok(!serializedDebugLogs.includes('secret-polyline-not-for-logs'));
   assert.ok(!serializedDebugLogs.includes('Precise Trailhead Name'));
+  assert.ok(!serializedDebugLogs.includes('https://private.example.test/source-record'));
+  assert.ok(!serializedDebugLogs.includes('private-person@example.test'));
+  assert.ok(!serializedDebugLogs.includes('private-user-token'));
 
   const sanitized = sanitizeRouteContextDebugPayload({
     lat: 38.123456,
@@ -219,22 +257,62 @@ async function main() {
     address: '123 Sensitive Address',
     encodedPolyline: 'secret-polyline-not-for-logs',
     providerApiKey: 'super-secret-key',
+    accessToken: 'private-user-token',
   });
   assert.strictEqual(sanitized.lat, 38.12);
   assert.strictEqual(sanitized.lng, -110.65);
   assert.strictEqual(sanitized.address, '[redacted_text]');
   assert.strictEqual(sanitized.encodedPolyline, '[redacted_geometry]');
   assert.strictEqual(sanitized.providerApiKey, '[redacted]');
+  assert.strictEqual(sanitized.accessToken, '[redacted]');
+  const serializedSanitized = JSON.stringify(sanitized);
+  for (const privateValue of [
+    '38.123456',
+    '-110.654321',
+    'private-user-token',
+  ]) {
+    assert.ok(!serializedSanitized.includes(privateValue), `Sanitized diagnostics must omit ${privateValue}.`);
+  }
 
   setRouteContextTelemetrySink(null);
 }
 
-main()
-  .then(() => {
-    console.log('Route Context privacy-safe telemetry checks passed.');
-  })
-  .catch((error) => {
-    setRouteContextTelemetrySink(null);
-    console.error(error);
-    process.exit(1);
+function runIsolatedMode(mode) {
+  const env = { ...process.env };
+  delete env[DIAGNOSTICS_ENABLED_ENV];
+  delete env[DIAGNOSTICS_APPROVED_ENV];
+  if (mode === 'approved') {
+    env[DIAGNOSTICS_ENABLED_ENV] = '1';
+    env[DIAGNOSTICS_APPROVED_ENV] = '1';
+  }
+
+  const child = spawnSync(process.execPath, [__filename, `--diagnostics-mode=${mode}`], {
+    cwd: root,
+    env,
+    encoding: 'utf8',
   });
+  if (child.status !== 0) {
+    process.stderr.write(child.stdout || '');
+    process.stderr.write(child.stderr || '');
+  }
+  assert.strictEqual(child.status, 0, `${mode} diagnostics subprocess should pass.`);
+}
+
+const modeArgument = process.argv.find((argument) => argument.startsWith('--diagnostics-mode='));
+if (!modeArgument) {
+  runIsolatedMode('default');
+  runIsolatedMode('approved');
+  console.log('Route Context telemetry default/approved isolation checks passed.');
+} else {
+  const diagnosticsMode = modeArgument.slice('--diagnostics-mode='.length);
+  assert.ok(['default', 'approved'].includes(diagnosticsMode), 'Diagnostics test mode should be explicit.');
+  main(diagnosticsMode === 'approved')
+    .then(() => {
+      console.log(`Route Context ${diagnosticsMode} telemetry checks passed.`);
+    })
+    .catch((error) => {
+      setRouteContextTelemetrySink(null);
+      console.error(error);
+      process.exit(1);
+    });
+}

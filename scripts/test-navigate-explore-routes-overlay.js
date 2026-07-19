@@ -177,10 +177,11 @@ assert(
   'Explorer route map preview must clear stale route handoffs, stage the filtered route handoff, and switch to Navigate.',
 );
 assert(
-  discover.includes('const EXPLORE_MAP_HANDOFF_MAX_ROUTES = ECS_ROUTE_SEARCH_RESULT_LIMIT') &&
+  discover.includes('const EXPLORE_MAP_HANDOFF_MAX_ROUTES = 60') &&
     discover.includes('maxRenderedRoutes: EXPLORE_MAP_HANDOFF_MAX_ROUTES') &&
-    !discover.includes('maxRenderedRoutes: Math.max(EXPLORE_MAP_HANDOFF_MAX_ROUTES, exploreMapPreviewRouteCounts.total)'),
-  'Explorer map handoff must enforce the same total-search cap instead of expanding to every catalog match.',
+    overlay.includes('normalizeRouteSearchResultLimit(args.maxRenderedRoutes)') &&
+    discover.includes('testID="explore-guidance-ready-load-next-provider-page"'),
+  'Explorer map rendering should keep its own bounded overlay budget without disabling route-card provider continuation.',
 );
 assert(
   discover.includes('buildExploreGuidanceReadyInventory({') &&

@@ -20,10 +20,7 @@ import {
 import { normalizeExploreDiscoveryItems } from './exploreDiscoveryItem';
 import { normalizeNavigationGuidanceGeometry } from '../navigationCatalogGuidanceGeometry';
 import { routeAllowsLoopGuidance } from '../navigation/routeLoopGuidancePolicy';
-import {
-  ECS_ROUTE_SEARCH_RESULT_LIMIT,
-  capUniqueRankedRoutes,
-} from './routeSearchResultPolicy';
+import { dedupeUniqueRankedRoutes } from './routeSearchResultPolicy';
 
 export const EXPLORE_GUIDANCE_READY_EXCLUSION_CODES = [
   'missing_geometry',
@@ -112,8 +109,6 @@ export type ExploreGuidanceReadyInventory = {
   hiddenReasons: ExploreWizardHiddenRoute[];
   exclusions: ExploreGuidanceReadyRouteExclusion[];
   exclusionTotal: number;
-  resultLimit: number;
-  additionalMatchesAvailable: boolean;
   rangeHiddenTotal: number;
   rangeHiddenBySource: Record<ExploreWizardRouteSourceKind, number>;
   rangeHiddenReasons: ExploreWizardHiddenRoute[];
@@ -1284,7 +1279,7 @@ function buildForRefinement(
   const qualifyingTotal = projectedCandidates.length;
   const projected = {
     ...normalized,
-    candidates: capUniqueRankedRoutes(
+    candidates: dedupeUniqueRankedRoutes(
       [...projectedCandidates].sort(compareExploreWizardCandidates),
       (candidate) => candidate.id,
     ),
@@ -1417,9 +1412,6 @@ export function buildExploreGuidanceReadyInventory(
     hiddenReasons: candidateSet.hiddenReasons,
     exclusions: candidateSet.exclusions,
     exclusionTotal: candidateSet.exclusions.length,
-    resultLimit: ECS_ROUTE_SEARCH_RESULT_LIMIT,
-    additionalMatchesAvailable:
-      discoverableCandidateSet.qualifyingTotal > ECS_ROUTE_SEARCH_RESULT_LIMIT,
     rangeHiddenTotal: rangeHiddenCandidateSet.hiddenTotal,
     rangeHiddenBySource: rangeHiddenCandidateSet.hiddenBySource,
     rangeHiddenReasons: rangeHiddenCandidateSet.hiddenReasons,

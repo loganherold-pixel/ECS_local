@@ -83,20 +83,24 @@ const expectedTopRouteIds = Array.from(
   { length: 20 },
   (_, index) => `route-${String(index).padStart(2, '0')}`,
 );
+const expectedUniqueRouteIds = Array.from(
+  { length: 51 },
+  (_, index) => `route-${String(index).padStart(2, '0')}`,
+);
 
 async function run() {
-  assert.equal(EXPLORE_CATALOG_SUMMARY_CACHE_KEY, 'explore.catalog.summary.v3');
+  assert.equal(EXPLORE_CATALOG_SUMMARY_CACHE_KEY, 'explore.catalog.summary.v5');
   assert.equal(
     exploreCatalogRegionCacheKey('Privacy Safe Region'),
-    'explore.catalog.region.privacy-safe-region.v3',
+    'explore.catalog.region.privacy-safe-region.v5',
   );
 
   const cache = createRouteCatalogSummaryCache({ ttlMs: 1_000, staleMs: 1_000 });
   cache.set(EXPLORE_CATALOG_SUMMARY_CACHE_KEY, rankedSummaries, 1_000);
   assert.deepEqual(
     cache.entries.get(EXPLORE_CATALOG_SUMMARY_CACHE_KEY).summaries.map((item) => item.routeId),
-    expectedTopRouteIds,
-    'Cache writes must retain the supplied ranking while deduplicating and capping at 20.',
+    expectedUniqueRouteIds,
+    'Cache writes must retain every loaded page in supplied rank order while deduplicating.',
   );
 
   cache.entries.set(EXPLORE_CATALOG_SUMMARY_CACHE_KEY, {
@@ -107,27 +111,27 @@ async function run() {
   assert.equal(defensiveRead.status, 'hit');
   assert.deepEqual(
     defensiveRead.summaries.map((item) => item.routeId),
-    expectedTopRouteIds,
-    'Cache reads must normalize an oversized pre-contract entry before exposing it.',
+    expectedUniqueRouteIds,
+    'Cache reads must normalize a pre-contract entry without making later routes unreachable.',
   );
   assert.equal(
     cache.entries.get(EXPLORE_CATALOG_SUMMARY_CACHE_KEY).summaries.length,
-    20,
-    'A defensive read must replace an oversized in-memory entry with its bounded form.',
+    51,
+    'A defensive read must replace duplicate entries without truncating the loaded route family.',
   );
 
   const defaultPage = paginateRouteCatalogSummaries(rankedSummaries);
-  assert.equal(defaultPage.pageSize, 20);
-  assert.equal(defaultPage.totalItems, 20);
-  assert.equal(defaultPage.totalPages, 1);
-  assert.deepEqual(defaultPage.items.map((item) => item.routeId), expectedTopRouteIds);
+  assert.equal(defaultPage.pageSize, 50);
+  assert.equal(defaultPage.totalItems, 51);
+  assert.equal(defaultPage.totalPages, 2);
+  assert.deepEqual(defaultPage.items.map((item) => item.routeId), expectedUniqueRouteIds.slice(0, 50));
 
   const oversizedPage = paginateRouteCatalogSummaries(rankedSummaries, {
     pageIndex: 0,
     pageSize: 500,
   });
-  assert.equal(oversizedPage.pageSize, 20, 'Oversized summary page limits must clamp to 20.');
-  assert.equal(oversizedPage.items.length, 20);
+  assert.equal(oversizedPage.pageSize, 50, 'Oversized summary page limits must clamp to 50.');
+  assert.equal(oversizedPage.items.length, 50);
 
   const planningRoutes = rankedSummaries.map((item) => ({
     id: item.routeId,

@@ -304,7 +304,7 @@ function postMigrationFixtureResponse(overrides = {}) {
   };
 }
 
-const totalSearchFixtureRecords = Array.from({ length: 51 }, (_, index) => ({
+const totalSearchFixtureRecords = Array.from({ length: 20 }, (_, index) => ({
   ...lightweightRouteRecord(`total-search-route-${String(index).padStart(2, '0')}`, {
     name: `Total search route ${String(index).padStart(2, '0')}`,
     updatedAt: '2026-07-18T00:00:00.000Z',
@@ -339,8 +339,12 @@ function totalSearchResponse(overrides = {}) {
         safeDiagnosticCount: diagnosticRecords.length,
         anySourceBackedCandidateCount: records.length + diagnosticRecords.length,
         returnedCount: records.length,
-        resultLimit: 20,
-        additionalMatchesAvailable: records.length > 20,
+        paginationContractVersion: 'route_catalog_ranked_page_v1',
+        page: 1,
+        pageSize: 50,
+        offset: 0,
+        resultLimit: 50,
+        additionalMatchesAvailable: false,
         hasMore: false,
         nextPage: null,
         totalMatchedCount: records.length,
@@ -462,18 +466,18 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
     page: 2,
     pageSize: 25,
   });
-  assert.strictEqual(secondPageBody.limit, 20);
-  assert.strictEqual(secondPageBody.page, 1);
-  assert.strictEqual(secondPageBody.pageSize, 20);
-  assert.strictEqual(secondPageBody.offset, 0);
+  assert.strictEqual(secondPageBody.limit, 25);
+  assert.strictEqual(secondPageBody.page, 2);
+  assert.strictEqual(secondPageBody.pageSize, 25);
+  assert.strictEqual(secondPageBody.offset, 25);
   assert.strictEqual(
     secondPageBody.paginationContractVersion,
-    'route_catalog_total_search_v1',
+    'route_catalog_ranked_page_v1',
   );
-  assert.strictEqual(
+  assert.notStrictEqual(
     createLiveTrailPackCatalogRefreshKey({ ...criteria, page: 1, pageSize: 25 }),
     createLiveTrailPackCatalogRefreshKey({ ...criteria, page: 2, pageSize: 25 }),
-    'Page identity must not create a continuation-capable variant of the same logical search.',
+    'Each network page needs a distinct request identity even though page merging uses a shared search family.',
   );
 
   responses.push(echoRequestIdInResponse(searchResponse([routeRecord()], {
@@ -540,22 +544,22 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   }));
   const secondPage = await refreshLiveTrailPackCatalog(paginatedCriteria);
   assert.strictEqual(secondPage.trailPacks[0].id, 'second-page-route');
-  assert.strictEqual(secondPage.searchMeta.page, 1);
-  assert.strictEqual(secondPage.searchMeta.pageSize, 20);
-  assert.strictEqual(secondPage.searchMeta.offset, 0);
-  assert.strictEqual(secondPage.searchMeta.hasMore, false);
-  assert.strictEqual(secondPage.searchMeta.nextPage, null);
-  assert.strictEqual(secondPage.searchMeta.nextCursor, null);
+  assert.strictEqual(secondPage.searchMeta.page, 2);
+  assert.strictEqual(secondPage.searchMeta.pageSize, 25);
+  assert.strictEqual(secondPage.searchMeta.offset, 25);
+  assert.strictEqual(secondPage.searchMeta.hasMore, true);
+  assert.strictEqual(secondPage.searchMeta.nextPage, 3);
+  assert.strictEqual(secondPage.searchMeta.nextCursor, 'isolated-page-three-cursor');
   assert.strictEqual(secondPage.searchMeta.totalMatchedCount, 51);
   assert.strictEqual(secondPage.searchMeta.totalMatchedCountBounded, true);
   const secondPageInvocation = invocations.find(
     (entry) => entry.name === 'route-catalog-search' && entry.body.radiusMiles === 99,
   );
   assert(secondPageInvocation);
-  assert.strictEqual(secondPageInvocation.body.page, 1);
-  assert.strictEqual(secondPageInvocation.body.pageSize, 20);
-  assert.strictEqual(secondPageInvocation.body.offset, 0);
-  assert.strictEqual('continuationCursor' in secondPageInvocation.body, false);
+  assert.strictEqual(secondPageInvocation.body.page, 2);
+  assert.strictEqual(secondPageInvocation.body.pageSize, 25);
+  assert.strictEqual(secondPageInvocation.body.offset, 25);
+  assert.strictEqual(secondPageInvocation.body.continuationCursor, 'isolated-page-two-cursor');
 
   const legacyEventsBeforePaginationFailure = legacyQueryEvents.length;
   responses.push({ data: null, error: { message: 'Page provider unavailable.' } });
@@ -632,10 +636,11 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   });
   unsubscribeAtomicPage();
   assert.deepStrictEqual(atomicSecondPage.trailPacks.map((route) => route.id), [
+    'atomic-page-one-route',
     'atomic-page-two-route',
   ]);
   assert.strictEqual(atomicSecondPage.refreshKey, atomicBaseKey);
-  assert.strictEqual(atomicSecondPage.searchMeta.page, 1);
+  assert.strictEqual(atomicSecondPage.searchMeta.page, 2);
   assert.strictEqual(atomicSecondPage.coverageState.state, 'ready');
   assert(
     atomicPageEmissions
@@ -644,8 +649,8 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
     'Pagination loading emissions must preserve page-one data for every shared consumer.',
   );
   assert(
-    !atomicPageEmissions.some((entry) => entry.trailPacks.length > 20),
-    'A refresh must never emit more than the total-search cap.',
+    atomicPageEmissions.every((entry) => new Set(entry.trailPacks.map((route) => route.id)).size === entry.trailPacks.length),
+    'Pagination emissions must remain deduplicated while appending new pages.',
   );
 
   responses.push({ data: null, error: { message: 'Atomic page provider unavailable.' } });
@@ -654,15 +659,22 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
     page: 3,
     continuationCursor: atomicSecondPage.searchMeta.nextCursor,
   });
-  assert.strictEqual(atomicPageFailure.status, 'stale');
+  assert.strictEqual(atomicPageFailure.status, 'degraded');
   assert.strictEqual(atomicPageFailure.source, 'route_catalog');
   assert.strictEqual(atomicPageFailure.refreshKey, atomicBaseKey);
-  assert.notStrictEqual(atomicPageFailure.preservedReason, 'pagination_page_unavailable');
+  assert.strictEqual(atomicPageFailure.preservedReason, 'pagination_page_unavailable');
   assert.strictEqual(atomicPageFailure.asyncState.safeErrorCode, 'ROUTE_CATALOG_PROVIDER_UNAVAILABLE');
   assert.strictEqual(atomicPageFailure.asyncState.retryEligible, true);
   assert.deepStrictEqual(atomicPageFailure.trailPacks.map((route) => route.id), [
+    'atomic-page-one-route',
     'atomic-page-two-route',
   ]);
+  const atomicPageFailureSurface = buildProductionExploreSurface(
+    atomicPageFailure,
+    atomicBaseKey,
+  );
+  assert.notStrictEqual(atomicPageFailureSurface.surface.kind, 'blocked');
+  assert.strictEqual(atomicPageFailureSurface.surface.showBlockedNotice, false);
 
   responses.push(searchResponse([routeRecord('atomic-page-three-route')], {
     state: 'ready',
@@ -691,6 +703,8 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   assert.strictEqual(atomicPageRetry.asyncState.safeErrorCode, null);
   assert.strictEqual(atomicPageRetry.asyncState.retryEligible, false);
   assert.deepStrictEqual(atomicPageRetry.trailPacks.map((route) => route.id), [
+    'atomic-page-one-route',
+    'atomic-page-two-route',
     'atomic-page-three-route',
   ]);
 
@@ -710,8 +724,8 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   const cancelledAtomicPage = await cancelledAtomicPageRequest;
   assert.strictEqual(cancelledAtomicPage.status, 'cancelled');
   assert.strictEqual(cancelledAtomicPage.refreshKey, atomicBaseKey);
-  assert.strictEqual(cancelledAtomicPage.trailPacks.length, 1);
-  assert.strictEqual(cancelledAtomicPage.asyncState.resultCount, 1);
+  assert.strictEqual(cancelledAtomicPage.trailPacks.length, 3);
+  assert.strictEqual(cancelledAtomicPage.asyncState.resultCount, 3);
 
   responses.push(new Promise(() => {}));
   const supersededAtomicPage = refreshLiveTrailPackCatalog({
@@ -837,29 +851,32 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   assert.strictEqual(mergedPages.searchMeta.totalMatchedCount, 27);
   assert.strictEqual(mergedPages.refreshKey, mergeBaseKey);
 
-  // Total-search cap acceptance: a 51-record provider payload yields one
-  // deterministic 20-route result set, and stale/delayed continuations cannot
-  // append a twenty-first card.
+  // Ranked-page acceptance: every revealable route remains reachable with
+  // page-size-independent append and stable-identity deduplication.
   const paginationCriteria = {
     ...criteria,
     radiusMiles: 496,
     page: 1,
-    pageSize: 51,
-    limit: 51,
+    pageSize: 50,
+    limit: 50,
   };
   const paginationRefreshKey = createLiveTrailPackCatalogRefreshKey(paginationCriteria);
   const paginationInvocationStart = invocations.length;
-  const pageOneRecords = Array.from({ length: 51 }, (_, index) =>
+  const allFiftyOneRecords = Array.from({ length: 51 }, (_, index) =>
     lightweightRouteRecord(
       `pagination-route-${String(index).padStart(2, '0')}`,
-      { name: `Pagination route ${String(index).padStart(2, '0')}` },
+      {
+        name: `Pagination route ${String(index).padStart(2, '0')}`,
+        ...(index === 50 ? { distance_miles: 3 } : {}),
+      },
     ));
+  const pageOneRecords = allFiftyOneRecords.slice(0, 50);
   responses.push(searchResponse(pageOneRecords, {
     state: 'ready',
     title: 'Verified routes available',
     message: 'The first public route page is available.',
   }, [], {
-    paginationContractVersion: 'route_catalog_public_cursor_page_v2',
+    paginationContractVersion: 'route_catalog_ranked_page_v1',
     nearbyRouteRpcUsed: true,
     nearbyRouteRpc: 'route_catalog_nearby_public_route_cursor_page',
     fallbackQueryUsed: false,
@@ -869,113 +886,108 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
     returnedCount: 50,
     hasMore: true,
     nextPage: 2,
-    nextCursor: 'cursor-page-2',
+    nextCursor: null,
     totalMatchedCount: 51,
-    totalMatchedCountBounded: true,
+    totalMatchedCountBounded: false,
   }));
   const paginationPageOne = await refreshLiveTrailPackCatalog(paginationCriteria);
-  assert.strictEqual(paginationPageOne.trailPacks.length, 20);
-  assert.strictEqual(new Set(paginationPageOne.trailPacks.map((route) => route.id)).size, 20);
-  assert.strictEqual(paginationPageOne.searchMeta.hasMore, false);
-  assert.strictEqual(paginationPageOne.searchMeta.nextPage, null);
+  assert.strictEqual(paginationPageOne.trailPacks.length, 50);
+  assert.strictEqual(new Set(paginationPageOne.trailPacks.map((route) => route.id)).size, 50);
+  assert.strictEqual(paginationPageOne.searchMeta.hasMore, true);
+  assert.strictEqual(paginationPageOne.searchMeta.nextPage, 2);
   assert.strictEqual(paginationPageOne.searchMeta.nextCursor, null);
   const paginationPageOneSurface = buildProductionExploreSurface(
     paginationPageOne,
     paginationRefreshKey,
   );
-  assert.strictEqual(paginationPageOneSurface.visibleCandidates.length, 20);
+  assert.strictEqual(paginationPageOneSurface.visibleCandidates.length, 50);
   assert.strictEqual(paginationPageOneSurface.surface.kind, 'cards');
   assert.strictEqual(
     invocations.length,
     paginationInvocationStart + 1,
-    'Accepting 20 qualifying routes must not trigger an automatic continuation request.',
+    'The client exposes explicit continuation instead of requesting an arbitrarily large first page.',
   );
 
-  const delayedShortPack = {
-    ...paginationPageOne.trailPacks[0],
-    id: 'pagination-short-route',
-    name: 'Pagination short route',
-    distanceMiles: 3,
-  };
-  const delayedShortSummary = {
-    ...paginationPageOne.routeCatalogSummaries[0],
-    routeId: 'pagination-short-route',
-    name: 'Pagination short route',
-    distanceMiles: 3,
-  };
-  const delayedContinuationSnapshot = {
-    ...paginationPageOne,
-    trailPacks: [paginationPageOne.trailPacks[0], delayedShortPack],
-    routeCatalogSummaries: [paginationPageOne.routeCatalogSummaries[0], delayedShortSummary],
-    searchMeta: {
-      ...paginationPageOne.searchMeta,
-      page: 2,
-      offset: 20,
-      returnedCount: 2,
-      hasMore: false,
-      nextPage: null,
-      nextCursor: null,
-    },
-    refreshKey: createLiveTrailPackCatalogRefreshKey({
-      ...paginationCriteria,
-      page: 2,
-      continuationCursor: 'cursor-page-2',
-    }),
-  };
-  const duplicateMerged = mergeLiveTrailPackCatalogPageSnapshots(
-    paginationPageOne,
-    delayedContinuationSnapshot,
+  responses.push(searchResponse([pageOneRecords[0], allFiftyOneRecords[50]], {
+    state: 'ready',
+    title: 'Verified routes available',
+    message: 'The second public route page is available.',
+  }, [], {
+    paginationContractVersion: 'route_catalog_ranked_page_v1',
+    nearbyRouteRpcUsed: true,
+    nearbyRouteRpc: 'route_catalog_nearby_public_route_cursor_page',
+    fallbackQueryUsed: false,
+    page: 2,
+    pageSize: 50,
+    offset: 50,
+    returnedCount: 2,
+    hasMore: false,
+    nextPage: null,
+    nextCursor: null,
+    totalMatchedCount: 51,
+    totalMatchedCountBounded: false,
+  }));
+  const paginationComplete = await refreshLiveTrailPackCatalog({
+    ...paginationCriteria,
+    page: 2,
+  });
+  assert.strictEqual(paginationComplete.trailPacks.length, 51);
+  assert.strictEqual(new Set(paginationComplete.trailPacks.map((route) => route.id)).size, 51);
+  assert.strictEqual(paginationComplete.searchMeta.page, 2);
+  assert.strictEqual(paginationComplete.searchMeta.hasMore, false);
+  assert.strictEqual(paginationComplete.searchMeta.nextPage, null);
+  assert.strictEqual(paginationComplete.searchMeta.additionalMatchesAvailable, false);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.strictEqual(
+    invocations.length,
+    paginationInvocationStart + 2,
+    'Reaching totalMatched must not trigger an unnecessary third request.',
+  );
+  const paginationCompleteSurface = buildProductionExploreSurface(
+    paginationComplete,
     paginationRefreshKey,
   );
-  assert.strictEqual(duplicateMerged.trailPacks.length, 20);
-  assert.strictEqual(new Set(duplicateMerged.trailPacks.map((route) => route.id)).size, 20);
-  assert.deepStrictEqual(
-    duplicateMerged.trailPacks.map((route) => route.id),
-    paginationPageOne.trailPacks.map((route) => route.id),
-    'A delayed continuation must not append a twenty-first card or reorder the accepted set.',
+  assert.strictEqual(paginationCompleteSurface.visibleCandidates.length, 51);
+  const shortContinuationCandidate = paginationCompleteSurface.visibleCandidates.find(
+    (candidate) => candidate.id.includes('pagination-route-50'),
   );
+  assert(shortContinuationCandidate, 'The final short approved route must render after continuation.');
+  assert.strictEqual(shortContinuationCandidate.tripBuilderEligible, true);
+  assert.strictEqual(shortContinuationCandidate.guidanceReady, false);
 
   const rejectedPaginationRadius = mergeLiveTrailPackCatalogPageSnapshots(
-    paginationPageOne,
+    paginationComplete,
     {
-      ...delayedContinuationSnapshot,
+      ...paginationComplete,
       refreshKey: createLiveTrailPackCatalogRefreshKey({
         ...paginationCriteria,
         radiusMiles: 495,
-        page: 2,
+        page: 3,
       }),
     },
     paginationRefreshKey,
   );
-  assert.strictEqual(rejectedPaginationRadius.trailPacks.length, 20);
-  assert(
-    !rejectedPaginationRadius.trailPacks.some((route) => route.id === 'pagination-short-route'),
-    'A page from an obsolete radius must not merge into the current request family.',
-  );
+  assert.strictEqual(rejectedPaginationRadius.trailPacks.length, 51);
   const rejectedPaginationFilter = mergeLiveTrailPackCatalogPageSnapshots(
-    paginationPageOne,
+    paginationComplete,
     {
-      ...delayedContinuationSnapshot,
+      ...paginationComplete,
       refreshKey: createLiveTrailPackCatalogRefreshKey({
         ...paginationCriteria,
         difficulty: 'hard',
-        page: 2,
+        page: 3,
       }),
     },
     paginationRefreshKey,
   );
-  assert.strictEqual(rejectedPaginationFilter.trailPacks.length, 20);
-  assert(
-    !rejectedPaginationFilter.trailPacks.some((route) => route.id === 'pagination-short-route'),
-    'A page from an obsolete filter set must not merge into the current request family.',
-  );
+  assert.strictEqual(rejectedPaginationFilter.trailPacks.length, 51);
 
   const paginationProgress = buildRouteCatalogPaginationProgress({
-    loadedCatalogCount: 20,
+    loadedCatalogCount: 50,
     totalMatchedCount: 51,
-    totalMatchedCountBounded: true,
-    visibleCatalogCardCount: 20,
-    visibleCandidateCount: 42,
+    totalMatchedCountBounded: false,
+    visibleCatalogCardCount: 50,
+    visibleCandidateCount: 72,
   });
   assert.deepStrictEqual(
     {
@@ -985,20 +997,118 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
       visibleCatalog: paginationProgress.visibleCatalogCardCount,
       nonCatalog: paginationProgress.nonCatalogCandidateCount,
     },
-    { loaded: 20, matched: 51, lowerBound: true, visibleCatalog: 20, nonCatalog: 22 },
+    { loaded: 50, matched: 51, lowerBound: false, visibleCatalog: 50, nonCatalog: 22 },
   );
-  assert.strictEqual(
-    paginationProgress.label,
-    'Showing the 20 best matches. Refine the search area or filters to narrow the results.',
-  );
+  assert.match(paginationProgress.label, /50 OF 51 CATALOG ROUTES LOADED/);
+  assert.match(paginationProgress.label, /22 NON-CATALOG CANDIDATES/);
   const terminalPaginationProgress = buildRouteCatalogPaginationProgress({
-    loadedCatalogCount: 20,
-    totalMatchedCount: 20,
+    loadedCatalogCount: 51,
+    totalMatchedCount: 51,
     totalMatchedCountBounded: false,
-    visibleCatalogCardCount: 20,
-    visibleCandidateCount: 20,
+    visibleCatalogCardCount: 51,
+    visibleCandidateCount: 51,
   });
-  assert.match(terminalPaginationProgress.label, /20 CATALOG ROUTES SHOWN/);
+  assert.match(terminalPaginationProgress.label, /51 CATALOG ROUTES LOADED/);
+
+  const twentyPageCriteria = {
+    ...criteria,
+    radiusMiles: 494,
+    page: 1,
+    pageSize: 20,
+    limit: 20,
+  };
+  const twentyPageRecords = Array.from({ length: 51 }, (_, index) =>
+    lightweightRouteRecord(`twenty-page-${String(index).padStart(2, '0')}`));
+  const twentyPageInvocationStart = invocations.length;
+  for (const [page, records] of [
+    [1, twentyPageRecords.slice(0, 20)],
+    [2, twentyPageRecords.slice(20, 40)],
+    [3, twentyPageRecords.slice(40)],
+  ]) {
+    responses.push(searchResponse(records, {
+      state: 'ready',
+      title: 'Verified routes available',
+      message: `Ranked page ${page} is available.`,
+    }, [], {
+      paginationContractVersion: 'route_catalog_ranked_page_v1',
+      page,
+      pageSize: 20,
+      offset: (page - 1) * 20,
+      returnedCount: records.length,
+      hasMore: page < 3,
+      nextPage: page < 3 ? page + 1 : null,
+      nextCursor: null,
+      totalMatchedCount: 51,
+      totalMatchedCountBounded: false,
+    }));
+  }
+  const twentyPageOne = await refreshLiveTrailPackCatalog(twentyPageCriteria);
+  const twentyPageTwo = await refreshLiveTrailPackCatalog({ ...twentyPageCriteria, page: 2 });
+  const twentyPageThree = await refreshLiveTrailPackCatalog({ ...twentyPageCriteria, page: 3 });
+  assert.deepStrictEqual(
+    [twentyPageOne.trailPacks.length, twentyPageTwo.trailPacks.length, twentyPageThree.trailPacks.length],
+    [20, 40, 51],
+  );
+  assert.strictEqual(new Set(twentyPageThree.trailPacks.map((route) => route.id)).size, 51);
+  assert.strictEqual(twentyPageThree.searchMeta.hasMore, false);
+  assert.strictEqual(twentyPageThree.searchMeta.nextPage, null);
+  assert.strictEqual(twentyPageThree.searchMeta.additionalMatchesAvailable, false);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.strictEqual(
+    invocations.length,
+    twentyPageInvocationStart + 3,
+    'The 20 + 20 + 11 flow must stop after the third page reaches totalMatched.',
+  );
+  console.log(JSON.stringify({
+    metric: 'explore_catalog_pagination_acceptance',
+    pageSize50: {
+      pageCounts: [
+        paginationPageOne.trailPacks.length,
+        new Set(paginationComplete.trailPacks.map((route) => route.id)).size -
+          new Set(paginationPageOne.trailPacks.map((route) => route.id)).size,
+      ],
+      finalUniqueCount: new Set(paginationComplete.trailPacks.map((route) => route.id)).size,
+      requestCount: 2,
+    },
+    pageSize20: {
+      pageCounts: [20, 20, 11],
+      loadedCounts: [
+        twentyPageOne.trailPacks.length,
+        twentyPageTwo.trailPacks.length,
+        twentyPageThree.trailPacks.length,
+      ],
+      finalUniqueCount: new Set(twentyPageThree.trailPacks.map((route) => route.id)).size,
+      requestCount: 3,
+    },
+  }));
+
+  const noProgressCriteria = { ...criteria, radiusMiles: 493, pageSize: 20, limit: 20 };
+  responses.push(searchResponse(twentyPageRecords.slice(0, 20), undefined, [], {
+    paginationContractVersion: 'route_catalog_ranked_page_v1',
+    page: 1,
+    pageSize: 20,
+    offset: 0,
+    hasMore: true,
+    nextPage: 2,
+    totalMatchedCount: 21,
+  }));
+  const noProgressBase = await refreshLiveTrailPackCatalog(noProgressCriteria);
+  responses.push(searchResponse([twentyPageRecords[0]], undefined, [], {
+    paginationContractVersion: 'route_catalog_ranked_page_v1',
+    page: 2,
+    pageSize: 20,
+    offset: 20,
+    hasMore: true,
+    nextPage: 3,
+    totalMatchedCount: 21,
+  }));
+  const noProgressStopped = await refreshLiveTrailPackCatalog({ ...noProgressCriteria, page: 2 });
+  assert.strictEqual(noProgressBase.trailPacks.length, 20);
+  assert.strictEqual(noProgressStopped.trailPacks.length, 20);
+  assert.strictEqual(noProgressStopped.searchMeta.hasMore, false);
+  assert.strictEqual(noProgressStopped.searchMeta.nextPage, null);
+  assert.strictEqual(noProgressStopped.searchMeta.paginationWarning, 'no_progress');
+  assert.strictEqual(noProgressStopped.asyncState.safeErrorCode, 'ROUTE_CATALOG_PAGINATION_NO_PROGRESS');
 
   const persistentDegradedMerge = mergeLiveTrailPackCatalogPageSnapshots(
     {
@@ -1288,7 +1398,7 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
     searchResponse([routeRecord('quick-norcal-route')], {
       state: 'ready',
       title: 'Verified routes available',
-      message: 'The capped route catalog result is available.',
+      message: 'The bounded route catalog page is available.',
     }),
   );
 
@@ -1304,10 +1414,10 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   assert.strictEqual(stagedPreserved.error, null);
   assert.strictEqual(stagedPreserved.asyncState.safeErrorCode, null);
   assert.strictEqual(invocations.length, highLimitInvocationStart + 1);
-  assert.strictEqual(invocations[highLimitInvocationStart].body.limit, 20);
+  assert.strictEqual(invocations[highLimitInvocationStart].body.limit, 50);
   assert(
-    stagedSnapshots.every((entry) => entry.trailPacks.length <= 20),
-    'Oversized requests must not publish staged or settled snapshots above the cap.',
+    stagedSnapshots.every((entry) => entry.trailPacks.length <= 50),
+    'Oversized requests must not publish a staged or settled snapshot above the page-size bound.',
   );
 
   const concurrentCriteria = { ...criteria, radiusMiles: 42 };
@@ -1966,9 +2076,8 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   assert.strictEqual(postMigrationLiveFixture.diagnosticRecords.length, 0);
   assert.strictEqual(postMigrationLiveFixture.meta.anySourceBackedCandidateCount, 51);
 
-  // The historical 50+1 payload is retained only as a deterministic top-20
-  // selection fixture. Explorer rendering/cache scenarios below use a
-  // purpose-built synthetic total-search response instead.
+  // The historical first page remains deterministic regardless of provider
+  // insertion order, without truncating the 50 loaded summaries.
   const hydratedPostMigrationFixture = postMigrationFixtureResponse().data;
   const fixtureForwardSelection = normalizeRouteCatalogSearchResponse(
     hydratedPostMigrationFixture,
@@ -1977,11 +2086,11 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
     ...hydratedPostMigrationFixture,
     records: [...hydratedPostMigrationFixture.records].reverse(),
   });
-  assert.strictEqual(fixtureForwardSelection.trailPacks.length, 20);
+  assert.strictEqual(fixtureForwardSelection.trailPacks.length, 50);
   assert.deepStrictEqual(
     fixtureReverseSelection.trailPacks.map((route) => route.id),
     fixtureForwardSelection.trailPacks.map((route) => route.id),
-    'Provider insertion order must not change the deterministic top-20 selection.',
+    'Provider insertion order must not change deterministic ranked-page selection.',
   );
 
   // A: a fresh synthetic revealable response renders cards even though every summary
@@ -2005,8 +2114,8 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
     0,
     'The 51st pagination lookahead row is not a materialized blocked record.',
   );
-  assert.strictEqual(matrixFresh.searchMeta.anySourceBackedCandidateCount, 51);
-  assert.strictEqual(matrixFresh.searchMeta.pageSize, 20);
+  assert.strictEqual(matrixFresh.searchMeta.anySourceBackedCandidateCount, 20);
+  assert.strictEqual(matrixFresh.searchMeta.pageSize, 50);
   const freshAvailability = matrixFreshSurface.trailPackRoutes.map(classifyExploreRouteAvailability);
   assert.strictEqual(freshAvailability.filter((entry) => entry.discoverability.eligible).length, 20);
   assert.strictEqual(freshAvailability.filter((entry) => entry.tripBuilder.eligible).length, 20);
@@ -2156,8 +2265,8 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   assert.strictEqual(matrixStaleBlockedSurface.surface.currentSuccessfulEvaluation, false);
   assert.strictEqual(matrixStaleBlockedSurface.surface.showBlockedNotice, false);
 
-  // Provider recovery must filter, rank, dedupe, and then apply the same total
-  // search cap. Updated-at query order cannot decide the visible fallback set.
+  // Provider recovery must filter, rank, and dedupe the complete bounded page.
+  // Updated-at query order cannot decide the visible fallback set.
   const fallbackCapCriteria = { ...criteria, radiusMiles: 493, limit: 51 };
   const fallbackCapRecords = Array.from({ length: 51 }, (_, index) => ({
     ...routeRecord(`legacy-ranked-${String(index).padStart(2, '0')}`),
@@ -2170,12 +2279,12 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   legacyResponses.push({ data: fallbackCapRecords, error: null });
   const fallbackCapSnapshot = await refreshLiveTrailPackCatalog(fallbackCapCriteria);
   assert.strictEqual(fallbackCapSnapshot.source, 'trail_packs_fallback');
-  assert.strictEqual(fallbackCapSnapshot.trailPacks.length, 20);
-  assert.strictEqual(new Set(fallbackCapSnapshot.trailPacks.map((pack) => pack.id)).size, 20);
+  assert.strictEqual(fallbackCapSnapshot.trailPacks.length, 51);
+  assert.strictEqual(new Set(fallbackCapSnapshot.trailPacks.map((pack) => pack.id)).size, 51);
   assert.strictEqual(
     fallbackCapSnapshot.trailPacks[0].id,
     'legacy-ranked-50',
-    'Provider recovery must rank the full qualifying candidate set before taking 20.',
+    'Provider recovery must rank the full qualifying candidate set before publishing it.',
   );
 
   // E persisted-cache variant: create a blocked fallback summary, leave it in
@@ -2196,14 +2305,14 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
     matrixPersistedBlockedCriteria,
   );
   assert.strictEqual(matrixPersistedBlockedSeed.source, 'trail_packs_fallback');
-  const summaryCacheAdapter = memoryCaches.get('explore.catalog.summary.v3');
+  const summaryCacheAdapter = memoryCaches.get('explore.catalog.summary.v5');
   assert(summaryCacheAdapter, 'The v2 persisted summary cache adapter must be initialized.');
   assert.strictEqual(
     memoryCaches.has('explore.catalog.summary.v1'),
     false,
     'The cursor-contract build must not hydrate the obsolete v1 summary namespace.',
   );
-  const persistedBlockedRaw = summaryCacheAdapter.get('explore.catalog.summary.v3');
+  const persistedBlockedRaw = summaryCacheAdapter.get('explore.catalog.summary.v5.access.anon');
   assert(persistedBlockedRaw, 'The blocked fallback summary must be persisted before revalidation.');
   const persistedBlockedPayload = JSON.parse(persistedBlockedRaw);
   assert.strictEqual(persistedBlockedPayload.refreshKey, matrixPersistedBlockedKey);
@@ -2271,7 +2380,7 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   assert.strictEqual(matrixOldFallbackSurface.visibleCandidates.length, 0);
   assert.strictEqual(matrixOldFallbackSurface.surface.kind, 'stale');
   assert.strictEqual(matrixOldFallbackSurface.surface.showBlockedNotice, false);
-  const matrixOldFallbackRaw = summaryCacheAdapter.get('explore.catalog.summary.v3');
+  const matrixOldFallbackRaw = summaryCacheAdapter.get('explore.catalog.summary.v5.access.anon');
   assert(matrixOldFallbackRaw);
   const matrixOldFallbackPayload = JSON.parse(matrixOldFallbackRaw);
   assert.strictEqual(matrixOldFallbackPayload.refreshKey, matrixReplacementKey);
@@ -2295,7 +2404,7 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   assert.strictEqual(matrixFreshReplacementSurface.visibleCandidates.length, 20);
   assert.strictEqual(matrixFreshReplacementSurface.surface.kind, 'cards');
   assert.strictEqual(matrixFreshReplacementSurface.surface.currentSuccessfulEvaluation, true);
-  const matrixFreshReplacementRaw = summaryCacheAdapter.get('explore.catalog.summary.v3');
+  const matrixFreshReplacementRaw = summaryCacheAdapter.get('explore.catalog.summary.v5.access.anon');
   assert(matrixFreshReplacementRaw);
   const matrixFreshReplacementPayload = JSON.parse(matrixFreshReplacementRaw);
   assert.strictEqual(matrixFreshReplacementPayload.refreshKey, matrixReplacementKey);
@@ -2329,15 +2438,14 @@ function buildProductionExploreSurface(snapshot, currentRefreshKey, sourceFilter
   const searchInvocations = invocations.filter((entry) => entry.name === 'route-catalog-search');
   assert(searchInvocations.every((entry) => entry.signal instanceof AbortSignal));
   assert(searchInvocations.every((entry) => Number.isFinite(entry.timeout)));
-  const cappedSearchInvocations = searchInvocations.filter(
+  const pagedSearchInvocations = searchInvocations.filter(
     (entry) => entry.body.radiusMiles === 500,
   );
-  assert(cappedSearchInvocations.length > 0);
-  assert(cappedSearchInvocations.every((entry) => entry.body.limit === 20));
-  assert(cappedSearchInvocations.every((entry) => entry.body.page === 1));
-  assert(cappedSearchInvocations.every((entry) => entry.body.pageSize === 20));
-  assert(cappedSearchInvocations.every((entry) => entry.body.offset === 0));
-  assert(cappedSearchInvocations.every((entry) => !('continuationCursor' in entry.body)));
+  assert(pagedSearchInvocations.length > 0);
+  assert(pagedSearchInvocations.every((entry) => entry.body.limit === 50));
+  assert(pagedSearchInvocations.every((entry) => entry.body.page >= 1));
+  assert(pagedSearchInvocations.every((entry) => entry.body.pageSize === 50));
+  assert(pagedSearchInvocations.every((entry) => entry.body.offset === (entry.body.page - 1) * 50));
 
   console.log(JSON.stringify({
     metric: 'explore_route_surface_matrix',

@@ -127,22 +127,18 @@ assert(
 );
 
 assert(
-  !discover.includes('const handleLoadNextRouteCatalogPage = useCallback') &&
-    !discover.includes('testID="explore-guidance-ready-load-next-provider-page"') &&
-    !discover.includes('testID="explore-guidance-ready-pagination-error"') &&
-    discover.includes('testID="explore-route-search-cap-notice"') &&
+  discover.includes('const handleLoadNextRouteCatalogPage = useCallback') &&
+    discover.includes('testID="explore-guidance-ready-load-next-provider-page"') &&
+    discover.includes('testID="explore-guidance-ready-pagination-error"') &&
     discover.includes('testID="explore-route-catalog-pagination-progress"') &&
     discover.includes('buildRouteCatalogPaginationProgress({') &&
     discover.includes('visibleCatalogCardCount: visibleRouteCatalogCardCount') &&
     discover.includes('visibleCandidateCount: visibleExploreWizardCandidates.length') &&
-    discover.includes('ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE') &&
-    discover.includes('exploreWizardCandidateSet.candidates.length') &&
-    discover.includes('capUniqueRankedRoutes(') &&
-    liveCatalog.includes('searchMeta.hasMore = false') &&
-    liveCatalog.includes('searchMeta.nextPage = null') &&
-    liveCatalog.includes('searchMeta.nextCursor = null') &&
-    liveCatalog.includes('capLiveTrailPackCatalogData('),
-  'Mounted Explore should expose one capped, deduplicated result set, report additional matches, and make continuation impossible.',
+    discover.includes('LOAD MORE VERIFIED ROUTES') &&
+    discover.includes('SHOW MORE LOADED ROUTES') &&
+    liveCatalog.includes('mergeLiveTrailPackCatalogPageSnapshots(') &&
+    liveCatalog.includes("paginationWarning: 'no_progress'"),
+  'Mounted Explore should distinguish the rendered window from loaded routes, expose accessible continuation, and stop a no-progress loop.',
 );
 
 assert(

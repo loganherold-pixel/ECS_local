@@ -58,7 +58,8 @@ const {
   routeCatalogCursorFingerprint,
   selectRouteCatalogSearchResults,
   ROUTE_CATALOG_CANDIDATE_INSPECTION_LIMIT,
-  ROUTE_CATALOG_SEARCH_RESULT_LIMIT,
+  ROUTE_CATALOG_DEFAULT_PAGE_SIZE,
+  ROUTE_CATALOG_MAX_PAGE_SIZE,
 } = require(providerContractPath);
 
 const restrictedCoordinate = [-120.781234, 38.921234];
@@ -171,13 +172,15 @@ const selectedSearchResults = selectRouteCatalogSearchResults(
     compareRecords: (left, right) => Number(right.rank ?? 0) - Number(left.rank ?? 0),
   },
 );
-assert.strictEqual(ROUTE_CATALOG_SEARCH_RESULT_LIMIT, 20);
+assert.strictEqual(ROUTE_CATALOG_DEFAULT_PAGE_SIZE, 50);
+assert.strictEqual(ROUTE_CATALOG_MAX_PAGE_SIZE, 50);
 assert.strictEqual(ROUTE_CATALOG_CANDIDATE_INSPECTION_LIMIT, 500);
-assert.strictEqual(selectedSearchResults.resultLimit, 20);
-assert.strictEqual(selectedSearchResults.records.length, 20);
+assert.strictEqual(selectedSearchResults.resultLimit, 50);
+assert.strictEqual(selectedSearchResults.records.length, 25);
 assert.strictEqual(selectedSearchResults.records[0].id, higherRankedDuplicate.id);
 assert.strictEqual(selectedSearchResults.revealableMatchedCount, 25);
-assert.strictEqual(selectedSearchResults.additionalMatchesAvailable, true);
+assert.strictEqual(selectedSearchResults.additionalMatchesAvailable, false);
+assert.strictEqual(selectedSearchResults.hasMoreRevealable, false);
 assert.strictEqual(selectedSearchResults.diagnosticRecords.length, 1);
 assert.strictEqual(
   new Set(selectedSearchResults.records.map((record) => record.public_id)).size,
@@ -185,12 +188,31 @@ assert.strictEqual(
   'Provider filtering, deterministic ranking, and identity dedupe must all happen before the final result slice.',
 );
 const reducedSearchResults = selectRouteCatalogSearchResults(rankedCandidates, {
-  requestedLimit: 5,
+  pageSize: 5,
   compareRecords: (left, right) => Number(right.rank ?? 0) - Number(left.rank ?? 0),
 });
 assert.strictEqual(reducedSearchResults.resultLimit, 5);
 assert.strictEqual(reducedSearchResults.records.length, 5);
 assert.strictEqual(reducedSearchResults.additionalMatchesAvailable, true);
+assert.strictEqual(reducedSearchResults.hasMoreRevealable, true);
+
+const rankedFiftyOne = selectRouteCatalogSearchResults(paginatedOfficials, {
+  offset: 0,
+  pageSize: 50,
+});
+const rankedFiftyOnePageTwo = selectRouteCatalogSearchResults(paginatedOfficials, {
+  offset: 50,
+  pageSize: 50,
+});
+assert.strictEqual(rankedFiftyOne.records.length, 50);
+assert.strictEqual(rankedFiftyOne.hasMoreRevealable, true);
+assert.strictEqual(rankedFiftyOnePageTwo.records.length, 1);
+assert.strictEqual(rankedFiftyOnePageTwo.hasMoreRevealable, false);
+assert.strictEqual(
+  new Set([...rankedFiftyOne.records, ...rankedFiftyOnePageTwo.records].map((record) => record.public_id)).size,
+  51,
+  'A 50-record page limit must not make the final revealable route unreachable.',
+);
 assert.deepStrictEqual(
   selectRouteCatalogSearchResults([
     { ...officialRecord, id: 'route-b', public_id: 'route-b' },
@@ -351,7 +373,7 @@ const eligibilityTopTwenty = selectRouteCatalogSearchResults(
 assert.strictEqual(eligibilityTopTwenty.records.length, 20);
 assert(
   eligibilityTopTwenty.records.every((record) => String(record.id).startsWith('eligible-public-')),
-  'All public eligibility gates must run before deterministic ranking and the top-20 slice.',
+  'All public eligibility gates must run before deterministic ranking and the requested page slice.',
 );
 assert.strictEqual(
   eligibilityTopTwenty.records[0].id,
@@ -404,7 +426,7 @@ assert.strictEqual(invalidSummaryGeometry.records.length, 0);
 assert(
   invalidSummaryGeometry.diagnosticRecords.every((diagnostic) =>
     diagnostic.exclusionReasons.includes('invalid_geometry')),
-  'Known malformed or impossible raw geometry must be rejected before the summary top-20 slice.',
+  'Known malformed or impossible raw geometry must be rejected before the summary page slice.',
 );
 
 const geometryCenteredRoute = partitionRouteCatalogRecordsByPublicEligibility([
@@ -512,21 +534,21 @@ assert.deepStrictEqual(
 
 assert.deepStrictEqual(
   normalizeRouteCatalogPagination({ page: 2, pageSize: 25 }),
-  { page: 1, pageSize: 20, offset: 0, windowEnd: 20, windowExceeded: false },
+  { page: 2, pageSize: 25, offset: 25, windowEnd: 50, windowExceeded: false },
 );
 assert.deepStrictEqual(
   normalizeRouteCatalogPagination({ page: 3, limit: 7.9, offset: 75 }),
-  { page: 1, pageSize: 7, offset: 0, windowEnd: 7, windowExceeded: false },
+  { page: 3, pageSize: 7, offset: 75, windowEnd: 82, windowExceeded: false },
 );
-assert.strictEqual(normalizeRouteCatalogResultLimit(undefined), 20);
-assert.strictEqual(normalizeRouteCatalogResultLimit(0), 20);
-assert.strictEqual(normalizeRouteCatalogResultLimit(-10), 20);
-assert.strictEqual(normalizeRouteCatalogResultLimit(500), 20);
+assert.strictEqual(normalizeRouteCatalogResultLimit(undefined), 50);
+assert.strictEqual(normalizeRouteCatalogResultLimit(0), 50);
+assert.strictEqual(normalizeRouteCatalogResultLimit(-10), 50);
+assert.strictEqual(normalizeRouteCatalogResultLimit(500), 50);
 assert.strictEqual(normalizeRouteCatalogResultLimit('6.8'), 6);
 assert.deepStrictEqual(
   normalizeRouteCatalogPagination({ page: 5, pageSize: 500, offset: 2_000 }),
-  { page: 1, pageSize: 20, offset: 0, windowEnd: 20, windowExceeded: false },
-  'Public page and offset inputs must normalize to one total-search result set.',
+  { page: 5, pageSize: 50, offset: 2_000, windowEnd: 2_050, windowExceeded: true },
+  'Public continuation must preserve page/offset while enforcing the bounded search window.',
 );
 
 const edgeSource = fs.readFileSync(edgeFunctionPath, 'utf8');
@@ -665,7 +687,7 @@ const refinedTopTwenty = selectRouteCatalogSearchResults(refinedBeforeSelection,
 assert.strictEqual(refinedTopTwenty.records.length, 20);
 assert(
   refinedTopTwenty.records.every((record) => String(record.id).startsWith('day-route-')),
-  'Refinement filtering must run on the complete eligible pool before ranking and the final top-20 slice.',
+  'Refinement filtering must run on the complete eligible pool before ranking and the requested page slice.',
 );
 
 const viewportResolution = normalizeRouteCatalogViewportFilter({
@@ -737,7 +759,7 @@ const viewportTopTwenty = selectRouteCatalogSearchResults(viewportEligible.recor
 assert.strictEqual(viewportTopTwenty.records.length, 20);
 assert(
   viewportTopTwenty.records.every((record) => String(record.id).startsWith('inside-viewport-')),
-  'The complete eligible candidate pool must be bbox-filtered before ranking and top-20 selection.',
+  'The complete eligible candidate pool must be bbox-filtered before ranking and page selection.',
 );
 
 const regionOnlyViewportMatch = filterRouteCatalogRecordsByViewport([
@@ -805,9 +827,10 @@ assert(
     edgeSource.includes('coverageDiagnosticsUnavailable = true') &&
     edgeSource.includes('if (!skipCoverageDiagnostics && limitedRecords.length === 0)') &&
     edgeSource.includes('selectRouteCatalogSearchResults(') &&
-    edgeSource.includes('requestedLimit: pageSize') &&
+    edgeSource.includes('offset,') &&
+    edgeSource.includes('pageSize,') &&
     edgeSource.includes('compareRecords: compareDiscoveryRecords') &&
-    edgeSource.includes("'route_catalog_total_search_v1'") &&
+    edgeSource.includes("'route_catalog_ranked_page_v1'") &&
     edgeSource.includes('nearbyRouteRpcUsed: hasRadiusCriteria') &&
     edgeSource.includes("? 'route_catalog_nearby_public_route_cursor_page'") &&
     edgeSource.includes('fallbackQueryUsed: !hasRadiusCriteria') &&
@@ -823,8 +846,8 @@ assert(
     edgeSource.includes('totalMatchedCount: matchedCount') &&
     edgeSource.includes('resultLimit: resultSelection.resultLimit') &&
     edgeSource.includes('additionalMatchesAvailable,') &&
-    edgeSource.includes('hasMore: false') &&
-    edgeSource.includes('nextPage: null') &&
+    edgeSource.includes('hasMore,') &&
+    edgeSource.includes('nextPage: hasMore ? page + 1 : null') &&
     edgeSource.includes('nextCursor: null') &&
     edgeSource.includes('await routeCatalogCursorFingerprint([') &&
     edgeSource.includes('params.exploreRefinement ?? params.explore_refinement') &&
@@ -835,12 +858,12 @@ assert(
     edgeSource.includes('refinementMatchedCount: refinementEligibleRecords.length') &&
     edgeSource.includes('criteria: {') &&
     edgeSource.includes('exploreRefinement,') &&
-    providerSource.includes('ROUTE_CATALOG_SEARCH_RESULT_LIMIT = 20') &&
-    providerSource.includes('uniqueRankedRecords.slice(0, resultLimit)') &&
+    providerSource.includes('ROUTE_CATALOG_MAX_PAGE_SIZE = 50') &&
+    providerSource.includes('uniqueRankedRecords.slice(offset, windowEnd)') &&
     providerSource.includes("crypto.subtle.digest('SHA-256', input)") &&
     providerSource.includes("{ name: 'HMAC', hash: 'SHA-256' }") &&
     providerSource.includes("crypto.subtle.verify("),
-  'The Edge contract must keep internal indexed inspection while exposing one deterministic, deduped, policy-filtered result set capped at 20 with no continuation.',
+  'The Edge contract must keep internal indexed inspection while exposing deterministic, deduped, policy-filtered ranked pages with truthful continuation.',
 );
 
 const sourceVersionMigration = fs.readFileSync(verifiedRoutesSourceVersionMigrationPath, 'utf8');
