@@ -7,6 +7,7 @@ import {
   type RouteGeometryViewportResult,
   type RouteGeometryViewportSegment,
 } from '../../../../lib/routeGeometryViewport';
+import { capUniqueRankedRoutes } from '../../../../lib/explore/routeSearchResultPolicy';
 import type {
   MvumSegmentSummary,
   MvumSelectedSegment,
@@ -936,9 +937,13 @@ export function buildMvumGuidanceEntryPlan(args: {
 export function buildNavigateMvumFeatureCollection(
   segments: readonly RouteGeometryViewportSegment[],
 ): MvumLineFeatureCollection {
+  const visibleSegments = capUniqueRankedRoutes(
+    segments,
+    (segment) => String(segment.sourceId || segment.id || '').trim().toLowerCase(),
+  );
   return {
     type: 'FeatureCollection',
-    features: segments
+    features: visibleSegments
       .map((segment): MvumLineFeature | null => {
         const coordinates = segment.coordinates
           .map((point) => [point.longitude, point.latitude] as [number, number])

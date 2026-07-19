@@ -156,7 +156,7 @@ const result = queryRouteCatalogDiscoveryRecords(
     latitude: userNearTahoe.latitude,
     longitude: userNearTahoe.longitude,
     radiusMiles: 100,
-    limit: 26,
+    limit: 51,
     searchTerms: ['rubicon'],
     regionTags: ['tahoe national forest', 'eldorado national forest'],
   },
@@ -164,7 +164,8 @@ const result = queryRouteCatalogDiscoveryRecords(
 
 assert(result.radiusFilterApplied, 'Radius search should be explicitly applied.');
 assert(result.matchedCount > result.records.length, 'The helper should track eligible matches beyond the visible page size.');
-assert.strictEqual(result.records.length, 26, 'The helper should apply the visible limit only after relevance sorting.');
+assert.strictEqual(result.records.length, 20, 'The helper should apply the total-search cap only after relevance sorting.');
+assert.strictEqual(result.allMatchedRecords.length, 20, 'No application-facing result array may exceed the total-search cap.');
 assert(
   result.records.some((record) => record.id === 'rubicon-trail'),
   'Featured nearby routes such as Rubicon should not be hidden behind lower-profile routes when a page limit is applied.',
@@ -186,14 +187,23 @@ assert(
   'Discovery metadata should explain geometry-in-radius vs center-outside-radius behavior.',
 );
 
-const trailheadMatch = result.allMatchedRecords.find((record) => record.id === 'trailhead-only-inside-radius');
+const trailheadResult = queryRouteCatalogDiscoveryRecords([trailheadOnly], {
+  latitude: userNearTahoe.latitude,
+  longitude: userNearTahoe.longitude,
+  radiusMiles: 100,
+});
+const trailheadMatch = trailheadResult.records.find((record) => record.id === 'trailhead-only-inside-radius');
 assert(trailheadMatch, 'Trailhead-only records should still be eligible when the trailhead is inside radius.');
 assert(
   trailheadMatch.search_match_reasons.includes('trailhead_within_radius'),
   'Trailhead-only records should explain the trailhead radius match.',
 );
 assert(
-  !result.allMatchedRecords.some((record) => record.id === 'outside-radius'),
+  queryRouteCatalogDiscoveryRecords([outside], {
+    latitude: userNearTahoe.latitude,
+    longitude: userNearTahoe.longitude,
+    radiusMiles: 100,
+  }).records.length === 0,
   'Routes with no geometry, trailhead, center, region, or alias match should be excluded.',
 );
 

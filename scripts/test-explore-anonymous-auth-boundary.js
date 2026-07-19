@@ -226,7 +226,7 @@ const ANONYMOUS_SEARCH_CRITERIA = Object.freeze({
   locationSource: 'repository_approved_test_area',
   vehicleClass: 'full_size_4x4',
   page: 1,
-  pageSize: 50,
+  pageSize: 51,
 });
 
 function publicShortRouteRecord() {
@@ -266,10 +266,11 @@ function publicShortRouteRecord() {
   };
 }
 
-function successfulSearchResponse(record) {
+function successfulSearchResponse(recordOrRecords) {
+  const records = Array.isArray(recordOrRecords) ? recordOrRecords : [recordOrRecords];
   return {
     data: {
-      records: [record],
+      records,
       diagnosticRecords: [],
       coverageState: {
         state: 'ready',
@@ -281,21 +282,21 @@ function successfulSearchResponse(record) {
         nearbyRouteRpcUsed: true,
         nearbyRouteRpc: 'route_catalog_nearby_public_route_cursor_page',
         fallbackQueryUsed: false,
-        candidateCount: 1,
-        radiusMatchedCount: 1,
+        candidateCount: records.length,
+        radiusMatchedCount: records.length,
         geometryMatchedCount: 0,
         trailheadMatchedCount: 0,
-        centerMatchedCount: 1,
+        centerMatchedCount: records.length,
         curationCandidateCount: 0,
-        anySourceBackedCandidateCount: 1,
+        anySourceBackedCandidateCount: records.length,
         radiusFilterApplied: true,
         page: 1,
-        pageSize: 50,
+        pageSize: records.length,
         offset: 0,
         hasMore: false,
         nextPage: null,
         nextCursor: null,
-        totalMatchedCount: 1,
+        totalMatchedCount: records.length,
         totalMatchedCountBounded: false,
       },
     },
@@ -393,6 +394,10 @@ async function exerciseProductionAnonymousExplorePath() {
   const criteria = { ...ANONYMOUS_SEARCH_CRITERIA };
   const expectedBody = buildRouteCatalogSearchBody(criteria);
   assert.strictEqual(expectedBody.radiusMiles, 500);
+  assert.strictEqual(expectedBody.limit, 20);
+  assert.strictEqual(expectedBody.pageSize, 20);
+  assert.strictEqual(expectedBody.page, 1);
+  assert.strictEqual(expectedBody.offset, 0);
   assert.strictEqual(expectedBody.vehicleClass, 'full_size_4x4');
   assert.strictEqual(expectedBody.recommendationOnly, true);
   assert.strictEqual(expectedBody.includeGeometry, false);
@@ -415,20 +420,29 @@ async function exerciseProductionAnonymousExplorePath() {
   assert.strictEqual(failedSurface.surface.kind, 'provider_unavailable');
   assert.strictEqual(failedSurface.surface.showBlockedNotice, false);
 
-  providerResponses.push(successfulSearchResponse(publicShortRouteRecord()));
+  const anonymousOversizedRecords = Array.from({ length: 51 }, (_, index) => ({
+    ...publicShortRouteRecord(),
+    id: `anonymous-public-short-route-${String(index).padStart(2, '0')}`,
+    public_id: `anonymous-public-short-route-${String(index).padStart(2, '0')}`,
+    name: `Anonymous Public Short Route ${index}`,
+    featured_route_score: index === 50 ? 100 : 0,
+  }));
+  providerResponses.push(successfulSearchResponse(anonymousOversizedRecords));
   const snapshot = await refreshLiveTrailPackCatalog(criteria);
   assert.strictEqual(snapshot.status, 'ready');
   assert.strictEqual(snapshot.source, 'route_catalog');
-  assert.strictEqual(snapshot.trailPacks.length, 1);
+  assert.strictEqual(snapshot.trailPacks.length, 20);
+  assert.strictEqual(new Set(snapshot.trailPacks.map((pack) => pack.id)).size, 20);
+  assert.strictEqual(snapshot.trailPacks[0].id, 'anonymous-public-short-route-50');
   assert.strictEqual(snapshot.guidanceDiagnosticRecords.length, 0);
   const successInvocation = providerInvocations.at(-1);
   assert.strictEqual(successInvocation.name, 'route-catalog-search');
   assert.deepStrictEqual(successInvocation.body, expectedBody);
 
   const rendered = buildProductionSurface(snapshot, createLiveTrailPackCatalogRefreshKey(criteria));
-  assert.strictEqual(rendered.inventory.totalDiscoverableCount, 1);
+  assert.strictEqual(rendered.inventory.totalDiscoverableCount, 20);
   assert.strictEqual(rendered.inventory.totalReadyCount, 0);
-  assert.strictEqual(rendered.visibleCandidates.length, 1);
+  assert.strictEqual(rendered.visibleCandidates.length, 20);
   assert.strictEqual(rendered.surface.kind, 'cards');
   assert.strictEqual(rendered.surface.showBlockedNotice, false);
 

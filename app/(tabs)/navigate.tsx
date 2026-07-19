@@ -335,6 +335,7 @@ import {
 import { resolveNavigateRouteProfileFocus } from '../../lib/navigateRouteProfileScrubber';
 import { useECSNavigation } from '../../lib/navigation/useECSNavigation';
 import {
+  capRouteGeometryViewportResult,
   normalizeRouteGeometryViewportBbox,
   resolveNearestRouteGeometryEndpoint,
   ROUTE_GEOMETRY_VIEWPORT_PLANNING_SOURCE,
@@ -348,6 +349,10 @@ import {
   isRouteGeometryViewportOverlayFeatureEnabled,
   RouteGeometryViewportProviderUnavailableError,
 } from '../../lib/routeGeometryViewportClient';
+import {
+  ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE,
+  ECS_ROUTE_SEARCH_RESULT_LIMIT,
+} from '../../lib/explore/routeSearchResultPolicy';
 import {
   readRouteCatalogViewportOfflineCache,
   readRouteGeometryViewportOfflineCache,
@@ -6028,23 +6033,24 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
           )
         : null;
       if (cached) {
+        const cachedResult = capRouteGeometryViewportResult(cached.value);
         navigateMapLayerCoordinatorRef.current.syncLocalLayer({
           layer: 'mvum',
           enabled: true,
-          itemCount: cached.value.segments.length,
+          itemCount: cachedResult.segments.length,
           sourceState: 'stale',
           renderPriority: 'high',
         });
-        setMvumViewportResult(cached.value);
+        setMvumViewportResult(cachedResult);
         setMvumViewportUiState((current) =>
           settleRouteGeometryViewportUiRequest(current, {
-            status: cached.value.degraded ? 'degraded' : 'stale',
-            result: cached.value,
-            errorMessage: cached.value.degraded
-              ? cached.value.userMessage ?? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE
+            status: cachedResult.degraded ? 'degraded' : 'stale',
+            result: cachedResult,
+            errorMessage: cachedResult.degraded
+              ? cachedResult.userMessage ?? ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE
               : 'Offline. Showing cached MVUM segments for this map view.',
-            safeErrorCode: cached.value.degraded ? 'PROVIDER_DEGRADED' : 'OFFLINE_STALE_CACHE',
-            dataState: cached.value.degraded ? 'degraded' : 'stale',
+            safeErrorCode: cachedResult.degraded ? 'PROVIDER_DEGRADED' : 'OFFLINE_STALE_CACHE',
+            dataState: cachedResult.degraded ? 'degraded' : 'stale',
             bbox: plan.bbox,
             cacheKey: plan.cacheKey,
             source: 'cached',
@@ -6237,20 +6243,21 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       plan.cacheKey,
     );
     if (cached) {
+      const cachedResult = capRouteGeometryViewportResult(cached.value);
       clearMvumFetchTimer();
       navigateMapLayerCoordinatorRef.current.cancel('mvum', 'cache_hit');
       navigateMapLayerCoordinatorRef.current.syncLocalLayer({
         layer: 'mvum',
         enabled: true,
-        itemCount: cached.value.segments.length,
+        itemCount: cachedResult.segments.length,
         sourceState: cached.sourceState,
         renderPriority: 'high',
       });
-      setMvumViewportResult(cached.value);
+      setMvumViewportResult(cachedResult);
       setMvumViewportUiState((current) =>
         settleRouteGeometryViewportUiRequest(current, {
-          status: cached.value.segments.length > 0 ? 'ready' : 'empty',
-          result: cached.value,
+          status: cachedResult.segments.length > 0 ? 'ready' : 'empty',
+          result: cachedResult,
           dataState: 'cached',
           bbox: plan.bbox,
           cacheKey: plan.cacheKey,
@@ -6327,14 +6334,14 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       fetchNavigateMvumViewportSegments({
         bbox: requestBbox,
         zoom: mapZoom,
-        limit: 240,
+        limit: ECS_ROUTE_SEARCH_RESULT_LIMIT,
         vehicleClass: null,
         signal: request.signal,
       })
         .then((result) => {
           if (!navigateMapLayerCoordinatorRef.current.isCurrent(request)) return;
           const resultForCache = {
-            ...result,
+            ...capRouteGeometryViewportResult(result),
             cacheKey: request.viewportFingerprint,
           };
           if (!navigateMapLayerCoordinatorRef.current.complete(request, {
@@ -14877,6 +14884,11 @@ const handleCreateRun = useCallback(() => {
   ]);
   const mvumViewportLegendMessage = useMemo(() => {
     if (!mvumOverlayEnabled) return null;
+    const additionalMatchesNotice =
+      mvumViewportResult?.additionalMatchesAvailable === true &&
+      mvumViewportResult.segments.length > 0
+        ? ` ${ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE}`
+        : '';
     if (!mvumViewportZoomReady) {
       return `Zoom to ${MVUM_OVERLAY_MIN_ZOOM}+ to show MVUM trail segments.`;
     }
@@ -14897,10 +14909,10 @@ const handleCreateRun = useCallback(() => {
       return 'MVUM segments loaded, but the map source could not render them. Retry the layer.';
     }
     if (mvumViewportUiState.status === 'stale') {
-      return mvumViewportUiState.errorMessage ?? 'Showing stale cached MVUM segments.';
+      return `${mvumViewportUiState.errorMessage ?? 'Showing stale cached MVUM segments.'}${additionalMatchesNotice}`;
     }
     if (mvumViewportUiState.status === 'degraded') {
-      return mvumViewportUiState.errorMessage ?? 'MVUM segments are partially available.';
+      return `${mvumViewportUiState.errorMessage ?? 'MVUM segments are partially available.'}${additionalMatchesNotice}`;
     }
     if (mvumViewportUiState.status === 'error') {
       return mvumViewportUiState.errorMessage ?? 'MVUM trail segments unavailable.';
@@ -14917,7 +14929,7 @@ const handleCreateRun = useCallback(() => {
         : 'MVUM vector source is configured. Verify visible tiles before selecting segments.';
     }
     if (mvumViewportResult?.segments.length) {
-      return `${mvumViewportResult.segments.length} MVUM trail segment${mvumViewportResult.segments.length === 1 ? '' : 's'} visible.`;
+      return `${mvumViewportResult.segments.length} MVUM trail segment${mvumViewportResult.segments.length === 1 ? '' : 's'} visible.${additionalMatchesNotice}`;
     }
     if (mvumViewportUiState.status === 'empty') {
       return 'No MVUM trail segments in this map view. Pan or zoom to inspect nearby forest roads.';
@@ -14926,6 +14938,7 @@ const handleCreateRun = useCallback(() => {
   }, [
     mvumOverlayEnabled,
     mvumLayerDiagnostic.renderStatus,
+    mvumViewportResult?.additionalMatchesAvailable,
     mvumViewportResult?.segments.length,
     mvumViewportUiState.cacheHit,
     mvumViewportUiState.errorMessage,

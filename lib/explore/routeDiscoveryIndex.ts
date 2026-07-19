@@ -16,6 +16,11 @@ import {
   getExploreRouteThumbnail,
   type ExploreTrailThumbnailAssignment,
 } from '../exploreTrailThumbnails';
+import {
+  capUniqueRankedRoutes,
+  ECS_ROUTE_SEARCH_RESULT_LIMIT,
+  normalizeRouteSearchResultLimit,
+} from './routeSearchResultPolicy';
 
 export type RouteDiscoveryGeometryStatus =
   | 'full'
@@ -59,6 +64,7 @@ export type RouteDiscoveryIndexEntry = {
   distanceMiles: number | null;
   estimatedDurationMinutes: number | null;
   tripType: string | null;
+  routeType: string | null;
   difficulty: string | null;
   guidanceReady: boolean;
   geometryStatus: RouteDiscoveryGeometryStatus;
@@ -86,10 +92,16 @@ export type RouteDiscoveryIndexQuery = {
   coordinate: RouteDiscoveryCoordinate;
   radiusMiles: number;
   refinement?: RouteDiscoveryRefinement;
+  resultLimit?: number | null;
   firstBatchSize?: number;
   batchSize?: number;
   cursor?: number | null;
   guidanceReadyOnly?: boolean;
+  searchText?: string | null;
+  routeCategory?: string | null;
+  sourceFilter?: string | null;
+  searchFingerprint?: string | null;
+  accessContextFingerprint?: string | null;
 };
 
 export type RouteDiscoveryIndexResult = {
@@ -135,8 +147,8 @@ export type RouteDiscoveryImageCache = {
 };
 
 const EARTH_RADIUS_MILES = 3958.7613;
-const DEFAULT_FIRST_BATCH_SIZE = 12;
-const DEFAULT_BATCH_SIZE = 24;
+const DEFAULT_FIRST_BATCH_SIZE = ECS_ROUTE_SEARCH_RESULT_LIMIT;
+const DEFAULT_BATCH_SIZE = ECS_ROUTE_SEARCH_RESULT_LIMIT;
 const DEFAULT_CACHE_TTL_MS = 60_000;
 const DEFAULT_CACHE_STALE_MS = 240_000;
 const DEFAULT_CACHE_MAX_ENTRIES = 24;
@@ -437,6 +449,7 @@ export function buildRouteDiscoveryIndex(
       distanceMiles: positiveNumber(pack.distanceMiles),
       estimatedDurationMinutes: positiveNumber(pack.estimatedDurationMinutes),
       tripType: tripTypeForPack(pack),
+      routeType: pack.routeType ?? null,
       difficulty: pack.difficulty ?? null,
       guidanceReady: guidanceReadyForPack(pack, geometryStatus),
       geometryStatus,
@@ -518,6 +531,84 @@ function matchesRefinement(entry: RouteDiscoveryIndexEntry, refinement: RouteDis
   return true;
 }
 
+function normalizedSearchWords(value: unknown): string[] {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function routeDiscoverySearchHaystack(entry: RouteDiscoveryIndexEntry): string {
+  return [
+    entry.routeId,
+    entry.title,
+    ...entry.aliases,
+    entry.forestRegion,
+    entry.tripType,
+    entry.routeType,
+    entry.difficulty,
+    entry.source,
+    entry.verificationStatus,
+  ]
+    .flatMap(normalizedSearchWords)
+    .join(' ');
+}
+
+function matchesSearchText(entry: RouteDiscoveryIndexEntry, searchText: unknown): boolean {
+  const words = normalizedSearchWords(searchText);
+  if (words.length === 0) return true;
+  const haystack = routeDiscoverySearchHaystack(entry);
+  return words.every((word) => haystack.includes(word));
+}
+
+function routeDiscoverySourceFamily(source: unknown): string {
+  switch (normalizeToken(source)) {
+    case 'ecs_validated':
+      return 'official';
+    case 'community_reviewed':
+    case 'ecs_submitted':
+    case 'needs_review':
+      return 'community';
+    case 'imported_gpx':
+    case 'imported_kml':
+      return 'imported';
+    case 'partner_source':
+      return 'partner';
+    default:
+      return normalizeToken(source);
+  }
+}
+
+function matchesSourceFilter(entry: RouteDiscoveryIndexEntry, sourceFilter: unknown): boolean {
+  const requested = normalizeToken(sourceFilter);
+  if (!requested || requested === 'all' || requested === 'all_sources') return true;
+  const source = normalizeToken(entry.source);
+  return requested === source || requested === routeDiscoverySourceFamily(source);
+}
+
+function matchesRouteCategory(entry: RouteDiscoveryIndexEntry, routeCategory: unknown): boolean {
+  const requested = normalizeToken(routeCategory);
+  if (
+    !requested ||
+    requested === 'all' ||
+    requested === 'all_routes' ||
+    requested === 'all_drivable_trails'
+  ) {
+    return true;
+  }
+  const categories = new Set([
+    normalizeToken(entry.routeType),
+    normalizeToken(entry.tripType),
+    normalizeToken(entry.difficulty),
+    normalizeToken(entry.source),
+    routeDiscoverySourceFamily(entry.source),
+    ...entry.aliases.map(normalizeToken),
+  ].filter(Boolean));
+  return categories.has(requested);
+}
+
 function compareRouteDiscoveryEntries(left: RouteDiscoveryIndexEntry, right: RouteDiscoveryIndexEntry): number {
   const featuredDelta = right.featuredScore - left.featuredScore;
   if (featuredDelta !== 0) return featuredDelta;
@@ -527,9 +618,12 @@ function compareRouteDiscoveryEntries(left: RouteDiscoveryIndexEntry, right: Rou
   if (confidenceDelta !== 0) return confidenceDelta;
   const popularityDelta = right.popularityScore - left.popularityScore;
   if (popularityDelta !== 0) return popularityDelta;
-  const distanceDelta = (left.distanceFromUserMiles ?? Number.POSITIVE_INFINITY) - (right.distanceFromUserMiles ?? Number.POSITIVE_INFINITY);
+  const distanceDelta = (left.distanceFromUserMiles ?? Number.MAX_SAFE_INTEGER) -
+    (right.distanceFromUserMiles ?? Number.MAX_SAFE_INTEGER);
   if (distanceDelta !== 0) return distanceDelta;
-  return left.title.localeCompare(right.title);
+  const titleDelta = left.title.localeCompare(right.title);
+  if (titleDelta !== 0) return titleDelta;
+  return left.routeId.localeCompare(right.routeId);
 }
 
 function selectRouteDiscoveryEntries(
@@ -540,16 +634,27 @@ function selectRouteDiscoveryEntries(
   index.entries.forEach((entry) => {
     const distanceFromUserMiles = indexedDistance(entry, query.coordinate);
     if (distanceFromUserMiles == null) return;
-    entries.push({
+    const candidate = {
       ...entry,
       distanceFromUserMiles: Math.round(distanceFromUserMiles * 10) / 10,
-    });
+    };
+    entries.push(candidate);
   });
-  return entries
+  const filtered = entries
     .filter((entry) => (entry.distanceFromUserMiles ?? Number.POSITIVE_INFINITY) <= query.radiusMiles)
     .filter((entry) => !query.guidanceReadyOnly || entry.guidanceReady)
     .filter((entry) => matchesRefinement(entry, query.refinement ?? null))
-    .sort(compareRouteDiscoveryEntries);
+    .filter((entry) => matchesSearchText(entry, query.searchText))
+    .filter((entry) => matchesRouteCategory(entry, query.routeCategory))
+    .filter((entry) => matchesSourceFilter(entry, query.sourceFilter));
+  const entriesByRouteId = new Map<string, RouteDiscoveryIndexEntry>();
+  filtered.forEach((entry) => {
+    const existing = entriesByRouteId.get(entry.routeId);
+    if (!existing || compareRouteDiscoveryEntries(entry, existing) < 0) {
+      entriesByRouteId.set(entry.routeId, entry);
+    }
+  });
+  return Array.from(entriesByRouteId.values()).sort(compareRouteDiscoveryEntries);
 }
 
 function batchEntries(
@@ -559,16 +664,22 @@ function batchEntries(
   shouldRevalidate = false,
   cacheKey?: string,
 ): RouteDiscoveryIndexResult {
-  const firstBatchSize = Math.max(1, Math.round(query.firstBatchSize ?? DEFAULT_FIRST_BATCH_SIZE));
-  const batchSize = Math.max(1, Math.round(query.batchSize ?? DEFAULT_BATCH_SIZE));
+  const totalEligibleCount = allItems.length;
+  const cappedItems = capUniqueRankedRoutes(
+    allItems,
+    (entry) => entry.routeId,
+    query.resultLimit,
+  );
+  const firstBatchSize = normalizeRouteSearchResultLimit(query.firstBatchSize ?? DEFAULT_FIRST_BATCH_SIZE);
+  const batchSize = normalizeRouteSearchResultLimit(query.batchSize ?? DEFAULT_BATCH_SIZE);
   const offset = Math.max(0, Math.round(query.cursor ?? 0));
   const size = offset === 0 ? firstBatchSize : batchSize;
-  const items = allItems.slice(offset, offset + size);
-  const nextCursor = offset + items.length < allItems.length ? offset + items.length : null;
+  const items = cappedItems.slice(offset, offset + size);
+  const nextCursor = offset + items.length < cappedItems.length ? offset + items.length : null;
   return {
     items,
-    allItems,
-    totalEligibleCount: allItems.length,
+    allItems: cappedItems,
+    totalEligibleCount,
     offset,
     nextCursor,
     batchSize,
@@ -588,13 +699,15 @@ export function queryRouteDiscoveryIndex(
 export function getNextRouteDiscoveryBatch(
   result: Pick<RouteDiscoveryIndexResult, 'allItems' | 'nextCursor' | 'batchSize'>,
 ): Pick<RouteDiscoveryIndexResult, 'items' | 'offset' | 'nextCursor' | 'batchSize'> {
-  const offset = result.nextCursor ?? result.allItems.length;
-  const items = result.allItems.slice(offset, offset + result.batchSize);
+  const allItems = capUniqueRankedRoutes(result.allItems, (entry) => entry.routeId);
+  const batchSize = normalizeRouteSearchResultLimit(result.batchSize);
+  const offset = result.nextCursor ?? allItems.length;
+  const items = allItems.slice(offset, offset + batchSize);
   return {
     items,
     offset,
-    nextCursor: offset + items.length < result.allItems.length ? offset + items.length : null,
-    batchSize: result.batchSize,
+    nextCursor: offset + items.length < allItems.length ? offset + items.length : null,
+    batchSize,
   };
 }
 
@@ -616,9 +729,66 @@ export function normalizeRouteDiscoveryCoordinateBucket(
   };
 }
 
+function stableCacheContextValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableCacheContextValue);
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, entry]) => typeof entry !== 'function' && entry !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, stableCacheContextValue(entry)]),
+    );
+  }
+  return value ?? null;
+}
+
+function fingerprintCacheContext(value: unknown): string {
+  const basis = JSON.stringify(stableCacheContextValue(value));
+  let hash = 2166136261;
+  for (let index = 0; index < basis.length; index += 1) {
+    hash ^= basis.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function routeDiscoveryAccessCacheContext(options: {
+  includeOwnDrafts?: boolean;
+  ownTrailPackIds?: string[];
+  includeBroaderResults?: boolean;
+  confidenceInputsByTrailPackId?: Record<string, ECSTrailPackConfidenceInput>;
+  reviewStatesByTrailPackId?: Record<string, ECSTrailPackReviewState>;
+}): unknown {
+  return {
+    includeOwnDrafts: !!options.includeOwnDrafts,
+    includeBroaderResults: !!options.includeBroaderResults,
+    ownTrailPackIds: [...(options.ownTrailPackIds ?? [])].sort(),
+    confidenceInputsByTrailPackId: options.confidenceInputsByTrailPackId ?? {},
+    reviewStatesByTrailPackId: options.reviewStatesByTrailPackId ?? {},
+  };
+}
+
 export function createRouteDiscoveryCacheKey(
   index: Pick<RouteDiscoveryIndex, 'versionHash'>,
-  query: Pick<RouteDiscoveryIndexQuery, 'coordinate' | 'radiusMiles' | 'refinement' | 'guidanceReadyOnly'>,
+  query: Pick<
+    RouteDiscoveryIndexQuery,
+    | 'coordinate'
+    | 'radiusMiles'
+    | 'refinement'
+    | 'guidanceReadyOnly'
+    | 'resultLimit'
+    | 'firstBatchSize'
+    | 'batchSize'
+    | 'cursor'
+    | 'searchText'
+    | 'routeCategory'
+    | 'sourceFilter'
+    | 'searchFingerprint'
+    | 'accessContextFingerprint'
+  >,
+  accessContext?: unknown,
 ): string {
   const bucket = normalizeRouteDiscoveryCoordinateBucket(query.coordinate);
   return [
@@ -627,6 +797,19 @@ export function createRouteDiscoveryCacheKey(
     Math.round(query.radiusMiles),
     query.refinement ?? 'all',
     query.guidanceReadyOnly ? 'guidance_ready' : 'all_geometry',
+    `limit-${normalizeRouteSearchResultLimit(query.resultLimit)}`,
+    `batch-${normalizeRouteSearchResultLimit(query.firstBatchSize ?? DEFAULT_FIRST_BATCH_SIZE)}-${normalizeRouteSearchResultLimit(query.batchSize ?? DEFAULT_BATCH_SIZE)}`,
+    `cursor-${Math.max(0, Math.round(query.cursor ?? 0))}`,
+    `search-${fingerprintCacheContext({
+      text: cleanText(query.searchText).toLowerCase(),
+      category: normalizeToken(query.routeCategory),
+      source: normalizeToken(query.sourceFilter),
+      fingerprint: cleanText(query.searchFingerprint),
+    })}`,
+    `access-${fingerprintCacheContext({
+      query: cleanText(query.accessContextFingerprint),
+      context: accessContext ?? null,
+    })}`,
   ].join(':');
 }
 
@@ -772,13 +955,44 @@ function buildTrailPackResult(
     const trailPack = trailPackFromEntry(index, entry, options);
     if (!trailPack) return;
     publicEntries.push(entry);
-    allTrailPacks.push(trailPack);
   });
   const batched = batchEntries(publicEntries, query, cacheStatus, shouldRevalidate, cacheKey);
+  allTrailPacks.push(...trailPacksFromEntries(index, batched.allItems, options));
   return {
     ...batched,
     trailPacks: trailPacksFromEntries(index, batched.items, options),
     allTrailPacks,
+  };
+}
+
+function capCachedTrailPackResult(
+  result: RouteDiscoveryTrailPackResult,
+): RouteDiscoveryTrailPackResult {
+  const allItems = capUniqueRankedRoutes(result.allItems, (entry) => entry.routeId);
+  const allowedIds = new Set(allItems.map((entry) => entry.routeId));
+  const items = capUniqueRankedRoutes(
+    result.items.filter((entry) => allowedIds.has(entry.routeId)),
+    (entry) => entry.routeId,
+  );
+  const allTrailPacks = capUniqueRankedRoutes(
+    result.allTrailPacks.filter((pack) => allowedIds.has(pack.id)),
+    (pack) => pack.id,
+  );
+  const visibleIds = new Set(items.map((entry) => entry.routeId));
+  const trailPacks = capUniqueRankedRoutes(
+    result.trailPacks.filter((pack) => visibleIds.has(pack.id)),
+    (pack) => pack.id,
+  );
+  const batchSize = normalizeRouteSearchResultLimit(result.batchSize);
+  const nextOffset = result.offset + items.length;
+  return {
+    ...result,
+    items,
+    allItems,
+    trailPacks,
+    allTrailPacks,
+    batchSize,
+    nextCursor: nextOffset < allItems.length ? nextOffset : null,
   };
 }
 
@@ -796,12 +1010,17 @@ export function queryTrailPackDiscoveryIndexCached(
   } = {},
 ): RouteDiscoveryTrailPackResult {
   const cache = options.cache;
-  const cacheKey = createRouteDiscoveryCacheKey(index, query);
+  const cacheKey = createRouteDiscoveryCacheKey(
+    index,
+    query,
+    routeDiscoveryAccessCacheContext(options),
+  );
   if (cache) {
     const cached = cache.get(cacheKey, options.nowMs);
     if (cached.result) {
+      const cappedCachedResult = capCachedTrailPackResult(cached.result);
       return {
-        ...cached.result,
+        ...cappedCachedResult,
         cacheStatus: cached.status,
         shouldRevalidate: cached.status === 'stale',
         cacheKey,
@@ -827,7 +1046,11 @@ export function revalidateTrailPackDiscoveryIndexCache(
     reviewStatesByTrailPackId?: Record<string, ECSTrailPackReviewState>;
   },
 ): { updated: boolean; result: RouteDiscoveryTrailPackResult } {
-  const cacheKey = createRouteDiscoveryCacheKey(index, query);
+  const cacheKey = createRouteDiscoveryCacheKey(
+    index,
+    query,
+    routeDiscoveryAccessCacheContext(options),
+  );
   const previous = options.cache.entries.get(cacheKey)?.result ?? null;
   const fresh = buildTrailPackResult(index, query, options, 'refresh', false, cacheKey);
   const previousIds = previous?.allItems.map((entry) => entry.routeId).join('|') ?? '';

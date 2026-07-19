@@ -127,32 +127,22 @@ assert(
 );
 
 assert(
-  discover.includes('const handleLoadNextRouteCatalogPage = useCallback') &&
-    discover.includes('page: nextPage') &&
-    discover.includes('pageSize,') &&
-    discover.includes('activeRequest?.generation !== generation') &&
-    discover.includes('testID="explore-guidance-ready-load-next-provider-page"') &&
-    discover.includes('testID="explore-guidance-ready-pagination-error"') &&
-    discover.includes('testID="explore-guidance-ready-bounded-catalog-notice"') &&
+  !discover.includes('const handleLoadNextRouteCatalogPage = useCallback') &&
+    !discover.includes('testID="explore-guidance-ready-load-next-provider-page"') &&
+    !discover.includes('testID="explore-guidance-ready-pagination-error"') &&
+    discover.includes('testID="explore-route-search-cap-notice"') &&
     discover.includes('testID="explore-route-catalog-pagination-progress"') &&
     discover.includes('buildRouteCatalogPaginationProgress({') &&
     discover.includes('visibleCatalogCardCount: visibleRouteCatalogCardCount') &&
     discover.includes('visibleCandidateCount: visibleExploreWizardCandidates.length') &&
-    discover.includes('MORE VERIFIED CATALOG ROUTES ARE AVAILABLE. LOAD THE NEXT PAGE TO CONTINUE.') &&
+    discover.includes('ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE') &&
     discover.includes('exploreWizardCandidateSet.candidates.length') &&
-    discover.includes('continuationCursor: searchMeta.nextCursor ?? null') &&
-    discover.includes('const EXPLORE_ROUTE_CATALOG_PAGINATION_TIMEOUT_MS = 30_000') &&
-    discover.includes('timeoutMs: EXPLORE_ROUTE_CATALOG_PAGINATION_TIMEOUT_MS') &&
-    discover.includes('liveTrailPackCatalogSnapshot.searchMeta?.hasMore !== true') &&
-    liveCatalog.includes('(nextSnapshot.searchMeta?.page ?? 1) > 1') &&
-    liveCatalog.includes('nextSnapshot.searchMeta?.hasMore === true') &&
-    discover.includes("liveTrailPackCatalogSnapshot.preservedReason === 'pagination_page_unavailable'") &&
-    liveCatalog.includes('const paginationBaseSnapshot =') &&
-    liveCatalog.includes('delete family.continuationCursor') &&
-    liveCatalog.includes('mergeLiveTrailPackCatalogPageSnapshots(') &&
-    liveCatalog.includes("'pagination_page_unavailable'") &&
-    !discover.includes('commitLiveTrailPackCatalogPageSnapshot('),
-  'Mounted Explore pagination should expose every loaded candidate, distinguish catalog progress from other sources, reject stale generations, and preserve degraded last-good results on failure.',
+    discover.includes('capUniqueRankedRoutes(') &&
+    liveCatalog.includes('searchMeta.hasMore = false') &&
+    liveCatalog.includes('searchMeta.nextPage = null') &&
+    liveCatalog.includes('searchMeta.nextCursor = null') &&
+    liveCatalog.includes('capLiveTrailPackCatalogData('),
+  'Mounted Explore should expose one capped, deduplicated result set, report additional matches, and make continuation impossible.',
 );
 
 assert(

@@ -158,6 +158,69 @@ assert(
   'Hidden Gem discovery must not reinterpret the guidance minimum as a terminal route exclusion.',
 );
 
+const popularCandidates = Array.from({ length: 51 }, (_, index) => route(`popular-${String(index).padStart(2, '0')}`, {
+  popularityScore: index === 50 ? 100 : 60,
+  distanceFromUserMiles: 20 + index,
+  elevationGainFt: index === 50 ? 7000 : 900,
+  highlights: index === 50 ? ['Iconic destination', 'Legendary 4x4 trail'] : ['Drivable trail'],
+}));
+const cappedPopularTrails = getPopularTrailRecommendations(popularCandidates, new Map(), {
+  radiusMiles: 100,
+});
+const cappedPopularTrailsFromReversedInput = getPopularTrailRecommendations(
+  [...popularCandidates, { ...popularCandidates[0] }].reverse(),
+  new Map(),
+  { radiusMiles: 100 },
+);
+assert.strictEqual(
+  cappedPopularTrails.length,
+  20,
+  'The local Popular Trails recommendation source must apply the total-search cap after ranking.',
+);
+assert.strictEqual(
+  new Set(cappedPopularTrails.map((item) => item.id)).size,
+  20,
+  'Duplicate route identities must never consume more than one Popular Trails result position.',
+);
+assert.strictEqual(cappedPopularTrailsFromReversedInput.length, 20);
+assert.strictEqual(new Set(cappedPopularTrailsFromReversedInput.map((item) => item.id)).size, 20);
+assert.deepStrictEqual(
+  cappedPopularTrailsFromReversedInput.map((item) => item.id),
+  cappedPopularTrails.map((item) => item.id),
+  'Popular Trails top-20 selection should be deterministic across provider order and duplicate input records.',
+);
+assert.ok(
+  cappedPopularTrails.some((item) => item.id === 'popular-50'),
+  'A high-quality candidate at the end of provider order must survive ranking before the top-20 slice.',
+);
+
+const hiddenGemCandidates = Array.from({ length: 25 }, (_, index) => route(`hidden-gem-${String(index).padStart(2, '0')}`, {
+  popularityScore: 5,
+  remotenessScore: 9,
+  elevationGainFt: 5200 - index,
+  terrainType: 'remote 4x4 two-track',
+  highlights: ['remote shelf', 'scenic ridge', 'technical wash'],
+}));
+const defaultHiddenGemPage = getHiddenGemRecommendations(hiddenGemCandidates, new Map(), {
+  radiusMiles: 100,
+});
+assert.strictEqual(defaultHiddenGemPage.pageSize, 20, 'Missing Hidden Gem page sizes should use the shared safe default.');
+assert.strictEqual(defaultHiddenGemPage.eligibleCount, 20, 'Hidden Gem paging windows must be bounded by the total-search cap.');
+assert.strictEqual(defaultHiddenGemPage.items.length, 20, 'The default Hidden Gem result window must not exceed 20 routes.');
+
+for (const invalidPageSize of [0, -5, Number.NaN, Number.POSITIVE_INFINITY, 51]) {
+  const normalizedPage = getHiddenGemRecommendations(hiddenGemCandidates, new Map(), {
+    radiusMiles: 100,
+    pageSize: invalidPageSize,
+  });
+  assert.strictEqual(
+    normalizedPage.pageSize,
+    20,
+    `Hidden Gem page size ${String(invalidPageSize)} should resolve to the shared maximum/default.`,
+  );
+  assert.ok(normalizedPage.items.length <= 20, 'Normalized Hidden Gem windows must never exceed 20 routes.');
+}
+
 const discoverSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'discover.tsx'), 'utf8');
 const readyInventorySource = fs.readFileSync(
   path.join(root, 'lib', 'explore', 'exploreGuidanceReadyInventory.ts'),

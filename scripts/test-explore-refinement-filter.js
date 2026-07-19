@@ -99,10 +99,47 @@ assert.deepStrictEqual(
 
 assert.deepStrictEqual(
   refinement.applyExploreRefinementFilter([
+    route('stable-b', { name: 'Same Remote Route', remotenessScore: 8, popularityScore: 20, distanceToNearestTownMiles: 18 }),
+    route('stable-a', { name: 'Same Remote Route', remotenessScore: 8, popularityScore: 20, distanceToNearestTownMiles: 18 }),
+  ], 'remoteness').map((item) => item.id),
+  ['stable-a', 'stable-b'],
+  'Equal-score, equal-name refinement results should use stable route identity instead of provider insertion order.',
+);
+
+assert.deepStrictEqual(
+  refinement.applyExploreRefinementFilter([
+    route('nested-remote-distance', {
+      remotenessScore: 3,
+      distanceToNearestTownMiles: undefined,
+      routeMetadata: { routeIntelligence: { distanceToNearestTownMiles: 18 } },
+    }),
+    route('nested-near-distance', {
+      remotenessScore: 9,
+      distanceToNearestTownMiles: undefined,
+      routeMetadata: { route_intelligence: { distanceToNearestTownMiles: 3 } },
+    }),
+  ], 'remoteness').map((item) => item.id),
+  ['nested-remote-distance'],
+  'Nested catalog intelligence must produce the same refinement decision after client normalization as it did at the Edge.',
+);
+
+assert.deepStrictEqual(
+  refinement.applyExploreRefinementFilter([
     route('short-overnight', { estimatedHours: 10, estimatedDays: 1, requiresCamping: true, description: 'Overnight camp required.' }),
   ], 'dayTrip').map((item) => item.id),
   [],
   'Day Trip should reject short routes when camping or overnight travel is required.',
+);
+
+assert.deepStrictEqual(
+  refinement.applyExploreRefinementFilter([
+    route('nested-camping-day', {
+      requiresCamping: undefined,
+      routeMetadata: { routeIntelligence: { requiresCamping: true } },
+    }),
+  ], 'dayTrip').map((item) => item.id),
+  [],
+  'Nested catalog camping requirements must be enforced before the final result cap.',
 );
 
 const counts = refinement.getExploreRefinementCounts(routes);
@@ -191,12 +228,13 @@ assert.ok(
 );
 assert.ok(
   !discoverSource.includes('routeCatalogRefinementCriteria') &&
-    !routeCatalogSearchCriteriaBlock.includes('exploreRefinement') &&
+    routeCatalogSearchCriteriaBlock.includes('searchFingerprint: [') &&
+    routeCatalogSearchCriteriaBlock.includes("exploreRefinement ?? 'all-refinements'") &&
     routeCatalogSearchCriteriaBlock.includes('includePreviewGeometry: false') &&
     !routeCatalogSearchCriteriaBlock.includes('minRemotenessScore') &&
     !routeCatalogSearchCriteriaBlock.includes('maxDurationMinutes') &&
     !routeCatalogSearchCriteriaBlock.includes('minDurationMinutes'),
-  'Explore refinement details should stay local while catalog list requests remain summary-only.',
+  'Explore refinement identity should reset the cached result set while catalog requests remain summary-only.',
 );
 assert.ok(
   refinementChangeBlock.includes('setExploreRefinement(refinement)') &&

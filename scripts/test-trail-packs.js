@@ -130,6 +130,27 @@ const liveCatalogPack = {
     lastEvaluatedAt: '2026-06-01T00:00:00.000Z',
   },
 };
+const oversizedCatalog = [
+  {
+    ...liveCatalogPack,
+    id: 'blocked-before-cap',
+    reviewStatus: 'rejected',
+    featuredRouteScore: 1_000,
+  },
+  ...Array.from({ length: 51 }, (_, index) => ({
+    ...liveCatalogPack,
+    id: `ranked-live-${String(index).padStart(2, '0')}`,
+    name: `Ranked live route ${index}`,
+    featuredRouteScore: index === 50 ? 100 : 0,
+    confidenceScore: 82 + (index % 10),
+  })),
+  { ...liveCatalogPack, id: 'ranked-live-00', name: 'Duplicate live route' },
+];
+const cappedDiscoverable = getDiscoverableTrailPacks(oversizedCatalog, user, 75);
+assert.strictEqual(cappedDiscoverable.length, 20, 'Application Trail Pack results must never exceed 20 routes.');
+assert.strictEqual(new Set(cappedDiscoverable.map((pack) => pack.id)).size, 20, 'Duplicate Trail Packs do not consume result positions.');
+assert.strictEqual(cappedDiscoverable[0].id, 'ranked-live-50', 'Ranking must run before the final 20-result slice.');
+assert(!cappedDiscoverable.some((pack) => pack.id === 'blocked-before-cap'), 'Review filtering must run before the result cap.');
 assert.strictEqual(
   isPublicSuggestedTrailheadTrailPack(liveCatalogPack),
   true,

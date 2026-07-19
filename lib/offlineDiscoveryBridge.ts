@@ -37,6 +37,10 @@ import type {
   OfflineDatasetQueryResult,
 } from './offlineExpeditionDbTypes';
 import { DATASET_CATEGORIES, DATASET_CATEGORY_DISPLAY } from './offlineExpeditionDbTypes';
+import {
+  capUniqueRankedRoutes,
+  ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE,
+} from './explore/routeSearchResultPolicy';
 
 const TAG = '[OfflineDiscoveryBridge]';
 
@@ -249,6 +253,18 @@ function _convertTrailEntry(
   };
 }
 
+function _compareOfflineTrails(left: OfflineTrailEntry, right: OfflineTrailEntry): number {
+  const matchDelta = right.match_score - left.match_score;
+  if (matchDelta !== 0) return matchDelta;
+  const distanceDelta =
+    (left.distance_from_user_miles ?? Number.MAX_SAFE_INTEGER) -
+    (right.distance_from_user_miles ?? Number.MAX_SAFE_INTEGER);
+  if (distanceDelta !== 0) return distanceDelta;
+  const nameDelta = left.name.localeCompare(right.name);
+  if (nameDelta !== 0) return nameDelta;
+  return left.id.localeCompare(right.id);
+}
+
 /**
  * Convert a DatasetEntry (non-trail) to an OfflinePoiEntry.
  */
@@ -418,11 +434,11 @@ export const offlineDiscoveryBridge = {
 
       // Phase 6D: Validate entries before conversion
       let invalidTrailCount = 0;
-      const trails: OfflineTrailEntry[] = [];
+      const trailCandidates: OfflineTrailEntry[] = [];
       for (const entry of trailResult.entries) {
         if (_isValidEntry(entry)) {
           try {
-            trails.push(_convertTrailEntry(entry, userLat, userLng));
+            trailCandidates.push(_convertTrailEntry(entry, userLat, userLng));
           } catch {
             invalidTrailCount++;
           }
@@ -435,8 +451,18 @@ export const offlineDiscoveryBridge = {
         console.warn(`${TAG} [6D] Filtered ${invalidTrailCount} invalid trail entries`);
       }
 
-      // Sort trails by match score (highest first)
-      trails.sort((a, b) => b.match_score - a.match_score);
+      // Invalid entries are removed above. Deduplicate before the final stable
+      // relevance/quality ordering, then apply the shared total-search cap.
+      const bestTrailById = new Map<string, OfflineTrailEntry>();
+      trailCandidates.forEach((trail) => {
+        const existing = bestTrailById.get(trail.id);
+        if (!existing || _compareOfflineTrails(trail, existing) < 0) {
+          bestTrailById.set(trail.id, trail);
+        }
+      });
+      const rankedTrails = Array.from(bestTrailById.values()).sort(_compareOfflineTrails);
+      const eligibleTrailCount = rankedTrails.length;
+      const trails = capUniqueRankedRoutes(rankedTrails, (trail) => trail.id);
 
       // ── Query POIs (non-trail categories) ──
       const poiCategories = (categories || DATASET_CATEGORIES)
@@ -485,6 +511,8 @@ export const offlineDiscoveryBridge = {
       let statusMessage: string;
       if (totalCount === 0) {
         statusMessage = 'No offline expedition data within range';
+      } else if (eligibleTrailCount > trails.length) {
+        statusMessage = ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE;
       } else {
         const trailText = trails.length === 1 ? '1 trail' : `${trails.length} trails`;
         const poiText = pois.length === 1 ? '1 point' : `${pois.length} points`;
@@ -492,7 +520,7 @@ export const offlineDiscoveryBridge = {
       }
 
       console.log(
-        `${TAG} Discovery query: ${trails.length} trails, ${pois.length} POIs ` +
+        `${TAG} Discovery query: ${trails.length}/${eligibleTrailCount} trails, ${pois.length} POIs ` +
         `from ${allSourceRegions.length} region(s) ` +
         `(radius: ${radiusMiles} mi, offline: ${isOffline})`
       );

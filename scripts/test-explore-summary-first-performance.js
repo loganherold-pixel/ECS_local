@@ -40,12 +40,12 @@ const {
 
 assert.strictEqual(
   EXPLORE_CATALOG_SUMMARY_CACHE_KEY,
-  'explore.catalog.summary.v2',
+  'explore.catalog.summary.v3',
   'Global Explore summary cache key should be stable.',
 );
 assert.strictEqual(
   exploreCatalogRegionCacheKey('Sierra Nevada / Tahoe NF'),
-  'explore.catalog.region.sierra-nevada-tahoe-nf.v2',
+  'explore.catalog.region.sierra-nevada-tahoe-nf.v3',
   'Region summary cache key should normalize human region ids.',
 );
 
@@ -87,7 +87,8 @@ assert.deepStrictEqual(
   sampleSummaries.slice(10, 20).map((summary) => summary.routeId),
   'Route catalog summaries should paginate without loading route details.',
 );
-assert.strictEqual(page.totalPages, 3);
+assert.strictEqual(page.totalPages, 2);
+assert.strictEqual(page.totalItems, 20, 'Persisted summary paging must never expose more than 20 unique routes.');
 
 const liveCatalog = fs.readFileSync(liveCatalogPath, 'utf8');
 assert(
@@ -155,7 +156,7 @@ assert(
   'Explore must not mount Navigate MVUM overlay logic or initialize MVUM sources.',
 );
 assert(
-  discover.includes('const EXPLORE_ROUTE_CATALOG_REQUEST_LIMIT = 50') &&
+  discover.includes('const EXPLORE_ROUTE_CATALOG_REQUEST_LIMIT = ECS_ROUTE_SEARCH_RESULT_LIMIT') &&
     discover.includes('includePreviewGeometry: false') &&
     !discover.includes('routeCatalogPreviewGeometryRequested') &&
     !discover.includes('setRouteCatalogPreviewGeometryRequested'),

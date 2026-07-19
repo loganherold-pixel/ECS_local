@@ -22,10 +22,14 @@ import {
   splitGuidanceRouteAtProjection,
 } from './navigation/guidanceRouteProjection';
 import { buildGeometryFingerprint } from './lifecycle/routeTripExpeditionLifecycle';
+import {
+  capUniqueRankedRoutes,
+  ECS_ROUTE_SEARCH_RESULT_LIMIT,
+  normalizeRouteSearchResultLimit,
+} from './explore/routeSearchResultPolicy';
 
-export const ROUTE_CATALOG_VIEWPORT_DEFAULT_LIMIT = 500;
+export const ROUTE_CATALOG_VIEWPORT_DEFAULT_LIMIT = ECS_ROUTE_SEARCH_RESULT_LIMIT;
 export const ROUTE_CATALOG_VIEWPORT_MIN_ZOOM = 8;
-const ROUTE_CATALOG_VIEWPORT_MAX_LIMIT = 1000;
 const ROUTE_CATALOG_VIEWPORT_MIN_RADIUS_MILES = 15;
 const ROUTE_CATALOG_VIEWPORT_RADIUS_PADDING_MILES = 10;
 
@@ -184,9 +188,7 @@ function normalizeRegionTags(values: string[] | null | undefined): string[] {
 }
 
 function normalizeLimit(value: unknown): number {
-  const parsed = finiteNumber(value);
-  if (parsed == null) return ROUTE_CATALOG_VIEWPORT_DEFAULT_LIMIT;
-  return Math.max(1, Math.min(ROUTE_CATALOG_VIEWPORT_MAX_LIMIT, Math.floor(parsed)));
+  return normalizeRouteSearchResultLimit(value);
 }
 
 function normalizeBbox(value: RouteCatalogViewportBbox): RouteCatalogViewportBbox {
@@ -244,6 +246,7 @@ function routeCatalogViewportCacheKey(query: Omit<RouteCatalogViewportQuery, 'ca
     'route_catalog_viewport',
     `z${zoomBucket}`,
     query.limit,
+    `r${query.radiusMiles.toFixed(2)}`,
     query.bbox.minLng.toFixed(5),
     query.bbox.minLat.toFixed(5),
     query.bbox.maxLng.toFixed(5),
@@ -532,9 +535,81 @@ function normalizeRoutes(records: unknown[]): RouteCatalogRecord[] {
   records.forEach((value) => {
     const route = normalizeRouteCatalogRecord(value);
     if (!route) return;
-    byId.set(route.publicId ?? route.id, route);
+    const identity = route.publicId ?? route.id;
+    const existing = byId.get(identity);
+    if (!existing || compareDuplicateRouteVersions(route, existing) < 0) {
+      byId.set(identity, route);
+    }
   });
   return Array.from(byId.values());
+}
+
+function compareDuplicateRouteVersions(left: RouteCatalogRecord, right: RouteCatalogRecord): number {
+  const leftVerification = verifyRouteCatalogRecord(left);
+  const rightVerification = verifyRouteCatalogRecord(right);
+  const recommendationDelta =
+    Number(rightVerification.publicRecommendation) - Number(leftVerification.publicRecommendation);
+  if (recommendationDelta !== 0) return recommendationDelta;
+  const blockerDelta = leftVerification.blockers.length - rightVerification.blockers.length;
+  if (blockerDelta !== 0) return blockerDelta;
+  const featuredDelta = (right.featuredRouteScore ?? 0) - (left.featuredRouteScore ?? 0);
+  if (featuredDelta !== 0) return featuredDelta;
+  const confidenceDelta = rightVerification.confidenceScore - leftVerification.confidenceScore;
+  if (confidenceDelta !== 0) return confidenceDelta;
+  const updatedDelta = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+  if (Number.isFinite(updatedDelta) && updatedDelta !== 0) return updatedDelta;
+  const nameDelta = left.name.localeCompare(right.name);
+  if (nameDelta !== 0) return nameDelta;
+  return left.id.localeCompare(right.id);
+}
+
+type RankedViewportFeature = {
+  route: RouteCatalogRecord;
+  feature: RouteCatalogViewportFeature;
+  confidenceScore: number;
+  relevanceDistanceMiles: number;
+};
+
+function isViewportPublishingEligible(
+  route: RouteCatalogRecord,
+  verification: ReturnType<typeof verifyRouteCatalogRecord>,
+): boolean {
+  if (verification.publicRecommendation && verification.blockers.length === 0) return true;
+
+  // A geometry-free, otherwise publishable summary may remain a map marker;
+  // geometry hydration is deferred until selection. Every non-geometry safety,
+  // access, moderation, source, and vehicle gate remains authoritative.
+  const geometryOnlyBlockers =
+    verification.blockers.length > 0 &&
+    verification.blockers.every((blocker) => blocker === 'Route geometry is incomplete');
+  if (!geometryOnlyBlockers) return false;
+  return (
+    route.reviewStatus === 'approved' &&
+    route.recommendationStatus !== 'not_recommended' &&
+    route.officialAccessCoveragePct >= 80 &&
+    route.unknownAccessCoveragePct <= 20 &&
+    route.restrictedAccessCoveragePct === 0 &&
+    route.activeClosureCount === 0 &&
+    !route.vehicleMismatch &&
+    !verification.warnings.some((warning) =>
+      /source verification is stale|no official legal-access source/i.test(warning),
+    )
+  );
+}
+
+function compareRankedViewportFeatures(
+  left: RankedViewportFeature,
+  right: RankedViewportFeature,
+): number {
+  const featuredDelta = (right.route.featuredRouteScore ?? 0) - (left.route.featuredRouteScore ?? 0);
+  if (featuredDelta !== 0) return featuredDelta;
+  const distanceDelta = left.relevanceDistanceMiles - right.relevanceDistanceMiles;
+  if (distanceDelta !== 0) return distanceDelta;
+  const confidenceDelta = right.confidenceScore - left.confidenceScore;
+  if (confidenceDelta !== 0) return confidenceDelta;
+  const updatedDelta = Date.parse(right.route.updatedAt) - Date.parse(left.route.updatedAt);
+  if (Number.isFinite(updatedDelta) && updatedDelta !== 0) return updatedDelta;
+  return (left.route.publicId ?? left.route.id).localeCompare(right.route.publicId ?? right.route.id);
 }
 
 export function queryRouteCatalogViewportRecords(
@@ -542,18 +617,32 @@ export function queryRouteCatalogViewportRecords(
   query: RouteCatalogViewportQuery,
 ): RouteCatalogViewportResult {
   const routes = normalizeRoutes(records);
-  const features: RouteCatalogViewportFeature[] = [];
+  const rankedCandidates: RankedViewportFeature[] = [];
   let skippedOutsideViewportCount = 0;
 
   for (const route of routes) {
-    if (features.length >= query.limit) break;
+    const verification = verifyRouteCatalogRecord(route);
+    if (!isViewportPublishingEligible(route, verification)) continue;
     const feature = featureForRoute(route, query);
     if (!feature) {
       skippedOutsideViewportCount += 1;
       continue;
     }
-    features.push(feature);
+    rankedCandidates.push({
+      route,
+      feature,
+      confidenceScore: verification.confidenceScore,
+      relevanceDistanceMiles:
+        route.searchDistanceMiles ?? haversineMiles(query.center, route.centerCoordinate),
+    });
   }
+
+  rankedCandidates.sort(compareRankedViewportFeatures);
+  const features = capUniqueRankedRoutes(
+    rankedCandidates,
+    (candidate) => candidate.route.publicId ?? candidate.route.id,
+    query.limit,
+  ).map((candidate) => candidate.feature);
 
   const lineFeatureCount = features.filter((feature) => feature.geometry.type !== 'Point').length;
   const markerFeatureCount = features.length - lineFeatureCount;
@@ -830,6 +919,35 @@ export function routeCatalogViewportFeaturesToRouteGeometrySegments(
   return featureCollection.features.flatMap((feature) => lineFeatureToSegments(feature, selectedIds));
 }
 
+function capRouteCatalogViewportResult(result: RouteCatalogViewportResult): RouteCatalogViewportResult {
+  const features = capUniqueRankedRoutes(
+    result.featureCollection.features,
+    (feature) => feature.properties.routeId,
+  );
+  if (
+    features.length === result.featureCollection.features.length &&
+    features.every((feature, index) => feature === result.featureCollection.features[index])
+  ) {
+    return result;
+  }
+  const lineFeatureCount = features.filter((feature) => feature.geometry.type !== 'Point').length;
+  const markerFeatureCount = features.length - lineFeatureCount;
+  return {
+    ...result,
+    featureCollection: { ...result.featureCollection, features },
+    returnedCount: features.length,
+    lineFeatureCount,
+    markerFeatureCount,
+    guidanceReadyCount: features.filter((feature) => feature.properties.guidanceReady).length,
+    trailheadOnlyCount: features.filter(
+      (feature) => feature.properties.geometryStatus === 'trailhead_only',
+    ).length,
+    insufficientGeometryCount: features.filter(
+      (feature) => feature.properties.geometryStatus === 'insufficient_geometry',
+    ).length,
+  };
+}
+
 export class RouteCatalogViewportCache {
   private maxEntries: number;
   private entries = new Map<string, RouteCatalogViewportResult>();
@@ -841,20 +959,22 @@ export class RouteCatalogViewportCache {
   get(query: Pick<RouteCatalogViewportQuery, 'cacheKey'>): RouteCatalogViewportResult | null {
     const cached = this.entries.get(query.cacheKey);
     if (!cached) return null;
+    const capped = capRouteCatalogViewportResult(cached);
     this.entries.delete(query.cacheKey);
-    this.entries.set(query.cacheKey, cached);
-    return cached;
+    this.entries.set(query.cacheKey, capped);
+    return capped;
   }
 
   set(query: Pick<RouteCatalogViewportQuery, 'cacheKey'>, result: RouteCatalogViewportResult): RouteCatalogViewportResult {
+    const capped = capRouteCatalogViewportResult(result);
     if (this.entries.has(query.cacheKey)) this.entries.delete(query.cacheKey);
-    this.entries.set(query.cacheKey, result);
+    this.entries.set(query.cacheKey, capped);
     while (this.entries.size > this.maxEntries) {
       const oldest = this.entries.keys().next().value;
       if (!oldest) break;
       this.entries.delete(oldest);
     }
-    return result;
+    return capped;
   }
 
   getOrSet(

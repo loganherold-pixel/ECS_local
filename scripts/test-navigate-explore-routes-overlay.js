@@ -177,8 +177,10 @@ assert(
   'Explorer route map preview must clear stale route handoffs, stage the filtered route handoff, and switch to Navigate.',
 );
 assert(
-  discover.includes('maxRenderedRoutes: Math.max(EXPLORE_MAP_HANDOFF_MAX_ROUTES, exploreMapPreviewRouteCounts.total)'),
-  'Explorer route map preview should include every filtered route in normal sets instead of capping below the filtered total.',
+  discover.includes('const EXPLORE_MAP_HANDOFF_MAX_ROUTES = ECS_ROUTE_SEARCH_RESULT_LIMIT') &&
+    discover.includes('maxRenderedRoutes: EXPLORE_MAP_HANDOFF_MAX_ROUTES') &&
+    !discover.includes('maxRenderedRoutes: Math.max(EXPLORE_MAP_HANDOFF_MAX_ROUTES, exploreMapPreviewRouteCounts.total)'),
+  'Explorer map handoff must enforce the same total-search cap instead of expanding to every catalog match.',
 );
 assert(
   discover.includes('buildExploreGuidanceReadyInventory({') &&

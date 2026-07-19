@@ -21,11 +21,19 @@ const REMOTE_NEAREST_PAVED_ROAD_MILES = 8;
 const NESTED_FIELD_GROUPS = [
   'metadata',
   'routeMetadata',
+  'route_metadata',
   'sourceMetadata',
+  'source_metadata',
   'properties',
   'assessment',
   'readiness',
   'trip',
+  'routeIntelligence',
+  'route_intelligence',
+  'routeCatalogOperationalCriteria',
+  'route_catalog_operational_criteria',
+  'operationalCriteria',
+  'operational_criteria',
 ] as const;
 
 const DURATION_HOUR_FIELDS = [
@@ -113,9 +121,16 @@ function candidateRecords(trail: RefinableTrail): UnknownRecord[] {
   const root = trail as UnknownRecord;
   const records = [root];
 
-  for (const key of NESTED_FIELD_GROUPS) {
-    const nested = asRecord(root[key]);
-    if (nested) records.push(nested);
+  // Catalog records may wrap operational intelligence inside normalized
+  // metadata. Walk only the known field groups so the client evaluates the
+  // same refinement facts as the Edge function without traversing arbitrary
+  // payload data.
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    for (const key of NESTED_FIELD_GROUPS) {
+      const nested = asRecord(record[key]);
+      if (nested && !records.includes(nested)) records.push(nested);
+    }
   }
 
   return records;
@@ -386,7 +401,11 @@ export function applyExploreRefinementFilter<T extends RefinableTrail>(
         if (scoreDiff !== 0) return scoreDiff;
         const leftName = String((left as UnknownRecord).name ?? '');
         const rightName = String((right as UnknownRecord).name ?? '');
-        return leftName.localeCompare(rightName);
+        const nameDiff = leftName.localeCompare(rightName);
+        if (nameDiff !== 0) return nameDiff;
+        const leftId = String((left as UnknownRecord).id ?? '');
+        const rightId = String((right as UnknownRecord).id ?? '');
+        return leftId.localeCompare(rightId);
       });
   }
   return trails.filter((trail) => trailMatchesExploreRefinement(trail, refinement));

@@ -1,3 +1,4 @@
+/* global __dirname */
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -24,6 +25,8 @@ require.extensions['.ts'] = compileTypescript;
 assert(fs.existsSync(modulePath), 'Route geometry viewport domain module should exist.');
 
 const {
+  ROUTE_GEOMETRY_VIEWPORT_DEFAULT_LIMIT,
+  ROUTE_GEOMETRY_VIEWPORT_MAX_LIMIT,
   ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM,
   ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
   ROUTE_GEOMETRY_VIEWPORT_WARNING,
@@ -35,6 +38,8 @@ const {
   routeGeometryViewportSegmentToOverlaySegment,
 } = require(modulePath);
 
+assert.strictEqual(ROUTE_GEOMETRY_VIEWPORT_DEFAULT_LIMIT, 20);
+assert.strictEqual(ROUTE_GEOMETRY_VIEWPORT_MAX_LIMIT, 20);
 assert.strictEqual(ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM, 10, 'Viewport route geometry should load at zoom 10+.');
 assert.strictEqual(isRouteGeometryViewportZoomEligible(9.99), false, 'Zoom below 10 should defer catalog segments.');
 assert.strictEqual(isRouteGeometryViewportZoomEligible(10), true, 'Zoom 10 should allow catalog segments.');
@@ -152,6 +157,69 @@ assert.deepStrictEqual(normalized.segments[1].sourceProviderIds, ['usgs_trails']
 assert.strictEqual(normalized.segments[1].dataState, 'cached', 'Cached/reference data state should remain visible.');
 assert.strictEqual(normalized.segments[1].confidence, 'low', 'Reference geometry confidence should remain visible.');
 assert.strictEqual(normalized.degraded, false, 'Normal viewport payloads should not be marked degraded.');
+
+function viewportSegment(id, providerId = 'usfs_mvum_colorado', overrides = {}) {
+  return {
+    id,
+    sourceId: id,
+    name: overrides.name ?? id,
+    confidenceScore: overrides.confidenceScore ?? 50,
+    lastVerifiedAt: overrides.lastVerifiedAt ?? '2026-07-19T00:00:00.000Z',
+    source_records: [{ providerId }],
+    geometry: {
+      type: 'LineString',
+      coordinates: [[-111, 38], [-110.99, 38.01]],
+    },
+  };
+}
+
+const oversized = normalizeRouteGeometryViewportResponse({
+  segments: [
+    ...Array.from({ length: 51 }, (_, index) => viewportSegment(`ranked-${index}`)),
+    viewportSegment('ranked-0'),
+  ],
+  meta: { candidateCount: 52 },
+});
+assert.strictEqual(oversized.segments.length, 20, 'Client normalization must never expose a 21st route.');
+assert.strictEqual(new Set(oversized.segments.map((segment) => segment.sourceId)).size, 20);
+assert.strictEqual(oversized.qualifyingUniqueCount, 51);
+assert.strictEqual(oversized.deduplicatedCount, 1);
+assert.strictEqual(oversized.cappedCount, 31);
+assert.strictEqual(oversized.additionalMatchesAvailable, true);
+
+const defensiveRankingInput = [
+  ...Array.from({ length: 20 }, (_, index) => viewportSegment(
+    `low-${String(index).padStart(2, '0')}`,
+    'usfs_mvum_colorado',
+    { confidenceScore: 10 },
+  )),
+  viewportSegment('high-quality-tail', 'usfs_mvum_colorado', { confidenceScore: 99 }),
+];
+const defensivelyRanked = normalizeRouteGeometryViewportResponse({ segments: defensiveRankingInput });
+const reversedDefensivelyRanked = normalizeRouteGeometryViewportResponse({
+  segments: [...defensiveRankingInput].reverse(),
+});
+assert.strictEqual(defensivelyRanked.segments[0].id, 'high-quality-tail');
+assert.deepStrictEqual(
+  reversedDefensivelyRanked.segments.map((segment) => segment.id),
+  defensivelyRanked.segments.map((segment) => segment.id),
+  'Defensive client ranking must retain a high-quality tail route and ignore provider order.',
+);
+
+const providerFilteredBeforeCap = normalizeRouteGeometryViewportResponse({
+  segments: [
+    ...Array.from({ length: 25 }, (_, index) => viewportSegment(`usgs-${index}`, 'usgs_trails')),
+    ...Array.from({ length: 25 }, (_, index) => viewportSegment(`mvum-${index}`)),
+  ],
+  meta: { candidateCount: 50, resultLimit: 20 },
+}, 'usfs_mvum');
+assert.strictEqual(providerFilteredBeforeCap.segments.length, 20);
+assert(
+  providerFilteredBeforeCap.segments.every((segment) => segment.sourceId.startsWith('mvum-')),
+  'The provider compatibility filter must run before the defensive top-20 slice.',
+);
+assert.strictEqual(providerFilteredBeforeCap.qualifyingUniqueCount, 25);
+assert.strictEqual(providerFilteredBeforeCap.additionalMatchesAvailable, true);
 
 const mvumOnly = filterRouteGeometryViewportResultBySourceProviderPrefix(normalized, 'usfs_mvum');
 assert.deepStrictEqual(

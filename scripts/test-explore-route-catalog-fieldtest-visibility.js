@@ -43,7 +43,23 @@ function read(relativePath) {
 }
 
 const discover = read(path.join('app', '(tabs)', 'discover.tsx'));
-const liveCatalog = read(path.join('lib', 'explore', 'liveTrailPackCatalog.ts'));
+const {
+  buildRouteCatalogPaginationProgress,
+  buildRouteCatalogSearchBody,
+  resolveRouteCatalogVehicleClass,
+} = require(path.join(root, 'lib', 'explore', 'liveTrailPackCatalog.ts'));
+const {
+  ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE,
+} = require(path.join(root, 'lib', 'explore', 'routeSearchResultPolicy.ts'));
+const {
+  nextRouteCatalogCandidateInspectionBatch,
+} = require(path.join(
+  root,
+  'supabase',
+  'functions',
+  'route-catalog-search',
+  'providerContract.ts',
+));
 const { deriveExploreRouteSurfaceState } = require(
   path.join(root, 'lib', 'explore', 'exploreGuidanceReadyInventory.ts'),
 );
@@ -70,16 +86,15 @@ function currentRouteEvaluation(overrides = {}) {
   };
 }
 
-assert(
-  liveCatalog.includes('ROUTE_CATALOG_VEHICLE_CLASS_ALIASES') &&
-    liveCatalog.includes('export function resolveRouteCatalogVehicleClass') &&
-    liveCatalog.includes('resolveRouteCatalogVehicleClass(criteria.vehicleClass)') &&
-    liveCatalog.includes('truck:') &&
-    liveCatalog.includes('suv:') &&
-    liveCatalog.includes('jeep:') &&
-    liveCatalog.includes('motorcycle:') &&
-    liveCatalog.includes('vehicleClass }'),
-  'Route catalog search should normalize Fleet vehicle types into catalog vehicle_fit classes instead of forwarding raw app labels that can filter every route out.',
+assert.deepStrictEqual(
+  ['truck', 'suv', 'jeep', 'motorcycle'].map(resolveRouteCatalogVehicleClass),
+  ['full_size_4x4', 'highway_legal_4x4', 'highway_legal_4x4', 'motorcycle'],
+  'Route catalog search should normalize Fleet vehicle types into catalog vehicle_fit classes.',
+);
+assert.strictEqual(
+  buildRouteCatalogSearchBody({ vehicleClass: 'truck' }).vehicleClass,
+  'full_size_4x4',
+  'The observable request body should carry the normalized vehicle class.',
 );
 
 assert(
@@ -110,16 +125,32 @@ assert(
   'Selected search areas should remain internally radius-filtered without exposing route catalog controls on the Explorer surface.',
 );
 
-const freshPaginatedCards = deriveExploreRouteSurfaceState(currentRouteEvaluation({
-  visibleCandidateCount: 50,
-  candidateCount: 50,
-  discoverableCount: 50,
-  evaluatedCount: 50,
+const freshSuccessfulCards = deriveExploreRouteSurfaceState(currentRouteEvaluation({
+  visibleCandidateCount: 3,
+  candidateCount: 3,
+  discoverableCount: 3,
+  evaluatedCount: 3,
   hasRangeData: true,
 }));
-assert.strictEqual(freshPaginatedCards.kind, 'cards');
-assert.strictEqual(freshPaginatedCards.currentSuccessfulEvaluation, true);
-assert.strictEqual(freshPaginatedCards.showBlockedNotice, false);
+assert.deepStrictEqual(freshSuccessfulCards, {
+  kind: 'cards',
+  currentSuccessfulEvaluation: true,
+  showBlockedNotice: false,
+});
+
+const loadedCardsDespitePaginationMetadata = deriveExploreRouteSurfaceState(currentRouteEvaluation({
+  visibleCandidateCount: 3,
+  candidateCount: 0,
+  discoverableCount: 0,
+  evaluatedCount: 0,
+  hasRangeData: true,
+  validEmpty: true,
+  hasMore: true,
+  nextPage: 2,
+}));
+assert.strictEqual(loadedCardsDespitePaginationMetadata.kind, 'cards');
+assert.strictEqual(loadedCardsDespitePaginationMetadata.currentSuccessfulEvaluation, true);
+assert.strictEqual(loadedCardsDespitePaginationMetadata.showBlockedNotice, false);
 
 const mismatchedDiagnosticSnapshot = deriveExploreRouteSurfaceState(currentRouteEvaluation({
   snapshotRefreshKey: 'fieldtest-obsolete-request',
@@ -149,13 +180,52 @@ assert.strictEqual(currentDiagnosticOnlySnapshot.kind, 'blocked');
 assert.strictEqual(currentDiagnosticOnlySnapshot.currentSuccessfulEvaluation, true);
 assert.strictEqual(currentDiagnosticOnlySnapshot.showBlockedNotice, true);
 
-assert(
-  discover.includes('liveTrailPackCatalogSnapshot.searchMeta?.hasMore &&') &&
-    discover.includes('liveTrailPackCatalogSnapshot.searchMeta.nextPage != null') &&
-    discover.includes('onPress={handleLoadNextRouteCatalogPage}') &&
-    discover.includes("'Load more verified Explore routes'") &&
-    discover.includes('testID="explore-guidance-ready-load-next-provider-page"'),
-  'A successful first page with a continuation should keep its cards visible and expose an accessible next-page control.',
+const providerFailure = deriveExploreRouteSurfaceState(currentRouteEvaluation({
+  status: 'error',
+  providerStatus: 'unavailable',
+  catalogSource: 'unavailable',
+  sourceTruth: 'unavailable',
+  freshness: 'unknown',
+  evaluatedCount: 23,
+  hasRangeData: true,
+}));
+assert.deepStrictEqual(providerFailure, {
+  kind: 'provider_unavailable',
+  currentSuccessfulEvaluation: false,
+  showBlockedNotice: false,
+});
+
+const providerPage = { hasMore: true, inspectedCount: 500 };
+const internalContinuationBatch = providerPage.hasMore
+  ? nextRouteCatalogCandidateInspectionBatch(providerPage.inspectedCount)
+  : null;
+assert.deepStrictEqual(
+  internalContinuationBatch,
+  { pageSize: 500, queryLimit: 501 },
+  'Provider hasMore metadata should leave the next internal candidate-inspection batch available.',
+);
+
+const oversizedSearchProgress = buildRouteCatalogPaginationProgress({
+  loadedCatalogCount: 20,
+  totalMatchedCount: 51,
+  totalMatchedCountBounded: false,
+  visibleCatalogCardCount: 20,
+  visibleCandidateCount: 20,
+});
+assert.deepStrictEqual(
+  {
+    loadedCatalogCount: oversizedSearchProgress.loadedCatalogCount,
+    matchedCatalogCount: oversizedSearchProgress.matchedCatalogCount,
+    visibleCatalogCardCount: oversizedSearchProgress.visibleCatalogCardCount,
+    label: oversizedSearchProgress.label,
+  },
+  {
+    loadedCatalogCount: 20,
+    matchedCatalogCount: 51,
+    visibleCatalogCardCount: 20,
+    label: ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE,
+  },
+  'Consumer pagination should keep loaded cards visible while truthfully reporting additional matches under the total-search cap.',
 );
 
 console.log('Explore route catalog field-test visibility checks passed');

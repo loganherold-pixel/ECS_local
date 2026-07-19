@@ -163,8 +163,34 @@ const query = buildRouteCatalogViewportQuery({
   zoom: 11.2,
   regionTags: ['tahoe_nf', 'eldorado_nf', 'plumas_nf', 'mendocino_nf'],
 });
+const widerRadiusQuery = buildRouteCatalogViewportQuery({
+  bbox: tahoeViewport,
+  zoom: 11.2,
+  radiusMiles: query.radiusMiles + 25,
+  regionTags: ['tahoe_nf', 'eldorado_nf', 'plumas_nf', 'mendocino_nf'],
+});
 
 assert.strictEqual(query.limit, ROUTE_CATALOG_VIEWPORT_DEFAULT_LIMIT);
+assert.strictEqual(ROUTE_CATALOG_VIEWPORT_DEFAULT_LIMIT, 20);
+assert.notStrictEqual(
+  query.cacheKey,
+  widerRadiusQuery.cacheKey,
+  'Viewport cache identity must change when the search radius changes.',
+);
+assert(
+  widerRadiusQuery.cacheKey.includes(`r${widerRadiusQuery.radiusMiles.toFixed(2)}`),
+  'Viewport cache identity should encode the normalized search radius.',
+);
+assert.strictEqual(
+  buildRouteCatalogViewportQuery({ bbox: tahoeViewport, zoom: 11.2, limit: 51 }).limit,
+  20,
+  'Viewport limits above 20 must clamp to 20.',
+);
+assert.strictEqual(
+  buildRouteCatalogViewportQuery({ bbox: tahoeViewport, zoom: 11.2, limit: -4 }).limit,
+  20,
+  'Negative viewport limits must use the documented safe default.',
+);
 assert(query.radiusMiles >= 15, 'Viewport query should derive a usable radius from the map bounds.');
 assert.strictEqual(ROUTE_CATALOG_VIEWPORT_MIN_ZOOM, 8);
 assert(
@@ -179,6 +205,47 @@ const result = queryRouteCatalogViewportRecords(records, query);
 assert.strictEqual(result.candidateCount, 5);
 assert.strictEqual(result.featureCollection.type, 'FeatureCollection');
 assert.strictEqual(result.featureCollection.features.length, 4, 'Viewport should include geometry intersections and centroid fallback markers.');
+
+const rankedViewportRecords = [
+  { not: 'a valid route' },
+  catalogRoute({
+    id: 'blocked-high-rank',
+    public_id: 'blocked-high-rank',
+    name: 'Blocked high-rank route',
+    featured_route_score: 1_000,
+    restricted_access_coverage_pct: 100,
+  }),
+  ...Array.from({ length: 51 }, (_, index) => catalogRoute({
+    id: `ranked-${String(index).padStart(2, '0')}`,
+    public_id: `ranked-${String(index).padStart(2, '0')}`,
+    name: `Ranked viewport route ${index}`,
+    center_latitude: 39.25 + (index % 5) * 0.005,
+    center_longitude: -120.55 + (index % 5) * 0.005,
+    confidence_score: 82 + (index % 10),
+    featured_route_score: index === 50 ? 100 : 0,
+  })),
+  catalogRoute({
+    id: 'ranked-00',
+    public_id: 'ranked-00',
+    name: 'Duplicate ranked viewport route',
+  }),
+];
+const cappedViewportResult = queryRouteCatalogViewportRecords(rankedViewportRecords, query);
+assert.strictEqual(cappedViewportResult.returnedCount, 20, 'A 51-route viewport response must return exactly 20 unique routes.');
+assert.strictEqual(
+  new Set(cappedViewportResult.featureCollection.features.map((feature) => feature.properties.routeId)).size,
+  20,
+  'Duplicate viewport routes must not consume result positions.',
+);
+assert.strictEqual(
+  cappedViewportResult.featureCollection.features[0].properties.routeId,
+  'ranked-50',
+  'Route-quality/relevance ranking must run before the final 20-result slice.',
+);
+assert(
+  !cappedViewportResult.featureCollection.features.some((feature) => feature.properties.routeId === 'blocked-high-rank'),
+  'Access filtering must run before the final viewport cap even when a blocked route has a high score.',
+);
 
 const tahoe = result.featureCollection.features.find((feature) => feature.properties.routeId === 'route-a');
 assert(tahoe, 'Tahoe route should be returned.');
@@ -427,5 +494,34 @@ const secondCached = cache.getOrSet(query, () => {
 });
 assert.strictEqual(loaderCalls, 1, 'Repeated pan/zoom queries with the same bucket should use cache.');
 assert.strictEqual(firstCached, secondCached, 'Cached viewport result should be reused.');
+const widerRadiusCached = cache.getOrSet(widerRadiusQuery, () => {
+  loaderCalls += 1;
+  return queryRouteCatalogViewportRecords(records, widerRadiusQuery);
+});
+assert.strictEqual(loaderCalls, 2, 'A changed radius must not reuse the previous viewport cache entry.');
+assert.notStrictEqual(widerRadiusCached, firstCached);
+
+const oversizedCachedFeatures = [
+  ...cappedViewportResult.featureCollection.features,
+  ...cappedViewportResult.featureCollection.features.slice(0, 5).map((feature, index) => ({
+    ...feature,
+    id: `legacy-cache-${index}`,
+    properties: {
+      ...feature.properties,
+      routeId: `legacy-cache-${index}`,
+    },
+  })),
+];
+const legacyCacheQuery = { cacheKey: `${query.cacheKey}:legacy-oversized` };
+const sanitizedCachedResult = cache.set(legacyCacheQuery, {
+  ...cappedViewportResult,
+  featureCollection: {
+    ...cappedViewportResult.featureCollection,
+    features: oversizedCachedFeatures,
+  },
+  returnedCount: oversizedCachedFeatures.length,
+});
+assert.strictEqual(sanitizedCachedResult.returnedCount, 20, 'Oversized cached viewport results must clamp on write.');
+assert.strictEqual(cache.get(legacyCacheQuery).featureCollection.features.length, 20, 'Cached viewport reads cannot restore a 21st route.');
 
 console.log('Route catalog viewport service checks passed.');

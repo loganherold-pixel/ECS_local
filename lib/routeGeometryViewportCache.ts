@@ -1,6 +1,7 @@
 import { createPersistedKeyValueCache } from './keyValuePersistence';
 import {
   buildRouteGeometryViewportCacheKey,
+  capRouteGeometryViewportResult,
   normalizeRouteGeometryViewportBbox,
   normalizeRouteGeometrySourceProviderPrefix,
   type RouteGeometryViewportBbox,
@@ -8,8 +9,12 @@ import {
 } from './routeGeometryViewport';
 import type {
   RouteCatalogViewportBbox,
+  RouteCatalogViewportFeature,
   RouteCatalogViewportResult,
 } from './routeCatalogViewport';
+import {
+  capUniqueRankedRoutes,
+} from './explore/routeSearchResultPolicy';
 
 const ROUTE_GEOMETRY_VIEWPORT_CACHE_FILE_KEY = 'ecs_route_geometry_viewport_cache_v1';
 const ROUTE_GEOMETRY_VIEWPORT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -36,6 +41,67 @@ export type RouteCatalogViewportOfflineCacheEntry = {
   result: RouteCatalogViewportResult;
 };
 
+function finiteNonNegativeInteger(value: unknown, fallback = 0): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
+function routeCatalogFeatureIdentity(feature: RouteCatalogViewportFeature): string {
+  return String(feature.properties?.routeId || feature.id || '').trim().toLowerCase();
+}
+
+function countUniqueIdentities<T>(
+  values: readonly T[],
+  getIdentity: (value: T) => string,
+): number {
+  const identities = new Set<string>();
+  values.forEach((value) => {
+    const identity = getIdentity(value);
+    if (identity) identities.add(identity);
+  });
+  return identities.size;
+}
+
+function capRouteCatalogViewportResult(
+  result: RouteCatalogViewportResult,
+): RouteCatalogViewportResult {
+  const originalFeatures = Array.isArray(result.featureCollection?.features)
+    ? result.featureCollection.features
+    : [];
+  const features = capUniqueRankedRoutes(
+    originalFeatures,
+    routeCatalogFeatureIdentity,
+  );
+  const lineFeatureCount = features.filter(
+    (feature) => feature.geometry.type !== 'Point',
+  ).length;
+  const markerFeatureCount = features.length - lineFeatureCount;
+
+  return {
+    ...result,
+    featureCollection: {
+      type: 'FeatureCollection',
+      features,
+    },
+    candidateCount: Math.max(
+      finiteNonNegativeInteger(result.candidateCount),
+      countUniqueIdentities(originalFeatures, routeCatalogFeatureIdentity),
+    ),
+    returnedCount: features.length,
+    lineFeatureCount,
+    markerFeatureCount,
+    guidanceReadyCount: features.filter(
+      (feature) => feature.properties.guidanceReady,
+    ).length,
+    trailheadOnlyCount: features.filter(
+      (feature) => feature.properties.geometryStatus === 'trailhead_only',
+    ).length,
+    insufficientGeometryCount: features.filter(
+      (feature) => feature.properties.geometryStatus === 'insufficient_geometry',
+    ).length,
+  };
+}
+
 function parseEntry(raw: string | null, now = Date.now()): RouteGeometryViewportOfflineCacheEntry | null {
   if (!raw) return null;
   try {
@@ -45,7 +111,10 @@ function parseEntry(raw: string | null, now = Date.now()): RouteGeometryViewport
     const expiresAt = Date.parse(String(parsed.expiresAt ?? ''));
     if (!Number.isFinite(expiresAt) || expiresAt <= now) return null;
     if (!parsed.result || !Array.isArray(parsed.result.segments)) return null;
-    return parsed as RouteGeometryViewportOfflineCacheEntry;
+    return {
+      ...(parsed as RouteGeometryViewportOfflineCacheEntry),
+      result: capRouteGeometryViewportResult(parsed.result),
+    };
   } catch {
     return null;
   }
@@ -88,7 +157,10 @@ function parseRouteCatalogEntry(
     ) {
       return null;
     }
-    return parsed as RouteCatalogViewportOfflineCacheEntry;
+    return {
+      ...(parsed as RouteCatalogViewportOfflineCacheEntry),
+      result: capRouteCatalogViewportResult(parsed.result),
+    };
   } catch {
     return null;
   }
@@ -112,7 +184,7 @@ export function writeRouteGeometryViewportOfflineCache(input: {
     ...input.lookup,
     cachedAt: new Date(now).toISOString(),
     expiresAt: new Date(now + ROUTE_GEOMETRY_VIEWPORT_CACHE_MAX_AGE_MS).toISOString(),
-    result: input.result,
+    result: capRouteGeometryViewportResult(input.result),
   };
   persistence.set(input.lookup.cacheKey, JSON.stringify(entry));
 }
@@ -137,7 +209,7 @@ export function writeRouteCatalogViewportOfflineCache(input: {
     cacheKey: input.cacheKey,
     cachedAt: new Date(now).toISOString(),
     expiresAt: new Date(now + ROUTE_GEOMETRY_VIEWPORT_CACHE_MAX_AGE_MS).toISOString(),
-    result: input.result,
+    result: capRouteCatalogViewportResult(input.result),
   };
   persistence.set(input.cacheKey, JSON.stringify(entry));
 }

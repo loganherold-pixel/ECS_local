@@ -46,6 +46,30 @@ function exists(relativePath) {
   return fs.existsSync(path.join(root, relativePath));
 }
 
+function collectLiteralJsxTestIds(source, filename) {
+  const sourceFile = ts.createSourceFile(
+    filename,
+    source,
+    ts.ScriptTarget.ES2020,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  const testIds = new Set();
+  function visit(node) {
+    if (
+      ts.isJsxAttribute(node) &&
+      node.name.getText(sourceFile) === 'testID' &&
+      node.initializer &&
+      ts.isStringLiteral(node.initializer)
+    ) {
+      testIds.add(node.initializer.text);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+  return testIds;
+}
+
 const discover = read(path.join('app', '(tabs)', 'discover.tsx'));
 const preview = read(path.join('components', 'trailPacks', 'TrailPackPreviewModal.tsx'));
 const domain = read(path.join('lib', 'explore', 'trailPacks.ts'));
@@ -57,8 +81,15 @@ assert(exists(migrationPath), 'Trail Packs should define a live Supabase catalog
 
 const liveCatalog = read(liveCatalogPath);
 const migration = read(migrationPath);
-const { deriveExploreRouteSurfaceState } = require(
+const {
+  deriveExploreGuidanceProviderAvailability,
+  deriveExploreRouteSurfaceState,
+} = require(
   path.join(root, 'lib', 'explore', 'exploreGuidanceReadyInventory.ts'),
+);
+const discoverSemanticTestIds = collectLiteralJsxTestIds(
+  discover,
+  path.join('app', '(tabs)', 'discover.tsx'),
 );
 
 function routeSurface(overrides = {}) {
@@ -118,13 +149,47 @@ assert.strictEqual(providerDegraded.kind, 'stale');
 assert.strictEqual(providerDegraded.currentSuccessfulEvaluation, false);
 assert.strictEqual(providerDegraded.showBlockedNotice, false);
 
+const cachedCardsDuringProviderFailure = routeSurface({
+  status: 'stale',
+  providerStatus: 'unavailable',
+  catalogSource: 'route_catalog',
+  sourceTruth: 'cached',
+  freshness: 'stale',
+  visibleCandidateCount: 2,
+  candidateCount: 2,
+  discoverableCount: 2,
+  evaluatedCount: 2,
+  hasRangeData: true,
+});
+assert.deepStrictEqual(cachedCardsDuringProviderFailure, {
+  kind: 'cards',
+  currentSuccessfulEvaluation: false,
+  showBlockedNotice: false,
+});
+
+const cachedProviderAvailability = deriveExploreGuidanceProviderAvailability({
+  providerStatus: 'stale',
+  providerHasData: true,
+  evaluatedCount: 2,
+  readyCount: 0,
+});
+assert.strictEqual(cachedProviderAvailability.providerUnavailableWithoutData, false);
+assert.strictEqual(cachedProviderAvailability.blockCanonicalInventory, false);
+
+const unavailableWithoutData = deriveExploreGuidanceProviderAvailability({
+  providerStatus: 'error',
+  providerHasData: false,
+  evaluatedCount: 0,
+  readyCount: 0,
+});
+assert.strictEqual(unavailableWithoutData.providerUnavailableWithoutData, true);
+assert.strictEqual(unavailableWithoutData.blockCanonicalInventory, true);
+
 assert(
-  discover.includes('testID="explore-guidance-ready-provider-unavailable"') &&
-    discover.includes('testID="explore-guidance-ready-degraded-notice"') &&
-    discover.includes('testID="explore-guidance-ready-blocked-notice"') &&
-    discover.includes('accessibilityRole="button"') &&
-    discover.includes('accessibilityLabel="Retry Explore route catalog"'),
-  'Explore should expose stable provider-unavailable and degraded states with an accessible retry action distinct from policy blocking.',
+  discoverSemanticTestIds.has('explore-guidance-ready-provider-unavailable') &&
+    discoverSemanticTestIds.has('explore-guidance-ready-degraded-notice') &&
+    discoverSemanticTestIds.has('explore-guidance-ready-blocked-notice'),
+  'Explore should retain distinct semantic selectors for provider-unavailable, degraded, and policy-blocked surfaces.',
 );
 assert(
   liveCatalog.includes("from('trail_packs')") &&

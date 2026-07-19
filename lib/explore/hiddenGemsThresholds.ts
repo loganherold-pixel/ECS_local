@@ -1,3 +1,5 @@
+import { ECS_ROUTE_SEARCH_RESULT_LIMIT } from './routeSearchResultPolicy';
+
 export type HiddenGemsMode = 'strict' | 'balanced' | 'relaxed';
 export type HiddenGemsTripTypeMatchMode =
   | 'primary_only'
@@ -52,7 +54,7 @@ export const HIDDEN_GEMS_TRIP_TYPE_MATCH_BALANCED: HiddenGemsTripTypeMatchMode =
 export const HIDDEN_GEMS_TRIP_TYPE_MATCH_RELAXED: HiddenGemsTripTypeMatchMode =
   'primary_or_secondary';
 
-export const HIDDEN_GEMS_MAX_RESULTS_RENDERED = 100;
+export const HIDDEN_GEMS_MAX_RESULTS_RENDERED = ECS_ROUTE_SEARCH_RESULT_LIMIT;
 
 export const HIDDEN_GEMS_UI_NOTICE_EXPANDED =
   'Expanded search criteria to surface more nearby Hidden Gems';

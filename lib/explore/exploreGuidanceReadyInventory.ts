@@ -13,12 +13,17 @@ import {
   getExploreTripBuilderEligibility,
   type ExploreWizardCandidateSet,
   type ExploreWizardHiddenRoute,
+  type ExploreWizardRouteCandidate,
   type ExploreWizardRouteSourceKind,
   type NormalizeExploreWizardCandidatesInput,
 } from './exploreTripBuilderWizard';
 import { normalizeExploreDiscoveryItems } from './exploreDiscoveryItem';
 import { normalizeNavigationGuidanceGeometry } from '../navigationCatalogGuidanceGeometry';
 import { routeAllowsLoopGuidance } from '../navigation/routeLoopGuidancePolicy';
+import {
+  ECS_ROUTE_SEARCH_RESULT_LIMIT,
+  capUniqueRankedRoutes,
+} from './routeSearchResultPolicy';
 
 export const EXPLORE_GUIDANCE_READY_EXCLUSION_CODES = [
   'missing_geometry',
@@ -82,10 +87,12 @@ export type ExploreGuidanceReadyRouteExclusion = ExploreWizardHiddenRoute & {
 
 type ExploreGuidanceReadyCandidateSet = ExploreWizardCandidateSet & {
   exclusions: ExploreGuidanceReadyRouteExclusion[];
+  qualifyingTotal: number;
 };
 
 export type ExploreGuidanceReadyInventoryInput = NormalizeExploreWizardCandidatesInput & {
   selectedRefinement?: ExploreRefinementFilter | null;
+  selectedSourceKind?: ExploreWizardRouteSourceKind | 'all';
   isRouteEligible?: (route: ExpeditionOpportunity) => ExploreReadyRouteEligibilityResult;
 };
 
@@ -105,6 +112,8 @@ export type ExploreGuidanceReadyInventory = {
   hiddenReasons: ExploreWizardHiddenRoute[];
   exclusions: ExploreGuidanceReadyRouteExclusion[];
   exclusionTotal: number;
+  resultLimit: number;
+  additionalMatchesAvailable: boolean;
   rangeHiddenTotal: number;
   rangeHiddenBySource: Record<ExploreWizardRouteSourceKind, number>;
   rangeHiddenReasons: ExploreWizardHiddenRoute[];
@@ -410,6 +419,7 @@ function emptyCandidateSet(): ExploreGuidanceReadyCandidateSet {
     hiddenBySource: emptyHiddenCounts(),
     hiddenReasons: [],
     exclusions: [],
+    qualifyingTotal: 0,
   };
 }
 
@@ -1086,6 +1096,77 @@ function createEligibilityResolver(input: ExploreGuidanceReadyInventoryInput): E
   return resolve;
 }
 
+function finiteRankingValue(...values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function compareExploreWizardCandidates(
+  left: ExploreWizardRouteCandidate,
+  right: ExploreWizardRouteCandidate,
+): number {
+  const leftRoute = record(left.route);
+  const rightRoute = record(right.route);
+  const leftMetadata = metadataRecord(left.route);
+  const rightMetadata = metadataRecord(right.route);
+  const descending = (
+    leftValue: number | null,
+    rightValue: number | null,
+  ) => {
+    if (leftValue == null) return rightValue == null ? 0 : 1;
+    if (rightValue == null) return -1;
+    return rightValue - leftValue;
+  };
+  const ascending = (
+    leftValue: number | null,
+    rightValue: number | null,
+  ) => {
+    if (leftValue == null) return rightValue == null ? 0 : 1;
+    if (rightValue == null) return -1;
+    return leftValue - rightValue;
+  };
+
+  const featured = descending(
+    finiteRankingValue(leftRoute.featuredRouteScore, leftMetadata.featuredRouteScore),
+    finiteRankingValue(rightRoute.featuredRouteScore, rightMetadata.featuredRouteScore),
+  );
+  if (featured !== 0) return featured;
+  const relevance = descending(
+    finiteRankingValue(left.route.matchScore, leftMetadata.matchScore),
+    finiteRankingValue(right.route.matchScore, rightMetadata.matchScore),
+  );
+  if (relevance !== 0) return relevance;
+  const quality = descending(
+    finiteRankingValue(
+      left.route.expeditionFitScore,
+      left.route.campingPotentialScore,
+      left.route.rigCompatibility,
+      left.confidence.score,
+    ),
+    finiteRankingValue(
+      right.route.expeditionFitScore,
+      right.route.campingPotentialScore,
+      right.route.rigCompatibility,
+      right.confidence.score,
+    ),
+  );
+  if (quality !== 0) return quality;
+  const distance = ascending(
+    finiteRankingValue(left.route.distanceFromUserMiles, leftMetadata.searchDistanceMiles),
+    finiteRankingValue(right.route.distanceFromUserMiles, rightMetadata.searchDistanceMiles),
+  );
+  if (distance !== 0) return distance;
+  const updated = descending(
+    Date.parse(String(leftMetadata.updatedAt ?? leftMetadata.updated_at ?? '')),
+    Date.parse(String(rightMetadata.updatedAt ?? rightMetadata.updated_at ?? '')),
+  );
+  if (Number.isFinite(updated) && updated !== 0) return updated;
+  return left.id.localeCompare(right.id);
+}
+
 function buildForRefinement(
   input: ExploreGuidanceReadyInventoryInput,
   refinement: ExploreRefinementFilter | null,
@@ -1106,6 +1187,10 @@ function buildForRefinement(
     const refinedRoutes = applyExploreRefinementFilter(routes, refinement);
     const refinedRouteSet = new Set(refinedRoutes);
     eligibleInput[source.key] = [];
+    const sourceSelected =
+      !input.selectedSourceKind ||
+      input.selectedSourceKind === 'all' ||
+      input.selectedSourceKind === source.sourceKind;
 
     if (refinement) {
       routes.forEach((route) => {
@@ -1139,6 +1224,16 @@ function buildForRefinement(
             ),
           )
         : guidanceEligibility;
+      if (!sourceSelected) {
+        const exclusion = routeExclusion(route, source.sourceKind, [
+          ...eligibility.exclusionReasons,
+          makeExclusionReason('filtered_by_user'),
+        ]);
+        hiddenRoutes.push(exclusion);
+        exclusions.push(exclusion);
+        hiddenBySource[source.sourceKind] += 1;
+        return;
+      }
       if (eligibility.eligible) {
         eligibleInput[source.key]?.push(route);
         eligibleRoutes.push({ route, sourceKind: source.sourceKind });
@@ -1186,9 +1281,13 @@ function buildForRefinement(
       unavailableReason: guidanceEligibility.reason,
     };
   });
+  const qualifyingTotal = projectedCandidates.length;
   const projected = {
     ...normalized,
-    candidates: projectedCandidates,
+    candidates: capUniqueRankedRoutes(
+      [...projectedCandidates].sort(compareExploreWizardCandidates),
+      (candidate) => candidate.id,
+    ),
   };
   const retainedRouteCounts = new Map<string, number>();
   projected.candidates.forEach((candidate) => {
@@ -1229,6 +1328,7 @@ function buildForRefinement(
     hiddenBySource: combinedHiddenBySource,
     hiddenReasons: combinedHiddenRoutes,
     exclusions: uniqueRouteExclusions(exclusions),
+    qualifyingTotal,
   };
 }
 
@@ -1317,6 +1417,9 @@ export function buildExploreGuidanceReadyInventory(
     hiddenReasons: candidateSet.hiddenReasons,
     exclusions: candidateSet.exclusions,
     exclusionTotal: candidateSet.exclusions.length,
+    resultLimit: ECS_ROUTE_SEARCH_RESULT_LIMIT,
+    additionalMatchesAvailable:
+      discoverableCandidateSet.qualifyingTotal > ECS_ROUTE_SEARCH_RESULT_LIMIT,
     rangeHiddenTotal: rangeHiddenCandidateSet.hiddenTotal,
     rangeHiddenBySource: rangeHiddenCandidateSet.hiddenBySource,
     rangeHiddenReasons: rangeHiddenCandidateSet.hiddenReasons,

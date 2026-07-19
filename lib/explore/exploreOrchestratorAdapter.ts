@@ -60,7 +60,9 @@ export function orchestrateExploreSectionRoutes(
       if (right.orchestrationScore !== left.orchestrationScore) {
         return right.orchestrationScore - left.orchestrationScore;
       }
-      return left.name.localeCompare(right.name);
+      const nameDiff = left.name.localeCompare(right.name);
+      if (nameDiff !== 0) return nameDiff;
+      return String(left.id).localeCompare(String(right.id));
     });
 
   const surfaced = ranked.filter((route) => route.visibility === 'surface');

@@ -1,6 +1,12 @@
 /* eslint-disable import/no-unresolved */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import {
+  ROUTE_GEOMETRY_CANDIDATE_INSPECTION_LIMIT,
+  ROUTE_GEOMETRY_SEARCH_RESULT_LIMIT,
+  normalizeRouteGeometryResultLimit,
+  selectRouteGeometrySearchResults,
+} from './resultPolicy.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -11,8 +17,6 @@ const corsHeaders = {
 
 const ROUTE_GEOMETRY_CATALOG_SOURCE = 'verified_routes';
 const MIN_ZOOM = 10;
-const DEFAULT_LIMIT = 240;
-const MAX_LIMIT = 500;
 const ROUTE_GEOMETRY_UNAVAILABLE_MESSAGE =
   'ECS trail segments are temporarily unavailable for this map view. Saved and imported route geometry remain available.';
 const ROUTE_GEOMETRY_SOURCE_FILTER_UNAVAILABLE_MESSAGE =
@@ -37,6 +41,10 @@ function routeGeometryUnavailableResponse(reason: string, sourceProviderPrefix: 
       unavailableReason: reason,
       userMessage: ROUTE_GEOMETRY_UNAVAILABLE_MESSAGE,
       candidateCount: 0,
+      qualifyingUniqueCount: 0,
+      deduplicatedCount: 0,
+      resultLimit: ROUTE_GEOMETRY_SEARCH_RESULT_LIMIT,
+      additionalMatchesAvailable: false,
       cappedCount: 0,
       skippedMissingGeometryCount: 0,
       invalidFeatureCount: 0,
@@ -72,9 +80,7 @@ function readNumber(value: unknown): number | null {
 }
 
 function cleanLimit(value: unknown): number {
-  const parsed = readNumber(value);
-  if (parsed == null) return DEFAULT_LIMIT;
-  return Math.max(1, Math.min(MAX_LIMIT, Math.round(parsed)));
+  return normalizeRouteGeometryResultLimit(value);
 }
 
 function cleanZoom(value: unknown): number {
@@ -216,17 +222,50 @@ function warningsForRow(row: JsonRecord): string[] {
   return [...warnings];
 }
 
+function routeIdentity(row: JsonRecord): string | null {
+  return cleanText(row.id)?.toLowerCase() ?? null;
+}
+
+function isClosedOrProhibited(row: JsonRecord): boolean {
+  return String(row.legality_status ?? '').trim().toLowerCase() === 'closed_or_prohibited' ||
+    String(row.public_access_status ?? '').trim().toLowerCase() === 'closed';
+}
+
+function isValidLineStringGeometry(value: unknown): boolean {
+  const geometry = readRecord(value);
+  if (!geometry || geometry.type !== 'LineString' || !Array.isArray(geometry.coordinates)) return false;
+  const distinctCoordinates = new Set<string>();
+  for (const coordinate of geometry.coordinates) {
+    if (!Array.isArray(coordinate) || coordinate.length < 2) continue;
+    const longitude = readNumber(coordinate[0]);
+    const latitude = readNumber(coordinate[1]);
+    if (
+      longitude == null ||
+      latitude == null ||
+      Math.abs(longitude) > 180 ||
+      Math.abs(latitude) > 90
+    ) {
+      continue;
+    }
+    distinctCoordinates.add(`${longitude}:${latitude}`);
+    if (distinctCoordinates.size >= 2) return true;
+  }
+  return false;
+}
+
 function shapeSegment(row: JsonRecord): JsonRecord | null {
   const geometry = readRecord(row.geometry);
-  if (!geometry || geometry.type !== 'LineString' || !Array.isArray(geometry.coordinates)) return null;
+  const identity = routeIdentity(row);
+  if (!identity || !isValidLineStringGeometry(geometry)) return null;
   return {
-    id: String(row.id ?? ''),
+    id: identity,
     name: cleanText(row.canonical_name) ?? cleanText(row.route_number) ?? 'ECS Route Geometry',
     sourceKind: 'route_catalog',
-    sourceId: String(row.id ?? ''),
+    sourceId: identity,
     sourceLabel: sourceLabel(row),
     dataState: dataStateFromVerifiedAt(row.source_last_updated),
     confidence: confidenceFromScore(row.confidence_score),
+    confidenceScore: readNumber(row.confidence_score),
     legalityStatus: row.legality_status ?? 'geometry_only',
     publicAccessStatus: row.public_access_status ?? 'unknown',
     warnings: warningsForRow(row),
@@ -254,7 +293,7 @@ serve(async (req) => {
     if (!bbox) return jsonResponse({ ok: false, error: 'Valid bbox required' }, 400);
 
     const zoom = cleanZoom(params.zoom);
-    const maxLimit = cleanLimit(params.limit);
+    const resultLimit = cleanLimit(params.limit);
     const includeReferenceGeometry = readBoolean(params.includeReferenceGeometry ?? params.include_reference_geometry, true);
     const vehicleClass = cleanText(params.vehicleClass ?? params.vehicle_class);
     sourceProviderPrefix = cleanSourceProviderPrefix(
@@ -272,6 +311,10 @@ serve(async (req) => {
           zoomTooLow: true,
           minZoom: MIN_ZOOM,
           candidateCount: 0,
+          qualifyingUniqueCount: 0,
+          deduplicatedCount: 0,
+          resultLimit,
+          additionalMatchesAvailable: false,
           cappedCount: 0,
           skippedMissingGeometryCount: 0,
           invalidFeatureCount: 0,
@@ -287,7 +330,9 @@ serve(async (req) => {
       p_max_lng: bbox.maxLng,
       p_max_lat: bbox.maxLat,
       p_zoom: zoom,
-      p_limit: maxLimit,
+      // Inspect a wider ranked window so invalid geometry and duplicate route
+      // rows cannot displace a better qualifying route from the final top 20.
+      p_limit: ROUTE_GEOMETRY_CANDIDATE_INSPECTION_LIMIT,
       p_include_reference_geometry: includeReferenceGeometry,
       p_vehicle_class: vehicleClass,
     };
@@ -303,7 +348,7 @@ serve(async (req) => {
       sourceFilterMode = 'edge_compatibility';
       rpcResult = await admin.rpc('search_route_geometry_segments_for_viewport', {
         ...rpcArgs,
-        p_limit: MAX_LIMIT,
+        p_limit: ROUTE_GEOMETRY_CANDIDATE_INSPECTION_LIMIT,
       });
     } else if (sourceProviderPrefix && !rpcResult.error) {
       sourceFilterMode = 'database';
@@ -317,19 +362,31 @@ serve(async (req) => {
       ? rawRows.filter((row) => rowMatchesSourceProviderPrefix(row, sourceProviderPrefix))
       : rawRows;
     const sourceFilterDegraded = sourceFilterMode === 'edge_compatibility';
-    const cappedCount = Math.max(0, sourceMatchedRows.length - maxLimit);
     let skippedMissingGeometryCount = 0;
     let invalidFeatureCount = 0;
-    const segments = sourceMatchedRows
-      .slice(0, maxLimit)
-      .map(shapeSegment)
-      .filter((segment): segment is JsonRecord => {
-        if (!segment) {
-          skippedMissingGeometryCount += 1;
-          invalidFeatureCount += 1;
-        }
-        return !!segment;
-      });
+    let skippedClosedCount = 0;
+    const rankedCandidates = sourceMatchedRows.flatMap((row) => {
+      if (isClosedOrProhibited(row)) {
+        skippedClosedCount += 1;
+        return [];
+      }
+      const segment = shapeSegment(row);
+      if (!segment) {
+        skippedMissingGeometryCount += 1;
+        invalidFeatureCount += 1;
+        return [];
+      }
+      return [{
+        value: segment,
+        routeIdentity: String(segment.sourceId ?? segment.id ?? ''),
+        confidenceScore: row.confidence_score,
+        sourceLastUpdated: row.source_last_updated,
+        routeName: row.canonical_name ?? row.route_number,
+        stableKey: JSON.stringify(readRecord(row.geometry)?.coordinates ?? []),
+      }];
+    });
+    const selection = selectRouteGeometrySearchResults(rankedCandidates, resultLimit);
+    const segments = selection.records;
 
     return jsonResponse({
       ok: true,
@@ -348,10 +405,15 @@ serve(async (req) => {
         zoomTooLow: false,
         minZoom: MIN_ZOOM,
         candidateCount: sourceMatchedRows.length,
-        cappedCount,
+        qualifyingUniqueCount: selection.qualifyingUniqueCount,
+        deduplicatedCount: selection.deduplicatedCount,
+        resultLimit: selection.resultLimit,
+        additionalMatchesAvailable: selection.additionalMatchesAvailable,
+        candidateInspectionLimit: ROUTE_GEOMETRY_CANDIDATE_INSPECTION_LIMIT,
+        cappedCount: selection.cappedCount,
         skippedMissingGeometryCount,
         invalidFeatureCount,
-        skippedClosedCount: 0,
+        skippedClosedCount,
         includeReferenceGeometry,
         vehicleClass,
         fetchedAt: new Date().toISOString(),

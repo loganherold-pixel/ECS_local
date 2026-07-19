@@ -42,6 +42,10 @@ import {
   normalizeHiddenGemsScore,
   type HiddenGemsMode as HiddenGemFallbackMode,
 } from './explore/hiddenGemsThresholds';
+import {
+  capUniqueRankedRoutes,
+  normalizeRouteSearchResultLimit,
+} from './explore/routeSearchResultPolicy';
 import type { ECSLiveStatusResult } from './status/liveStatusTypes';
 
 const TAG = '[DISCOVER-CATEGORY]';
@@ -399,11 +403,13 @@ function sortRoutesForDiscovery(a: CategorizedRoute, b: CategorizedRoute): numbe
   const scoreDiff = (b.discoveryScore ?? b.categoryScore) - (a.discoveryScore ?? a.categoryScore);
   if (scoreDiff !== 0) return scoreDiff;
 
-  const distanceDiff = (a.distanceFromUserMiles ?? Number.POSITIVE_INFINITY) -
-    (b.distanceFromUserMiles ?? Number.POSITIVE_INFINITY);
+  const distanceDiff = (a.distanceFromUserMiles ?? Number.MAX_SAFE_INTEGER) -
+    (b.distanceFromUserMiles ?? Number.MAX_SAFE_INTEGER);
   if (distanceDiff !== 0) return distanceDiff;
 
-  return (b.remotenessScore ?? 0) - (a.remotenessScore ?? 0);
+  const remotenessDiff = (b.remotenessScore ?? 0) - (a.remotenessScore ?? 0);
+  if (remotenessDiff !== 0) return remotenessDiff;
+  return String(a.id).localeCompare(String(b.id));
 }
 
 // ── Category Stats ───────────────────────────────────────────
@@ -2411,7 +2417,7 @@ export function getHiddenGemRecommendations(
   compatResults: Map<string, CompatibilityResult>,
   options: HiddenGemRecommendationOptions = {},
 ): HiddenGemRecommendationPage {
-  const pageSize = Math.max(1, options.pageSize ?? 10);
+  const pageSize = normalizeRouteSearchResultLimit(options.pageSize);
   const radiusMiles = options.radiusMiles ?? 500;
   const dedupedOpportunities = dedupeExploreRoutes(
     opportunities.filter(isDiscoverableRoute),
@@ -2731,44 +2737,49 @@ export function getPopularTrailRecommendations(
       classificationConfidence: number;
     } => !!candidate);
 
-  return rankedCandidates
-    .sort((left, right) => {
-      const promotionOrder = (value: 'highlight' | 'standard' | 'softened') => {
-        switch (value) {
-          case 'highlight':
-            return 3;
-          case 'standard':
-            return 2;
-          case 'softened':
-          default:
-            return 1;
-        }
-      };
+  return capUniqueRankedRoutes(
+    rankedCandidates
+      .sort((left, right) => {
+        const promotionOrder = (value: 'highlight' | 'standard' | 'softened') => {
+          switch (value) {
+            case 'highlight':
+              return 3;
+            case 'standard':
+              return 2;
+            case 'softened':
+            default:
+              return 1;
+          }
+        };
 
-      const promotionDiff = promotionOrder(right.promotionStrength) - promotionOrder(left.promotionStrength);
-      if (promotionDiff !== 0) return promotionDiff;
+        const promotionDiff = promotionOrder(right.promotionStrength) - promotionOrder(left.promotionStrength);
+        if (promotionDiff !== 0) return promotionDiff;
 
-      const rightRoute = right.route as CuratedPopularTrailRoute;
-      const leftRoute = left.route as CuratedPopularTrailRoute;
-      const weightedDiff =
-        (rightRoute.sourceMetadata?.confidenceWeightedScore ?? rightRoute.categoryScore) -
-        (leftRoute.sourceMetadata?.confidenceWeightedScore ?? leftRoute.categoryScore);
-      if (weightedDiff !== 0) return weightedDiff;
+        const rightRoute = right.route as CuratedPopularTrailRoute;
+        const leftRoute = left.route as CuratedPopularTrailRoute;
+        const weightedDiff =
+          (rightRoute.sourceMetadata?.confidenceWeightedScore ?? rightRoute.categoryScore) -
+          (leftRoute.sourceMetadata?.confidenceWeightedScore ?? leftRoute.categoryScore);
+        if (weightedDiff !== 0) return weightedDiff;
 
-      const classificationDiff = right.classificationConfidence - left.classificationConfidence;
-      if (classificationDiff !== 0) return classificationDiff;
+        const classificationDiff = right.classificationConfidence - left.classificationConfidence;
+        if (classificationDiff !== 0) return classificationDiff;
 
-      const suitabilityDiff = (compatResults.get(right.route.id)?.score ?? 0) - (compatResults.get(left.route.id)?.score ?? 0);
-      if (suitabilityDiff !== 0) return suitabilityDiff;
+        const suitabilityDiff = (compatResults.get(right.route.id)?.score ?? 0) - (compatResults.get(left.route.id)?.score ?? 0);
+        if (suitabilityDiff !== 0) return suitabilityDiff;
 
-      const distanceDiff =
-        (left.route.distanceFromUserMiles ?? Number.POSITIVE_INFINITY) -
-        (right.route.distanceFromUserMiles ?? Number.POSITIVE_INFINITY);
-      if (distanceDiff !== 0) return distanceDiff;
+        const distanceDiff =
+          (left.route.distanceFromUserMiles ?? Number.MAX_SAFE_INTEGER) -
+          (right.route.distanceFromUserMiles ?? Number.MAX_SAFE_INTEGER);
+        if (distanceDiff !== 0) return distanceDiff;
 
-      return left.route.name.localeCompare(right.route.name);
-    })
-    .map((candidate) => candidate.route);
+        const nameDiff = left.route.name.localeCompare(right.route.name);
+        if (nameDiff !== 0) return nameDiff;
+        return String(left.route.id).localeCompare(String(right.route.id));
+      })
+      .map((candidate) => candidate.route),
+    (route) => route.id,
+  );
 }
 
 export function selectHiddenGemRoutes(

@@ -9,10 +9,15 @@ import {
   ROUTE_GEOMETRY_OVERLAY_COLOR,
   ROUTE_GEOMETRY_OVERLAY_PLANNING_WARNING,
 } from './navigateRouteGeometryOverlay';
+import {
+  capUniqueRankedRoutes,
+  ECS_ROUTE_SEARCH_RESULT_LIMIT,
+  normalizeRouteSearchResultLimit,
+} from './explore/routeSearchResultPolicy';
 
 export const ROUTE_GEOMETRY_VIEWPORT_MIN_ZOOM = 10;
-export const ROUTE_GEOMETRY_VIEWPORT_MAX_LIMIT = 500;
-export const ROUTE_GEOMETRY_VIEWPORT_DEFAULT_LIMIT = 500;
+export const ROUTE_GEOMETRY_VIEWPORT_MAX_LIMIT = ECS_ROUTE_SEARCH_RESULT_LIMIT;
+export const ROUTE_GEOMETRY_VIEWPORT_DEFAULT_LIMIT = ECS_ROUTE_SEARCH_RESULT_LIMIT;
 export const ROUTE_GEOMETRY_VIEWPORT_WARNING =
   'ECS catalog route geometry is planning/reference geometry. Verify access, closures, and posted rules before travel.';
 export const ROUTE_GEOMETRY_VIEWPORT_PLANNING_SOURCE = 'route_geometry_viewport';
@@ -41,6 +46,7 @@ export type RouteGeometryViewportSegment = {
   sourceProviderIds?: string[];
   dataState: RouteGeometryOverlayDataState;
   confidence: RouteGeometryOverlayConfidence;
+  confidenceScore?: number | null;
   legalityStatus: 'legal_verified' | 'limited_verified' | 'geometry_only' | 'community_unverified';
   publicAccessStatus: 'open' | 'limited' | 'unknown';
   warnings: string[];
@@ -64,6 +70,10 @@ export type RouteGeometryViewportResult = {
   sourceFilterApplied?: boolean;
   sourceFilteredCount?: number;
   unfilteredCandidateCount?: number;
+  qualifyingUniqueCount?: number;
+  deduplicatedCount?: number;
+  resultLimit?: number;
+  additionalMatchesAvailable?: boolean;
   unavailableReason?: string | null;
   userMessage?: string | null;
   cacheKey?: string | null;
@@ -360,7 +370,108 @@ export function buildRouteGeometryViewportCacheKey(
   ].filter((part): part is string => typeof part === 'string').join(':');
 }
 
-export function normalizeRouteGeometryViewportResponse(value: unknown): RouteGeometryViewportResult {
+function finiteNonNegativeInteger(value: unknown, fallback = 0): number {
+  const parsed = finiteNumber(value);
+  return parsed != null && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
+function routeGeometryViewportSegmentIdentity(segment: RouteGeometryViewportSegment): string {
+  return String(segment.sourceId || segment.id || '').trim().toLowerCase();
+}
+
+function uniqueRouteGeometryViewportSegmentCount(
+  segments: readonly RouteGeometryViewportSegment[],
+): number {
+  return new Set(
+    segments.map(routeGeometryViewportSegmentIdentity).filter(Boolean),
+  ).size;
+}
+
+function routeGeometryViewportConfidenceScore(segment: RouteGeometryViewportSegment): number {
+  const explicit = finiteNumber(segment.confidenceScore);
+  if (explicit != null) return explicit;
+  switch (segment.confidence) {
+    case 'high':
+      return 85;
+    case 'medium':
+      return 65;
+    case 'low':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function routeGeometryViewportFreshness(segment: RouteGeometryViewportSegment): number {
+  const parsed = Date.parse(String(segment.lastVerifiedAt ?? ''));
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function compareRouteGeometryViewportSegments(
+  left: RouteGeometryViewportSegment,
+  right: RouteGeometryViewportSegment,
+): number {
+  const confidence = routeGeometryViewportConfidenceScore(right) - routeGeometryViewportConfidenceScore(left);
+  if (confidence !== 0) return confidence;
+  const freshness = routeGeometryViewportFreshness(right) - routeGeometryViewportFreshness(left);
+  if (freshness !== 0) return freshness;
+  const name = left.name.trim().toLowerCase().localeCompare(right.name.trim().toLowerCase());
+  if (name !== 0) return name;
+  return routeGeometryViewportSegmentIdentity(left).localeCompare(
+    routeGeometryViewportSegmentIdentity(right),
+  );
+}
+
+export function normalizeRouteGeometryViewportLimit(value: unknown): number {
+  return normalizeRouteSearchResultLimit(value);
+}
+
+export function capRouteGeometryViewportResult(
+  result: RouteGeometryViewportResult,
+  requestedLimit: unknown = result.resultLimit,
+): RouteGeometryViewportResult {
+  const sourceSegments = Array.isArray(result.segments) ? result.segments : [];
+  const resultLimit = normalizeRouteGeometryViewportLimit(requestedLimit);
+  const uniqueSegmentCount = uniqueRouteGeometryViewportSegmentCount(sourceSegments);
+  const segments = capUniqueRankedRoutes(
+    [...sourceSegments].sort(compareRouteGeometryViewportSegments),
+    routeGeometryViewportSegmentIdentity,
+    resultLimit,
+  );
+  const qualifyingUniqueCount = Math.max(
+    finiteNonNegativeInteger(result.qualifyingUniqueCount),
+    uniqueSegmentCount,
+  );
+  const cappedCount = Math.max(
+    finiteNonNegativeInteger(result.cappedCount),
+    Math.max(0, qualifyingUniqueCount - segments.length),
+  );
+
+  return {
+    ...result,
+    segments,
+    candidateCount: Math.max(
+      finiteNonNegativeInteger(result.candidateCount),
+      sourceSegments.length,
+    ),
+    qualifyingUniqueCount,
+    deduplicatedCount: Math.max(
+      finiteNonNegativeInteger(result.deduplicatedCount),
+      sourceSegments.length - uniqueSegmentCount,
+    ),
+    resultLimit,
+    additionalMatchesAvailable:
+      result.additionalMatchesAvailable === true ||
+      qualifyingUniqueCount > segments.length ||
+      cappedCount > 0,
+    cappedCount,
+  };
+}
+
+export function normalizeRouteGeometryViewportResponse(
+  value: unknown,
+  sourceProviderPrefix?: unknown,
+): RouteGeometryViewportResult {
   const record = readRecord(value);
   const rawSegments = readArray(record?.segments);
   const meta = readRecord(record?.meta);
@@ -415,6 +526,7 @@ export function normalizeRouteGeometryViewportResponse(value: unknown): RouteGeo
       sourceProviderIds: normalizeRouteGeometrySourceProviderIds(raw),
       dataState: normalizeDataState(raw.dataState ?? raw.data_state),
       confidence: normalizeConfidence(raw.confidence ?? raw.confidenceScore ?? raw.confidence_score),
+      confidenceScore: finiteNumber(raw.confidenceScore ?? raw.confidence_score),
       legalityStatus,
       publicAccessStatus,
       warnings: normalizeWarnings(raw.warnings ?? raw.warningReasons ?? raw.warning_reasons),
@@ -425,7 +537,7 @@ export function normalizeRouteGeometryViewportResponse(value: unknown): RouteGeo
     });
   }
 
-  return {
+  const normalized: RouteGeometryViewportResult = {
     segments,
     candidateCount: finiteNumber(meta?.candidateCount ?? meta?.candidate_count) ?? rawSegments.length,
     cappedCount: finiteNumber(meta?.cappedCount ?? meta?.capped_count) ?? 0,
@@ -441,11 +553,24 @@ export function normalizeRouteGeometryViewportResponse(value: unknown): RouteGeo
     sourceFilteredCount: finiteNumber(meta?.sourceFilteredCount ?? meta?.source_filtered_count) ?? 0,
     unfilteredCandidateCount:
       finiteNumber(meta?.unfilteredCandidateCount ?? meta?.unfiltered_candidate_count) ?? rawSegments.length,
+    qualifyingUniqueCount: finiteNumber(
+      meta?.qualifyingUniqueCount ?? meta?.qualifying_unique_count,
+    ) ?? uniqueRouteGeometryViewportSegmentCount(segments),
+    deduplicatedCount: finiteNumber(meta?.deduplicatedCount ?? meta?.deduplicated_count) ?? 0,
+    resultLimit: normalizeRouteGeometryViewportLimit(
+      meta?.resultLimit ?? meta?.result_limit,
+    ),
+    additionalMatchesAvailable: Boolean(
+      meta?.additionalMatchesAvailable ?? meta?.additional_matches_available ?? false,
+    ),
     unavailableReason,
     userMessage,
     cacheKey: cleanText(meta?.cacheKey ?? meta?.cache_key) || null,
     fetchedAt: cleanText(meta?.fetchedAt ?? meta?.fetched_at) || null,
   };
+  return sourceProviderPrefix != null
+    ? filterRouteGeometryViewportResultBySourceProviderPrefix(normalized, sourceProviderPrefix)
+    : capRouteGeometryViewportResult(normalized);
 }
 
 /**
@@ -457,27 +582,43 @@ export function filterRouteGeometryViewportResultBySourceProviderPrefix(
   sourceProviderPrefix: unknown,
 ): RouteGeometryViewportResult {
   const prefix = normalizeRouteGeometrySourceProviderPrefix(sourceProviderPrefix);
-  if (!prefix) return result;
+  if (!prefix) return capRouteGeometryViewportResult(result);
 
-  const segments = result.segments.filter((segment) =>
+  const matchingSegments = result.segments.filter((segment) =>
     routeGeometryViewportSegmentMatchesSourceProviderPrefix(segment, prefix),
   );
-  const clientFilteredCount = result.segments.length - segments.length;
+  const clientFilteredCount = result.segments.length - matchingSegments.length;
   const serverAppliedSameFilter =
     result.sourceFilterApplied === true &&
     normalizeRouteGeometrySourceProviderPrefix(result.sourceProviderPrefix) === prefix;
+  const matchingUniqueCount = uniqueRouteGeometryViewportSegmentCount(matchingSegments);
 
-  return {
+  return capRouteGeometryViewportResult({
     ...result,
-    segments,
-    candidateCount: serverAppliedSameFilter ? result.candidateCount : segments.length,
+    segments: matchingSegments,
+    candidateCount: serverAppliedSameFilter ? result.candidateCount : matchingSegments.length,
     sourceProviderPrefix: prefix,
     sourceFilterApplied: true,
     sourceFilteredCount: (result.sourceFilteredCount ?? 0) + clientFilteredCount,
     unfilteredCandidateCount: serverAppliedSameFilter
       ? (result.unfilteredCandidateCount ?? result.candidateCount)
       : result.candidateCount,
-  };
+    qualifyingUniqueCount: serverAppliedSameFilter
+      ? Math.max(
+          finiteNonNegativeInteger(result.qualifyingUniqueCount),
+          matchingUniqueCount,
+        )
+      : matchingUniqueCount,
+    deduplicatedCount: serverAppliedSameFilter
+      ? finiteNonNegativeInteger(result.deduplicatedCount)
+      : Math.max(0, matchingSegments.length - matchingUniqueCount),
+    cappedCount: serverAppliedSameFilter
+      ? finiteNonNegativeInteger(result.cappedCount)
+      : Math.max(0, matchingUniqueCount - normalizeRouteGeometryViewportLimit(result.resultLimit)),
+    additionalMatchesAvailable: serverAppliedSameFilter
+      ? result.additionalMatchesAvailable === true
+      : matchingUniqueCount > normalizeRouteGeometryViewportLimit(result.resultLimit),
+  });
 }
 
 export function routeGeometryViewportSegmentToOverlaySegment(

@@ -1,3 +1,8 @@
+import {
+  capUniqueRankedRoutes,
+  normalizeRouteSearchResultLimit,
+} from './routeSearchResultPolicy';
+
 export type RouteCatalogDiscoveryCoordinate = {
   latitude: number;
   longitude: number;
@@ -60,8 +65,6 @@ export type RouteCatalogDiscoveryResult = {
 };
 
 const EARTH_RADIUS_MILES = 3958.7613;
-const DEFAULT_LIMIT = 500;
-const MAX_LIMIT = 500;
 const DAY_TRIP_MAX_HOURS = 12;
 const WEEKEND_TRIP_MAX_HOURS = 24;
 const EXPEDITION_MIN_DISTANCE_MILES = 150;
@@ -179,9 +182,13 @@ function routeSearchHaystack(record: Record<string, unknown>): string {
 }
 
 function normalizeLimit(value: unknown): number {
-  const limit = finiteNumber(value);
-  if (limit == null) return DEFAULT_LIMIT;
-  return Math.max(1, Math.min(MAX_LIMIT, Math.round(limit)));
+  return normalizeRouteSearchResultLimit(value);
+}
+
+function discoveryRouteId(record: RouteCatalogDiscoveryRecord): string {
+  return cleanText(
+    record.public_id ?? record.publicId ?? record.route_slug ?? record.routeSlug ?? record.id,
+  );
 }
 
 function roundDistance(value: number | null): number | null {
@@ -561,7 +568,9 @@ function compareDiscoveryRecords(left: RouteCatalogDiscoveryRecord, right: Route
   if (confidenceDelta !== 0) return confidenceDelta;
   const updatedDelta = updatedAtMs(right) - updatedAtMs(left);
   if (updatedDelta !== 0) return updatedDelta;
-  return routeName(left).localeCompare(routeName(right));
+  const nameDelta = routeName(left).localeCompare(routeName(right));
+  if (nameDelta !== 0) return nameDelta;
+  return discoveryRouteId(left).localeCompare(discoveryRouteId(right));
 }
 
 function knownRouteDiagnostics(
@@ -616,25 +625,26 @@ export function queryRouteCatalogDiscoveryRecords(
     regionTags: query.regionTags ?? [],
     searchTerms: query.searchTerms ?? [],
   };
-  const allMatchedRecords = candidates
+  const rankedMatchedRecords = candidates
     .map((record) => discoveryRecord(record, discoveryQuery, searchCenter, hasRadiusCriteria ? radiusMiles : null))
     .filter((record): record is RouteCatalogDiscoveryRecord => !!record)
     .sort(compareDiscoveryRecords);
-  const limitedRecords = allMatchedRecords.slice(0, limit);
+  const matchedCount = new Set(rankedMatchedRecords.map(discoveryRouteId).filter(Boolean)).size;
+  const limitedRecords = capUniqueRankedRoutes(rankedMatchedRecords, discoveryRouteId, limit);
 
   return {
     records: limitedRecords,
-    allMatchedRecords,
+    allMatchedRecords: limitedRecords,
     radiusFilterApplied: hasRadiusCriteria,
-    matchedCount: allMatchedRecords.length,
-    geometryMatchedCount: allMatchedRecords.filter((record) => record.search_match_reasons.includes('geometry_within_radius')).length,
-    trailheadMatchedCount: allMatchedRecords.filter((record) => record.search_match_reasons.includes('trailhead_within_radius')).length,
-    centerMatchedCount: allMatchedRecords.filter((record) => record.search_match_reasons.includes('centroid_within_radius')).length,
-    aliasMatchedCount: allMatchedRecords.filter((record) =>
+    matchedCount,
+    geometryMatchedCount: rankedMatchedRecords.filter((record) => record.search_match_reasons.includes('geometry_within_radius')).length,
+    trailheadMatchedCount: rankedMatchedRecords.filter((record) => record.search_match_reasons.includes('trailhead_within_radius')).length,
+    centerMatchedCount: rankedMatchedRecords.filter((record) => record.search_match_reasons.includes('centroid_within_radius')).length,
+    aliasMatchedCount: rankedMatchedRecords.filter((record) =>
       record.search_match_reasons.includes('known_route_alias') ||
       record.search_match_reasons.includes('search_term_match'),
     ).length,
-    featuredMatchedCount: allMatchedRecords.filter((record) => record.featured_route_score > 0).length,
-    knownRouteDiagnostics: knownRouteDiagnostics(candidates, allMatchedRecords, query),
+    featuredMatchedCount: rankedMatchedRecords.filter((record) => record.featured_route_score > 0).length,
+    knownRouteDiagnostics: knownRouteDiagnostics(candidates, rankedMatchedRecords, query),
   };
 }

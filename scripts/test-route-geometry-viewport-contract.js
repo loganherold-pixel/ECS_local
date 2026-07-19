@@ -1,3 +1,4 @@
+/* global __dirname */
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -25,6 +26,7 @@ const sourceFilterMigrationPath = path.join(
   '20260715134500_filter_route_geometry_viewport_by_source.sql',
 );
 const functionPath = path.join('supabase', 'functions', 'route-geometry-segments', 'index.ts');
+const resultPolicyPath = path.join('supabase', 'functions', 'route-geometry-segments', 'resultPolicy.ts');
 const clientPath = path.join('lib', 'routeGeometryViewportClient.ts');
 const supabasePath = path.join('lib', 'supabase.ts');
 const supabaseConfigPath = path.join('supabase', 'config.toml');
@@ -46,6 +48,7 @@ assert(
   'Source-filtered route geometry viewport migration should exist.',
 );
 assert(fs.existsSync(path.join(root, functionPath)), 'route-geometry-segments Edge Function should exist.');
+assert(fs.existsSync(path.join(root, resultPolicyPath)), 'Route geometry result policy should exist.');
 
 const initialMigration = read(migrationPath);
 const verifiedRoutesFixMigration = read(verifiedRoutesFixMigrationPath);
@@ -53,6 +56,7 @@ const permissionsMigration = read(permissionsMigrationPath);
 const sourceFilterMigration = read(sourceFilterMigrationPath);
 const migration = `${initialMigration}\n${verifiedRoutesFixMigration}\n${permissionsMigration}\n${sourceFilterMigration}`;
 const edgeFunction = read(functionPath);
+const resultPolicy = read(resultPolicyPath);
 const viewportClient = read(clientPath);
 const supabaseClient = read(supabasePath);
 const supabaseConfig = read(supabaseConfigPath);
@@ -133,7 +137,7 @@ for (const required of [
   'cleanBbox',
   'cleanZoom',
   'includeReferenceGeometry',
-  'maxLimit',
+  'resultLimit',
   'cappedCount',
   'skippedMissingGeometryCount',
   'source_records',
@@ -143,9 +147,20 @@ for (const required of [
   'isMissingSourceFilteredRpc',
   'sourceFilterMode',
   'source_filter_migration_unavailable',
+  'ROUTE_GEOMETRY_CANDIDATE_INSPECTION_LIMIT',
+  'selectRouteGeometrySearchResults',
+  'qualifyingUniqueCount',
+  'additionalMatchesAvailable',
 ]) {
   assert(edgeFunction.includes(required), `route-geometry-segments should include ${required}.`);
 }
+assert(
+  edgeFunction.indexOf('const rankedCandidates =') < edgeFunction.indexOf('const selection =') &&
+    !edgeFunction.includes('.slice(0, maxLimit)') &&
+    resultPolicy.includes('ROUTE_GEOMETRY_SEARCH_RESULT_LIMIT = 20') &&
+    resultPolicy.includes('uniqueRecords.slice(0, resultLimit)'),
+  'Edge geometry must filter and shape the wider inspection window before deterministic dedupe and the final top-20 slice.',
+);
 assert(
   !edgeFunction.includes('}, 503)') &&
     !edgeFunction.includes('status, 503') &&
@@ -155,9 +170,10 @@ assert(
 
 assert(
   viewportClient.includes('getRouteGeometryViewportProviderAvailability') &&
-    viewportClient.includes('filterRouteGeometryViewportResultBySourceProviderPrefix') &&
+    viewportClient.includes('normalizeRouteGeometryViewportLimit') &&
+    viewportClient.includes('normalizeRouteGeometryViewportResponse(data, sourceProviderPrefix)') &&
     viewportClient.includes('sourceProviderPrefix,'),
-  'Viewport client should preflight provider availability and enforce source filtering after normalization.',
+  'Viewport client should preflight provider availability, clamp the request, and normalize source filtering before the cap.',
 );
 assert(
   /\[functions\.route-geometry-segments\][\s\S]*?verify_jwt = false[\s\S]*?entrypoint = "\.\/functions\/route-geometry-segments\/index\.ts"/.test(supabaseConfig),

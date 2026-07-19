@@ -13,6 +13,7 @@ import {
   routeWithExploreDiscoveryProvenance,
   type ExploreDiscoverySourceKind,
 } from './explore/exploreDiscoveryItem';
+import { normalizeRouteSearchResultLimit } from './explore/routeSearchResultPolicy';
 
 export const EXPLORE_ROUTES_AI_CATEGORY = 'all-drivable-trails';
 
@@ -69,8 +70,6 @@ const CATEGORY_LABELS: Record<ExploreRouteOverlayCategory, string> = {
   ecs_route_idea: 'ECS Route Idea',
 };
 
-const DEFAULT_CATEGORY_LIMIT = 8;
-const DEFAULT_TOTAL_LIMIT = 60;
 const EXPLORE_ROUTE_OVERLAY_PREVIEW_MAX_POINTS = 48;
 
 function routeIdentity(route: ExpeditionOpportunity): string {
@@ -88,6 +87,38 @@ function routeIdentity(route: ExpeditionOpportunity): string {
     `${route.name}:${route.region}`;
 
   return String(candidate).trim().toLowerCase();
+}
+
+function routeMetric(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function compareExploreRouteCandidates(
+  left: ExploreRouteCandidate,
+  right: ExploreRouteCandidate,
+): number {
+  const leftMetadata = left.route.routeMetadata && typeof left.route.routeMetadata === 'object'
+    ? left.route.routeMetadata as Record<string, unknown>
+    : {};
+  const rightMetadata = right.route.routeMetadata && typeof right.route.routeMetadata === 'object'
+    ? right.route.routeMetadata as Record<string, unknown>
+    : {};
+  const featuredDelta =
+    routeMetric(rightMetadata.featuredRouteScore, 0) -
+    routeMetric(leftMetadata.featuredRouteScore, 0);
+  if (featuredDelta !== 0) return featuredDelta;
+  const matchDelta =
+    routeMetric(right.route.matchScore, 0) - routeMetric(left.route.matchScore, 0);
+  if (matchDelta !== 0) return matchDelta;
+  const compatibilityDelta =
+    routeMetric(right.route.rigCompatibility, 0) - routeMetric(left.route.rigCompatibility, 0);
+  if (compatibilityDelta !== 0) return compatibilityDelta;
+  const distanceDelta =
+    routeMetric(left.route.distanceFromUserMiles, Number.MAX_SAFE_INTEGER) -
+    routeMetric(right.route.distanceFromUserMiles, Number.MAX_SAFE_INTEGER);
+  if (distanceDelta !== 0) return distanceDelta;
+  return routeIdentity(left.route).localeCompare(routeIdentity(right.route));
 }
 
 function toOverlaySegment(candidate: ExploreRouteCandidate): ExploreRouteOverlaySegment | null {
@@ -134,7 +165,7 @@ export function buildExploreRouteOverlaySegments(args: {
   radiusMiles: number;
   categoryLimit?: number;
 }): ExploreRouteOverlayBuildResult {
-  const categoryLimit = Math.max(1, args.categoryLimit ?? DEFAULT_CATEGORY_LIMIT);
+  const categoryLimit = normalizeRouteSearchResultLimit(args.categoryLimit);
   const hiddenGemRoutes = getHiddenGemRecommendations(args.opportunities, args.compatibilityResults, {
     radiusMiles: args.radiusMiles,
     pageSize: categoryLimit,
@@ -142,14 +173,14 @@ export function buildExploreRouteOverlaySegments(args: {
   const popularTrailRoutes = getPopularTrailRecommendations(args.opportunities, args.compatibilityResults, {
     radiusMiles: args.radiusMiles,
   }).slice(0, categoryLimit);
-  const aiRoutes = (args.aiRoutes ?? []).slice(0, categoryLimit);
+  const aiRoutes = args.aiRoutes ?? [];
 
   return buildExploreRouteOverlaySegmentsFromRoutes({
     hiddenGemRoutes,
     popularTrailRoutes,
     ecsRouteIdeaRoutes: aiRoutes,
     compatibilityResults: args.compatibilityResults,
-    maxRenderedRoutes: categoryLimit * 3,
+    maxRenderedRoutes: categoryLimit,
   });
 }
 
@@ -162,7 +193,7 @@ export function buildExploreRouteOverlaySegmentsFromRoutes(args: {
   compatibilityResults?: Map<string, CompatibilityResult>;
   maxRenderedRoutes?: number;
 }): ExploreRouteOverlayBuildResult {
-  const maxRenderedRoutes = Math.max(1, args.maxRenderedRoutes ?? DEFAULT_TOTAL_LIMIT);
+  const maxRenderedRoutes = normalizeRouteSearchResultLimit(args.maxRenderedRoutes);
   const toCandidate = (
     route: ExpeditionOpportunity,
     category: ExploreRouteOverlayCategory,
@@ -222,18 +253,13 @@ export function buildExploreRouteOverlaySegmentsFromRoutes(args: {
       args.compatibilityResults?.get(item.route.id) ??
       args.compatibilityResults?.get(item.primarySource.sourceId) ??
       null,
-  }));
+  })).sort(compareExploreRouteCandidates);
   const seen = new Set<string>();
   const segments: ExploreRouteOverlaySegment[] = [];
   let skippedMissingGeometryCount = 0;
   let cappedCount = 0;
 
   normalizedCandidates.forEach((candidate) => {
-    if (segments.length >= maxRenderedRoutes) {
-      cappedCount += 1;
-      return;
-    }
-
     const identity = routeIdentity(candidate.route);
     if (seen.has(identity)) return;
     seen.add(identity);
@@ -241,6 +267,10 @@ export function buildExploreRouteOverlaySegmentsFromRoutes(args: {
     const segment = toOverlaySegment(candidate);
     if (!segment) {
       skippedMissingGeometryCount += 1;
+      return;
+    }
+    if (segments.length >= maxRenderedRoutes) {
+      cappedCount += 1;
       return;
     }
     segments.push(segment);

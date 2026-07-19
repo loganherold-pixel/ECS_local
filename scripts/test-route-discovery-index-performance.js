@@ -205,6 +205,76 @@ assert.strictEqual(rubiconEntry.geometryStatus, 'full');
 assert(rubiconEntry.bounds, 'Rubicon should have bounds in the lightweight index.');
 assert(rubiconEntry.thumbnail, 'Index should carry thumbnail/image metadata.');
 
+const predicateTrapIndex = buildRouteDiscoveryIndex([
+  ...Array.from({ length: 25 }, (_, index) => trailPack({
+    id: `high-ranked-official-${String(index).padStart(2, '0')}`,
+    name: `High Ranked Official Route ${index}`,
+    source: 'ecs_validated',
+    featuredRouteScore: 200 - index,
+    confidenceScore: 95,
+  })),
+  trailPack({
+    id: 'needle-community-route',
+    name: 'Needle Canyon Community Route',
+    source: 'community_reviewed',
+    featuredRouteScore: 0,
+    confidenceScore: 60,
+    tags: ['Needle Canyon', 'community route'],
+  }),
+  trailPack({
+    id: 'imported-loop-route',
+    name: 'Imported Loop Route',
+    source: 'imported_gpx',
+    routeType: 'loop',
+    featuredRouteScore: 0,
+    confidenceScore: 55,
+  }),
+], { catalogVersionHash: 'catalog-query-predicates', builtAt: nowIso });
+const predicateBaseQuery = {
+  coordinate: userNearTahoe,
+  radiusMiles: 100,
+  refinement: 'dayTrip',
+};
+const predicateUnfiltered = queryRouteDiscoveryIndex(predicateTrapIndex, predicateBaseQuery);
+assert.strictEqual(predicateUnfiltered.allItems.length, 20);
+assert(
+  !predicateUnfiltered.allItems.some((entry) => entry.routeId === 'needle-community-route'),
+  'The low-ranked text/category target should sit outside the unfiltered top 20.',
+);
+assert.deepStrictEqual(
+  queryRouteDiscoveryIndex(predicateTrapIndex, {
+    ...predicateBaseQuery,
+    searchText: 'needle canyon',
+  }).allItems.map((entry) => entry.routeId),
+  ['needle-community-route'],
+  'Text filtering must run before ranking and the final top-20 slice.',
+);
+assert.deepStrictEqual(
+  queryRouteDiscoveryIndex(predicateTrapIndex, {
+    ...predicateBaseQuery,
+    routeCategory: 'community',
+  }).allItems.map((entry) => entry.routeId),
+  ['needle-community-route'],
+  'Route-category filtering must run before ranking and the final top-20 slice.',
+);
+assert.deepStrictEqual(
+  queryRouteDiscoveryIndex(predicateTrapIndex, {
+    ...predicateBaseQuery,
+    sourceFilter: 'imported_gpx',
+  }).allItems.map((entry) => entry.routeId),
+  ['imported-loop-route'],
+  'Exact source filtering must run before ranking and the final top-20 slice.',
+);
+assert.deepStrictEqual(
+  queryRouteDiscoveryIndex(predicateTrapIndex, {
+    ...predicateBaseQuery,
+    sourceFilter: 'imported',
+    routeCategory: 'loop',
+  }).allItems.map((entry) => entry.routeId),
+  ['imported-loop-route'],
+  'Source-family and route-type category filters should compose before selection.',
+);
+
 const cacheKey = createRouteDiscoveryCacheKey(index, {
   coordinate: userNearTahoe,
   radiusMiles: 100,
@@ -212,6 +282,38 @@ const cacheKey = createRouteDiscoveryCacheKey(index, {
 });
 assert(cacheKey.includes('catalog-v1'));
 assert(cacheKey.includes('100'));
+assert.notStrictEqual(
+  createRouteDiscoveryCacheKey(index, {
+    coordinate: userNearTahoe,
+    radiusMiles: 100,
+    refinement: 'dayTrip',
+    sourceFilter: 'all',
+    searchText: '',
+  }, { access: 'anonymous' }),
+  createRouteDiscoveryCacheKey(index, {
+    coordinate: userNearTahoe,
+    radiusMiles: 100,
+    refinement: 'dayTrip',
+    sourceFilter: 'all',
+    searchText: '',
+  }, { access: 'authenticated' }),
+  'Cache identity must separate access contexts that can change route visibility.',
+);
+assert.notStrictEqual(
+  createRouteDiscoveryCacheKey(index, {
+    coordinate: userNearTahoe,
+    radiusMiles: 100,
+    refinement: 'dayTrip',
+    routeCategory: 'official',
+  }),
+  createRouteDiscoveryCacheKey(index, {
+    coordinate: userNearTahoe,
+    radiusMiles: 100,
+    refinement: 'dayTrip',
+    routeCategory: 'community',
+  }),
+  'Category and refinement context must participate in route cache identity.',
+);
 
 const jitterBucketA = normalizeRouteDiscoveryCoordinateBucket({
   latitude: 38.921,
@@ -263,7 +365,8 @@ const uncached = queryRouteDiscoveryIndex(index, {
 });
 assert.strictEqual(uncached.cacheStatus, 'uncached');
 assert.strictEqual(uncached.items.length, 12, 'Fresh discovery should return a first batch only.');
-assert(uncached.totalEligibleCount > 26, 'Discovery should not silently stop at an early cap.');
+assert(uncached.totalEligibleCount > 20, 'Discovery should retain the uncapped eligible count for truthful messaging.');
+assert.strictEqual(uncached.allItems.length, 20, 'A route-discovery result set must contain at most 20 unique routes.');
 assert(uncached.allItems.some((entry) => entry.routeId === 'rubicon-trail'), 'Rubicon should match a 100-mile Tahoe query.');
 assert(
   uncached.items.slice(0, 5).some((entry) => entry.routeId === 'rubicon-trail'),
@@ -275,12 +378,51 @@ assert(
 );
 
 const secondBatch = getNextRouteDiscoveryBatch(uncached);
-assert.strictEqual(secondBatch.items.length, 10);
+assert.strictEqual(secondBatch.items.length, 8, 'Only the remainder of the same capped 20-route set may be returned.');
 assert.strictEqual(secondBatch.offset, 12);
+assert.strictEqual(secondBatch.nextCursor, null, 'No continuation may exist after the 20th accepted route.');
 assert.notDeepStrictEqual(
   secondBatch.items.map((entry) => entry.routeId),
   uncached.items.map((entry) => entry.routeId),
   'Second batch should contain additional routes, not duplicate the first batch.',
+);
+assert.strictEqual(
+  getNextRouteDiscoveryBatch({ ...uncached, nextCursor: 20 }).items.length,
+  0,
+  'A delayed continuation positioned after the cap cannot append a 21st route.',
+);
+
+const normalizedInvalidLimits = queryRouteDiscoveryIndex(index, {
+  coordinate: userNearTahoe,
+  radiusMiles: 100,
+  refinement: 'dayTrip',
+  resultLimit: -1,
+  firstBatchSize: -5,
+  batchSize: Number.NaN,
+});
+assert.strictEqual(normalizedInvalidLimits.items.length, 20, 'Invalid route limits must use the safe default of 20.');
+const oversizedLimit = queryRouteDiscoveryIndex(index, {
+  coordinate: userNearTahoe,
+  radiusMiles: 100,
+  refinement: 'dayTrip',
+  resultLimit: 51,
+  firstBatchSize: 51,
+});
+assert.strictEqual(oversizedLimit.items.length, 20, 'Requested route limits above 20 must clamp to 20.');
+
+const duplicateIndex = buildRouteDiscoveryIndex(
+  [rubiconTrail, ...obscureRoutes, { ...rubiconTrail, name: 'Duplicate Rubicon' }],
+  { catalogVersionHash: 'catalog-duplicates', builtAt: nowIso },
+);
+const deduplicated = queryRouteDiscoveryIndex(duplicateIndex, {
+  coordinate: userNearTahoe,
+  radiusMiles: 100,
+  refinement: 'dayTrip',
+});
+assert.strictEqual(
+  deduplicated.allItems.filter((entry) => entry.routeId === 'rubicon-trail').length,
+  1,
+  'Duplicate route IDs must not consume more than one result position.',
 );
 
 const discoveryCache = createRouteDiscoveryCache({ ttlMs: 60_000, staleMs: 120_000 });
@@ -304,7 +446,8 @@ const firstCached = queryTrailPackDiscoveryIndexCached(index, {
 assert.strictEqual(firstCached.cacheStatus, 'miss');
 assert.strictEqual(firstCached.trailPacks.length, 12);
 assert(firstCached.allTrailPacks.length > firstCached.trailPacks.length, 'Cached discovery should retain the full eligible set for incremental population.');
-assert.strictEqual(firstCached.allTrailPacks.length, firstCached.totalEligibleCount);
+assert.strictEqual(firstCached.allTrailPacks.length, 20, 'Cached route arrays must retain no more than the capped top 20.');
+assert(firstCached.totalEligibleCount > firstCached.allTrailPacks.length);
 
 const cacheHit = queryTrailPackDiscoveryIndexCached(index, {
   coordinate: { latitude: 38.921, longitude: -120.779 },
@@ -322,6 +465,41 @@ assert.deepStrictEqual(
   firstCached.trailPacks.map((pack) => pack.id),
   'Rounded location bucket should reuse cached nearby discovery.',
 );
+
+const oversizedLegacyCache = createRouteDiscoveryCache({ ttlMs: 60_000, staleMs: 120_000 });
+const legacyCacheSeed = queryTrailPackDiscoveryIndexCached(index, {
+  coordinate: userNearTahoe,
+  radiusMiles: 100,
+  refinement: 'dayTrip',
+}, {
+  cache: oversizedLegacyCache,
+  nowMs: 1_000,
+});
+const legacyExtraEntries = index.entries
+  .filter((entry) => !legacyCacheSeed.allItems.some((selected) => selected.routeId === entry.routeId))
+  .slice(0, 5);
+const legacyExtraPacks = legacyExtraEntries
+  .map((entry) => index.routeById.get(entry.routeId))
+  .filter(Boolean);
+oversizedLegacyCache.set(legacyCacheSeed.cacheKey, {
+  ...legacyCacheSeed,
+  items: [...legacyCacheSeed.items, ...legacyExtraEntries],
+  allItems: [...legacyCacheSeed.allItems, ...legacyExtraEntries],
+  trailPacks: [...legacyCacheSeed.trailPacks, ...legacyExtraPacks],
+  allTrailPacks: [...legacyCacheSeed.allTrailPacks, ...legacyExtraPacks],
+  nextCursor: 20,
+}, 1_100);
+const sanitizedLegacyCacheHit = queryTrailPackDiscoveryIndexCached(index, {
+  coordinate: userNearTahoe,
+  radiusMiles: 100,
+  refinement: 'dayTrip',
+}, {
+  cache: oversizedLegacyCache,
+  nowMs: 1_200,
+});
+assert.strictEqual(sanitizedLegacyCacheHit.allItems.length, 20, 'An oversized cached snapshot must be clamped on read.');
+assert.strictEqual(sanitizedLegacyCacheHit.allTrailPacks.length, 20, 'Cached application route arrays cannot retain a 21st route.');
+assert.strictEqual(sanitizedLegacyCacheHit.nextCursor, null, 'An oversized legacy cache cannot restore continuation beyond 20.');
 
 const staleResult = queryTrailPackDiscoveryIndexCached(index, {
   coordinate: userNearTahoe,

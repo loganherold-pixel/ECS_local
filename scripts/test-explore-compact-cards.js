@@ -114,17 +114,18 @@ assert.ok(
 );
 
 assert.ok(
-  discoverSource.includes('EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT = 12') &&
+  discoverSource.includes('EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT = ECS_ROUTE_SEARCH_RESULT_LIMIT') &&
     discoverSource.includes('exploreGuidanceReadyVisibleLimit') &&
     discoverSource.includes('visibleExploreWizardCardCandidates') &&
     discoverSource.includes('visibleExploreWizardCandidates.slice(0, exploreGuidanceReadyVisibleLimit)') &&
-    discoverSource.includes('SHOW MORE ROUTES') &&
+    !discoverSource.includes('SHOW MORE ROUTES') &&
+    discoverSource.includes('testID="explore-route-search-cap-notice"') &&
     discoverSource.includes('setExploreGuidanceReadyVisibleLimit(EXPLORE_GUIDANCE_READY_FAST_PAINT_COUNT)') &&
     discoverSource.includes('liveTrailPackCatalogSnapshot.routeCatalogSummaries.length === 0') &&
     discoverSource.includes('Math.max(\n      current,\n      exploreWizardCandidateSet.candidates.length') &&
     discoverSource.includes('initialNumToRender={EXPLORE_ROUTE_CARD_INITIAL_RENDER_COUNT}') &&
     discoverSource.includes('maxToRenderPerBatch={EXPLORE_ROUTE_CARD_BATCH_SIZE}'),
-  'Guidance Ready should keep virtualized first paint while automatically making every loaded catalog candidate scroll-reachable.',
+  'Guidance Ready should virtualize the single capped result set and expose no user-facing continuation.',
 );
 
 assert.ok(

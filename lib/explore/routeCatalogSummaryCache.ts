@@ -1,6 +1,10 @@
 import type { RouteCatalogSummary } from '../routeDataContracts';
+import {
+  capUniqueRankedRoutes,
+  normalizeRouteSearchResultLimit,
+} from './routeSearchResultPolicy';
 
-export const EXPLORE_CATALOG_SUMMARY_CACHE_KEY = 'explore.catalog.summary.v2';
+export const EXPLORE_CATALOG_SUMMARY_CACHE_KEY = 'explore.catalog.summary.v3';
 export const EXPLORE_CATALOG_SUMMARY_CACHE_TTL_MS = 15 * 60 * 1000;
 export const EXPLORE_CATALOG_SUMMARY_CACHE_STALE_MS = 6 * 60 * 60 * 1000;
 
@@ -44,7 +48,13 @@ function normalizeRegionId(regionId: string): string {
 }
 
 export function exploreCatalogRegionCacheKey(regionId: string): string {
-  return `explore.catalog.region.${normalizeRegionId(regionId)}.v2`;
+  return `explore.catalog.region.${normalizeRegionId(regionId)}.v3`;
+}
+
+function normalizeCachedSummaries(
+  summaries: readonly RouteCatalogSummary[],
+): RouteCatalogSummary[] {
+  return capUniqueRankedRoutes(summaries, (summary) => summary.routeId);
 }
 
 export function createRouteCatalogSummaryCache(
@@ -63,19 +73,21 @@ export function createRouteCatalogSummaryCache(
     get(key, nowMs = Date.now()) {
       const cached = entries.get(key);
       if (!cached) return { status: 'miss', summaries: null };
+      const summaries = normalizeCachedSummaries(cached.summaries);
+      const normalizedEntry = { ...cached, summaries };
       const ageMs = Math.max(0, nowMs - cached.storedAtMs);
       if (ageMs <= ttlMs + staleMs) {
         entries.delete(key);
-        entries.set(key, cached);
+        entries.set(key, normalizedEntry);
       }
-      if (ageMs <= ttlMs) return { status: 'hit', summaries: [...cached.summaries] };
-      if (ageMs <= ttlMs + staleMs) return { status: 'stale', summaries: [...cached.summaries] };
+      if (ageMs <= ttlMs) return { status: 'hit', summaries: [...summaries] };
+      if (ageMs <= ttlMs + staleMs) return { status: 'stale', summaries: [...summaries] };
       entries.delete(key);
       return { status: 'miss', summaries: null };
     },
     set(key, summaries, nowMs = Date.now()) {
       entries.delete(key);
-      entries.set(key, { summaries: [...summaries], storedAtMs: nowMs });
+      entries.set(key, { summaries: normalizeCachedSummaries(summaries), storedAtMs: nowMs });
       while (entries.size > maxEntries) {
         const oldestKey = entries.keys().next().value;
         if (typeof oldestKey !== 'string') break;
@@ -92,12 +104,17 @@ export function paginateRouteCatalogSummaries(
   summaries: RouteCatalogSummary[],
   options: { pageIndex?: number; pageSize?: number } = {},
 ): RouteCatalogSummaryPage {
-  const pageSize = Math.max(1, Math.round(Number(options.pageSize ?? 10)));
-  const totalItems = summaries.length;
+  const rankedSummaries = normalizeCachedSummaries(summaries);
+  const pageSize = normalizeRouteSearchResultLimit(options.pageSize);
+  const totalItems = rankedSummaries.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-  const pageIndex = Math.min(Math.max(0, Math.round(Number(options.pageIndex ?? 0))), totalPages - 1);
+  const requestedPageIndex = Number(options.pageIndex);
+  const normalizedPageIndex = Number.isFinite(requestedPageIndex)
+    ? Math.max(0, Math.round(requestedPageIndex))
+    : 0;
+  const pageIndex = Math.min(normalizedPageIndex, totalPages - 1);
   const offset = pageIndex * pageSize;
-  const items = summaries.slice(offset, offset + pageSize);
+  const items = rankedSummaries.slice(offset, offset + pageSize);
   return {
     items,
     pageIndex,

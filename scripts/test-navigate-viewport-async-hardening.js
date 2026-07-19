@@ -86,7 +86,44 @@ async function testProviderLifecycle() {
   const empty = await client.fetchRouteGeometryViewportSegments({ bbox, zoom: 12, timeoutMs: 100 });
   assert.strictEqual(empty.segments.length, 0);
   assert.strictEqual(lastInvoke.name, 'route-geometry-segments');
+  assert.strictEqual(lastInvoke.options.body.limit, 20, 'Missing client limits must resolve to the safe default.');
   assert(lastInvoke.options.signal instanceof AbortSignal, 'Supabase invoke must receive a transport AbortSignal.');
+
+  invokeImplementation = async () => ({
+    data: {
+      segments: Array.from({ length: 51 }, (_, index) => ({
+        id: `route-${String(index).padStart(2, '0')}`,
+        name: `Route ${String(index).padStart(2, '0')}`,
+        confidenceScore: index,
+        lastVerifiedAt: '2026-07-19T00:00:00.000Z',
+        geometry: { type: 'LineString', coordinates: [[-120.8, 38.9], [-120.7, 39]] },
+      })),
+      meta: { degraded: false, candidateCount: 51 },
+    },
+    error: null,
+  });
+  const bounded = await client.fetchRouteGeometryViewportSegments({
+    bbox,
+    zoom: 12,
+    limit: 500,
+    timeoutMs: 100,
+  });
+  assert.strictEqual(lastInvoke.options.body.limit, 20, 'Oversized client limits must clamp to 20.');
+  assert.strictEqual(bounded.segments.length, 20);
+  assert.strictEqual(bounded.segments[0].id, 'route-50', 'Client defense must rank before slicing.');
+  assert.strictEqual(bounded.additionalMatchesAvailable, true);
+  const memoryCoordinator = new NavigateMapLayerCoordinator();
+  memoryCoordinator.writeCache({
+    layer: 'mvum',
+    key: 'bounded-live-result',
+    value: bounded,
+    ttlMs: 1_000,
+  });
+  assert.strictEqual(
+    memoryCoordinator.readCache('mvum', 'bounded-live-result').value.segments.length,
+    20,
+    'The live result written to the Navigate memory cache must already be bounded.',
+  );
 
   invokeImplementation = async () => ({
     data: {
@@ -201,14 +238,20 @@ function testMountedIntegrationContract() {
     'Mounted Navigate overlays need a bounded missing-bounds terminal state and explicit retries.',
   );
   assert(
+    navigate.includes('limit: ECS_ROUTE_SEARCH_RESULT_LIMIT') &&
+      navigate.includes('...capRouteGeometryViewportResult(result)') &&
+      navigate.includes('ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE'),
+    'Mounted Navigate must request, cache, and truthfully describe only the 20 best MVUM matches.',
+  );
+  assert(
     navigate.includes('createECSAsyncSurfaceState') &&
       navigate.includes('beginECSAsyncSurfaceRequest') &&
       navigate.includes('settleECSAsyncSurfaceRequest'),
     'Mounted Navigate state must reuse the shared ECS async surface state model.',
   );
   assert(
-    /if \(!resultForCache\.degraded\) \{\s*navigateMapLayerCoordinatorRef\.current\.writeCache\(\{\s*layer: 'route_geometry'/.test(navigate),
-    'Degraded route geometry responses must never be cached as successful empty data.',
+    /if \(!resultForCache\.degraded\) \{\s*navigateMapLayerCoordinatorRef\.current\.writeCache\(\{\s*layer: 'mvum'/.test(navigate),
+    'Degraded MVUM route geometry responses must never be cached as successful empty data.',
   );
 }
 

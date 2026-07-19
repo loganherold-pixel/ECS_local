@@ -14,6 +14,7 @@ import {
   buildNavigateRouteCatalogQueryDiagnostic,
   logRouteCatalogVisibilityDiagnostic,
 } from './routeCatalogVisibilityDiagnostics';
+import { normalizeRouteSearchResultLimit } from './explore/routeSearchResultPolicy';
 
 type RouteCatalogViewportClient = {
   functions: {
@@ -106,11 +107,13 @@ export type RouteCatalogViewportSearchBody = {
   latitude: number;
   longitude: number;
   radiusMiles: number;
+  viewportBbox: RouteCatalogViewportQuery['bbox'];
+  regionTags: string[];
   limit: number;
   includeGeometry: true;
   includePreviewGeometry: true;
   includeAssessment: true;
-  recommendationOnly: false;
+  recommendationOnly: true;
   locationSource: 'navigate_ecs_route_geometry_viewport';
 };
 
@@ -140,11 +143,13 @@ export function buildRouteCatalogViewportSearchBody(
     latitude: query.center.latitude,
     longitude: query.center.longitude,
     radiusMiles: query.radiusMiles,
-    limit: query.limit,
+    viewportBbox: { ...query.bbox },
+    regionTags: [...query.regionTags],
+    limit: normalizeRouteSearchResultLimit(query.limit),
     includeGeometry: true,
     includePreviewGeometry: true,
     includeAssessment: true,
-    recommendationOnly: false,
+    recommendationOnly: true,
     locationSource: 'navigate_ecs_route_geometry_viewport',
   };
 }

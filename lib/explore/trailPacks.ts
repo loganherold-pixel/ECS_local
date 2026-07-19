@@ -17,6 +17,7 @@ import {
   distanceMilesFromPointToSegment,
   type RouteCatalogTripClassification,
 } from './routeCatalogDiscovery';
+import { capUniqueRankedRoutes } from './routeSearchResultPolicy';
 
 export type ECSTrailPackSource =
   | 'ecs_submitted'
@@ -476,7 +477,7 @@ export function getDiscoverableTrailPacks(
 ): ECSTrailPackDiscoveryItem[] {
   const ownTrailPackIds = new Set(options.ownTrailPackIds ?? []);
 
-  return trailPacks
+  const ranked = trailPacks
     .filter((pack) => {
       const reviewState = options.reviewStatesByTrailPackId?.[pack.id];
       if (isTrailPackPubliclyDiscoverable(pack, reviewState)) return true;
@@ -505,6 +506,10 @@ export function getDiscoverableTrailPacks(
     })
     .filter((pack) => pack.distanceFromUserMiles <= radiusMiles)
     .sort(compareTrailPacksForDiscovery);
+
+  // The total-search cap is applied only after review/access eligibility,
+  // confidence filtering, radius filtering, and deterministic ranking.
+  return capUniqueRankedRoutes(ranked, (pack) => pack.id);
 }
 
 export function compareTrailPacksForDiscovery(
@@ -520,8 +525,10 @@ export function compareTrailPacksForDiscovery(
   const distanceDelta = left.distanceFromUserMiles - right.distanceFromUserMiles;
   if (distanceDelta !== 0) return distanceDelta;
 
-  const leftVerified = left.lastVerifiedAt ? Date.parse(left.lastVerifiedAt) : 0;
-  const rightVerified = right.lastVerifiedAt ? Date.parse(right.lastVerifiedAt) : 0;
+  const parsedLeftVerified = left.lastVerifiedAt ? Date.parse(left.lastVerifiedAt) : 0;
+  const parsedRightVerified = right.lastVerifiedAt ? Date.parse(right.lastVerifiedAt) : 0;
+  const leftVerified = Number.isFinite(parsedLeftVerified) ? parsedLeftVerified : 0;
+  const rightVerified = Number.isFinite(parsedRightVerified) ? parsedRightVerified : 0;
   const verifiedDelta = rightVerified - leftVerified;
   if (verifiedDelta !== 0) return verifiedDelta;
 

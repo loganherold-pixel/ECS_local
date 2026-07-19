@@ -167,12 +167,12 @@ const staleRenderDiagnostic = buildRouteCatalogClientCorrelationDiagnostic({
   status: 'stale',
   surfaceKind: 'cards',
   candidateCount: 51,
-  returnedCount: 50,
+  returnedCount: 20,
   blockedCount: 0,
-  normalizedCount: 50,
-  discoverableCount: 50,
+  normalizedCount: 20,
+  discoverableCount: 20,
   guidanceReadyCount: 0,
-  visibleCount: 50,
+  visibleCount: 20,
   rpcUsed: true,
   durationMs: 12.345,
 });
@@ -186,7 +186,7 @@ assert.notStrictEqual(
   'A stale snapshot origin must remain distinguishable from its fresh revalidation.',
 );
 assert.strictEqual(staleRenderDiagnostic.surfaceKind, 'cards');
-assert.strictEqual(staleRenderDiagnostic.visibleCount, 50);
+assert.strictEqual(staleRenderDiagnostic.visibleCount, 20);
 assert.strictEqual(staleRenderDiagnostic.durationMs, 12.35);
 
 const clientLogEvents = [];
@@ -198,7 +198,7 @@ assert.strictEqual(
     revalidationRequestId: REVALIDATION_REQUEST_ID,
     status: 'stale',
     surfaceKind: 'cards',
-    visibleCount: 50,
+    visibleCount: 20,
   }, {
     enabled: true,
     logger: (tag, payload) => clientLogEvents.push({ tag, payload }),

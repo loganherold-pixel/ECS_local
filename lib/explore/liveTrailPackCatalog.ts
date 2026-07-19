@@ -50,6 +50,16 @@ import {
   normalizeECSRouteCatalogRequestId,
   resolveECSRouteCatalogResponseRequestCorrelation,
 } from './routeCatalogRequestCorrelation';
+import {
+  ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE,
+  ECS_ROUTE_SEARCH_RESULT_LIMIT,
+  capUniqueRankedRoutes,
+  normalizeRouteSearchResultLimit,
+} from './routeSearchResultPolicy';
+import {
+  trailMatchesExploreRefinement,
+  type ExploreRefinementFilter,
+} from './exploreRefinementFilter';
 import type {
   ECSTrailPack,
   ECSTrailPackCoordinate,
@@ -114,6 +124,9 @@ export type LiveTrailPackCatalogSearchCriteria = {
   expectedKnownRoutes?: string[] | null;
   includePreviewGeometry?: boolean | null;
   includeCoverageDiagnostics?: boolean | null;
+  /** Complete non-location UI search identity (query/category/refinement/source/access context). */
+  searchFingerprint?: string | null;
+  exploreRefinement?: 'remoteness' | 'dayTrip' | 'weekendTrip' | 'expedition' | string | null;
 };
 
 export type LiveTrailPackCatalogSnapshot = {
@@ -148,7 +161,7 @@ export type RouteCatalogPaginationProgress = {
 };
 
 export const ROUTE_CATALOG_PAGINATION_CONTRACT_VERSION =
-  'route_catalog_public_cursor_page_v2';
+  'route_catalog_total_search_v1';
 
 export function buildRouteCatalogPaginationProgress(args: {
   loadedCatalogCount: number;
@@ -171,9 +184,10 @@ export function buildRouteCatalogPaginationProgress(args: {
     Math.floor(args.visibleCandidateCount) - visibleCatalogCardCount,
   );
   const matchedCatalogCountIsLowerBound = args.totalMatchedCountBounded === true;
-  const loadedLabel = matchedCatalogCountIsLowerBound
-    ? `${loadedCatalogCount} CATALOG ROUTES LOADED · AT LEAST ${matchedCatalogCount} CATALOG MATCHES`
-    : `${loadedCatalogCount} OF ${matchedCatalogCount} CATALOG ROUTES LOADED`;
+  const hasAdditionalMatches = matchedCatalogCount > loadedCatalogCount;
+  const loadedLabel = hasAdditionalMatches
+    ? ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE
+    : `${loadedCatalogCount} CATALOG ROUTES SHOWN`;
 
   return {
     loadedCatalogCount,
@@ -181,7 +195,7 @@ export function buildRouteCatalogPaginationProgress(args: {
     matchedCatalogCountIsLowerBound,
     visibleCatalogCardCount,
     nonCatalogCandidateCount,
-    label: `${loadedLabel} · ${visibleCatalogCardCount} CATALOG CARDS VISIBLE · ${nonCatalogCandidateCount} OTHER CANDIDATES`,
+    label: loadedLabel,
   };
 }
 
@@ -263,9 +277,9 @@ const TRAIL_PACK_SELECT = [
   'updated_at',
 ].join(',');
 
-const ROUTE_CATALOG_DEFAULT_SEARCH_LIMIT = 500;
-const ROUTE_CATALOG_SUMMARY_PAGE_SIZE = 50;
-const ROUTE_CATALOG_STAGED_REFRESH_LIMIT = 50;
+const ROUTE_CATALOG_DEFAULT_SEARCH_LIMIT = ECS_ROUTE_SEARCH_RESULT_LIMIT;
+const ROUTE_CATALOG_SUMMARY_PAGE_SIZE = ECS_ROUTE_SEARCH_RESULT_LIMIT;
+const ROUTE_CATALOG_STAGED_REFRESH_LIMIT = ECS_ROUTE_SEARCH_RESULT_LIMIT;
 const routeCatalogSummaryPersistentCache = createPersistedKeyValueCache(EXPLORE_CATALOG_SUMMARY_CACHE_KEY);
 
 class InvalidRouteCatalogSearchResponseError extends Error {
@@ -408,12 +422,38 @@ function mergeCatalogItemsById<T>(
   pageItems: T[],
   getId: (item: T) => string,
 ): T[] {
-  const merged = new Map<string, T>();
-  [...baseItems, ...pageItems].forEach((item) => {
+  const latestById = new Map<string, T>();
+  pageItems.forEach((item) => {
     const id = getId(item).trim();
-    if (id) merged.set(id, item);
+    if (id) latestById.set(id, item);
   });
-  return Array.from(merged.values());
+  const merged = baseItems.map((item) => latestById.get(getId(item).trim()) ?? item);
+  const baseIds = new Set(baseItems.map((item) => getId(item).trim()).filter(Boolean));
+  pageItems.forEach((item) => {
+    if (!baseIds.has(getId(item).trim())) merged.push(item);
+  });
+  return capUniqueRankedRoutes(merged, getId);
+}
+
+function capLiveTrailPackCatalogData(
+  data: LiveTrailPackCatalogData | null | undefined,
+): LiveTrailPackCatalogData | null {
+  if (!data) return null;
+  return {
+    trailPacks: capUniqueRankedRoutes(data.trailPacks, (trailPack) => trailPack.id),
+    guidanceDiagnosticTrailPacks: capUniqueRankedRoutes(
+      data.guidanceDiagnosticTrailPacks,
+      (trailPack) => trailPack.id,
+    ),
+    guidanceDiagnosticRecords: capUniqueRankedRoutes(
+      data.guidanceDiagnosticRecords,
+      (diagnostic) => diagnostic.routeId,
+    ),
+    routeCatalogSummaries: capUniqueRankedRoutes(
+      data.routeCatalogSummaries,
+      (summary) => summary.routeId,
+    ),
+  };
 }
 
 function mergeLiveTrailPackCatalogData(
@@ -421,7 +461,7 @@ function mergeLiveTrailPackCatalogData(
   pageData: LiveTrailPackCatalogData | null | undefined,
 ): LiveTrailPackCatalogData | null {
   if (!baseData && !pageData) return null;
-  return {
+  return capLiveTrailPackCatalogData({
     trailPacks: mergeCatalogItemsById(
       baseData?.trailPacks ?? [],
       pageData?.trailPacks ?? [],
@@ -442,7 +482,7 @@ function mergeLiveTrailPackCatalogData(
       pageData?.routeCatalogSummaries ?? [],
       (summary) => summary.routeId,
     ),
-  };
+  });
 }
 
 function routeCatalogRefreshFamilyKey(refreshKey: string | null | undefined): string | null {
@@ -510,6 +550,11 @@ function mergeRouteCatalogSearchMeta(
     nextCursor: page.nextCursor ?? null,
     totalMatchedCount: Math.max(base.totalMatchedCount, page.totalMatchedCount),
     totalMatchedCountBounded: page.totalMatchedCountBounded,
+    resultLimit: normalizeRouteSearchResultLimit(page.resultLimit ?? base.resultLimit),
+    additionalMatchesAvailable:
+      base.additionalMatchesAvailable === true ||
+      page.additionalMatchesAvailable === true ||
+      Math.max(base.totalMatchedCount, page.totalMatchedCount) > ECS_ROUTE_SEARCH_RESULT_LIMIT,
     clientInvalidRecordCount:
       (base.clientInvalidRecordCount ?? 0) + (page.clientInvalidRecordCount ?? 0),
     knownRouteDiagnostics: mergeKnownRouteDiagnostics(
@@ -887,15 +932,14 @@ function positiveNumber(value: unknown): number | undefined {
 }
 
 function routeCatalogSearchLimit(value: unknown): number {
-  const limit = finiteNumber(value);
-  if (limit == null) return ROUTE_CATALOG_DEFAULT_SEARCH_LIMIT;
-  return Math.max(1, Math.min(ROUTE_CATALOG_DEFAULT_SEARCH_LIMIT, Math.round(limit)));
+  return normalizeRouteSearchResultLimit(value);
 }
 
 function routeCatalogSearchPage(value: unknown): number {
-  const page = finiteNumber(value);
-  if (page == null || page < 1) return 1;
-  return Math.max(1, Math.min(10_000, Math.floor(page)));
+  // A user search is one ranked result set. Provider cursors remain an internal
+  // implementation detail and are never exposed as a second consumer page.
+  void value;
+  return 1;
 }
 
 function hasRouteCatalogRadiusCriteria(criteria: LiveTrailPackCatalogSearchCriteria): boolean {
@@ -909,20 +953,8 @@ function hasRouteCatalogRadiusCriteria(criteria: LiveTrailPackCatalogSearchCrite
 function stagedRouteCatalogSearchCriteria(
   criteria: LiveTrailPackCatalogSearchCriteria,
 ): LiveTrailPackCatalogSearchCriteria | null {
-  const requestedLimit = finiteNumber(criteria.pageSize ?? criteria.limit);
-  if (requestedLimit == null) return null;
-  if (routeCatalogSearchPage(criteria.page) > 1) return null;
-  const limit = routeCatalogSearchLimit(requestedLimit);
-  if (!hasRouteCatalogRadiusCriteria(criteria) || limit <= ROUTE_CATALOG_STAGED_REFRESH_LIMIT) return null;
-  return {
-    ...criteria,
-    limit: ROUTE_CATALOG_STAGED_REFRESH_LIMIT,
-    page: 1,
-    pageSize: ROUTE_CATALOG_STAGED_REFRESH_LIMIT,
-    expectedKnownRoutes: [],
-    includePreviewGeometry: false,
-    includeCoverageDiagnostics: false,
-  };
+  void criteria;
+  return null;
 }
 
 function cleanText(value: unknown): string | undefined {
@@ -1040,6 +1072,12 @@ function legacyTrailPackMatchesCriteria(
   if (routeType && pack.routeType !== routeType) return false;
   const difficulty = cleanText(criteria.difficulty)?.toLowerCase();
   if (difficulty && pack.difficulty !== difficulty) return false;
+  const exploreRefinement = cleanText(criteria.exploreRefinement) as ExploreRefinementFilter | undefined;
+  if (
+    exploreRefinement &&
+    ['remoteness', 'dayTrip', 'weekendTrip', 'expedition'].includes(exploreRefinement) &&
+    !trailMatchesExploreRefinement(pack, exploreRefinement)
+  ) return false;
 
   const minDistanceMiles = finiteNumber(criteria.minDistanceMiles);
   if (minDistanceMiles != null && (pack.distanceMiles == null || pack.distanceMiles < minDistanceMiles)) return false;
@@ -1093,6 +1131,37 @@ function legacyTrailPackMatchesCriteria(
     && pack.minimumWaterCapacityGallons > waterCapacityGallons
   ) return false;
   return true;
+}
+
+function compareLegacyTrailPacksForSearch(
+  left: ECSTrailPack,
+  right: ECSTrailPack,
+  criteria: LiveTrailPackCatalogSearchCriteria,
+): number {
+  const featuredDelta = (right.featuredRouteScore ?? 0) - (left.featuredRouteScore ?? 0);
+  if (featuredDelta !== 0) return featuredDelta;
+  const latitude = finiteNumber(criteria.latitude);
+  const longitude = finiteNumber(criteria.longitude);
+  if (latitude != null && longitude != null) {
+    const center = { latitude, longitude };
+    const distanceDelta =
+      distanceMilesBetweenCoordinates(center, left.centerCoordinate) -
+      distanceMilesBetweenCoordinates(center, right.centerCoordinate);
+    if (distanceDelta !== 0) return distanceDelta;
+  }
+  const confidenceDelta = right.confidenceScore - left.confidenceScore;
+  if (confidenceDelta !== 0) return confidenceDelta;
+  const qualityDelta =
+    ((right.campabilityScore ?? 0) + (right.remotenessScore ?? 0)) -
+    ((left.campabilityScore ?? 0) + (left.remotenessScore ?? 0));
+  if (qualityDelta !== 0) return qualityDelta;
+  const parsedLeftUpdatedAt = Date.parse(left.updatedAt);
+  const parsedRightUpdatedAt = Date.parse(right.updatedAt);
+  const leftUpdatedAt = Number.isFinite(parsedLeftUpdatedAt) ? parsedLeftUpdatedAt : 0;
+  const rightUpdatedAt = Number.isFinite(parsedRightUpdatedAt) ? parsedRightUpdatedAt : 0;
+  const updatedAtDelta = rightUpdatedAt - leftUpdatedAt;
+  if (updatedAtDelta !== 0) return updatedAtDelta;
+  return left.id.localeCompare(right.id);
 }
 
 function trailPackToRouteCatalogSummary(pack: ECSTrailPack): RouteCatalogSummary | null {
@@ -1175,9 +1244,10 @@ function parseRouteCatalogSummaryCachePayload(raw: string | null, nowMs = Date.n
       return null;
     }
     const summaries = Array.isArray(record.summaries)
-      ? record.summaries
+      ? capUniqueRankedRoutes(record.summaries
           .map(normalizeRouteCatalogSummary)
-          .filter((summary): summary is RouteCatalogSummary => !!summary)
+          .filter((summary): summary is RouteCatalogSummary => !!summary),
+          (summary) => summary.routeId)
       : [];
     if (summaries.length === 0) return null;
     const coverageStateRecord = readRecord(record.coverageState);
@@ -1265,7 +1335,10 @@ function writeRouteCatalogSummaryCache(
     return;
   }
   const payload: RouteCatalogSummaryCachePayload = {
-    summaries: nextSnapshot.routeCatalogSummaries,
+    summaries: capUniqueRankedRoutes(
+      nextSnapshot.routeCatalogSummaries,
+      (summary) => summary.routeId,
+    ),
     cachedAt: nextSnapshot.lastLoadedAt ?? new Date().toISOString(),
     coverageState: nextSnapshot.coverageState,
     searchMeta: nextSnapshot.searchMeta,
@@ -1280,7 +1353,24 @@ function writeRouteCatalogSummaryCache(
 }
 
 function setSnapshot(next: LiveTrailPackCatalogSnapshot): LiveTrailPackCatalogSnapshot {
-  snapshot = next;
+  const cappedData = capLiveTrailPackCatalogData(catalogDataFromSnapshot(next)) ?? {
+    trailPacks: [],
+    guidanceDiagnosticTrailPacks: [],
+    guidanceDiagnosticRecords: [],
+    routeCatalogSummaries: [],
+  };
+  snapshot = {
+    ...next,
+    ...cappedData,
+    asyncState: {
+      ...next.asyncState,
+      data: capLiveTrailPackCatalogData(next.asyncState.data),
+      lastGoodData: capLiveTrailPackCatalogData(next.asyncState.lastGoodData),
+      resultCount: next.asyncState.data
+        ? catalogResultCount(capLiveTrailPackCatalogData(next.asyncState.data) ?? cappedData)
+        : next.asyncState.resultCount,
+    },
+  };
   emit();
   return liveTrailPackCatalogStore.getSnapshot();
 }
@@ -1520,6 +1610,12 @@ export function normalizeLiveTrailPackRecord(value: unknown): ECSTrailPack | nul
       'minWaterCapacityGallons',
     ),
     routeIntelligence: readRecord(record.route_intelligence ?? record.routeIntelligence) ?? undefined,
+    searchDistanceMiles: readNumber(record, 'search_distance_miles', 'searchDistanceMiles'),
+    geometryDistanceMiles: readNumber(record, 'geometry_distance_miles', 'geometryDistanceMiles'),
+    trailheadDistanceMiles: readNumber(record, 'trailhead_distance_miles', 'trailheadDistanceMiles'),
+    centerDistanceMiles: readNumber(record, 'center_distance_miles', 'centerDistanceMiles'),
+    searchMatchReasons: readStringArray(record.search_match_reasons ?? record.searchMatchReasons),
+    featuredRouteScore: readNumber(record, 'featured_route_score', 'featuredRouteScore'),
     confidenceScore,
     confidenceReasons: readStringArray(record.confidence_reasons ?? record.confidenceReasons) ?? [
       'Loaded from the live ECS Trail Pack catalog.',
@@ -1562,19 +1658,19 @@ export function buildRouteCatalogSearchBody(
   const routeType = cleanText(criteria.routeType);
   const difficulty = cleanText(criteria.difficulty);
   const regionId = cleanText(criteria.regionId);
+  const searchFingerprint = cleanText(criteria.searchFingerprint);
+  const exploreRefinement = cleanText(criteria.exploreRefinement);
   const includePreviewGeometry = criteria.includePreviewGeometry === true;
   const pageSize = routeCatalogSearchLimit(
     criteria.pageSize ?? criteria.limit ?? ROUTE_CATALOG_SUMMARY_PAGE_SIZE,
   );
-  const page = routeCatalogSearchPage(criteria.page);
-  const offset = (page - 1) * pageSize;
-  const continuationCursor = cleanText(criteria.continuationCursor);
+  const page = 1;
+  const offset = 0;
   return {
     limit: pageSize,
     page,
     pageSize,
     offset,
-    ...(continuationCursor ? { continuationCursor } : {}),
     paginationContractVersion: ROUTE_CATALOG_PAGINATION_CONTRACT_VERSION,
     includeGeometry: false,
     includePreviewGeometry,
@@ -1597,6 +1693,8 @@ export function buildRouteCatalogSearchBody(
     ...(routeType ? { routeType: criteria.routeType } : {}),
     ...(difficulty ? { difficulty: criteria.difficulty } : {}),
     ...(regionId ? { regionId: criteria.regionId } : {}),
+    ...(searchFingerprint ? { searchFingerprint } : {}),
+    ...(exploreRefinement ? { exploreRefinement } : {}),
     ...(minConfidenceScore != null ? { minConfidenceScore: criteria.minConfidenceScore } : {}),
     ...(minRemotenessScore != null ? { minRemotenessScore: criteria.minRemotenessScore } : {}),
     ...(maxRemotenessScore != null ? { maxRemotenessScore: criteria.maxRemotenessScore } : {}),
@@ -1746,32 +1844,25 @@ async function fetchRouteCatalogTrailPacks(
   if (rawRecords.length > 0 && normalized.records.length === 0) {
     throw new InvalidRouteCatalogSearchResponseError();
   }
-  const clientInvalidRecordCount = Math.max(0, rawRecords.length - normalized.records.length);
+  const clientInvalidRecordCount = Math.max(
+    0,
+    rawRecords.length - normalized.normalizedRecordCount,
+  );
   const searchMeta: RouteCatalogSearchMeta = {
     ...normalized.searchMeta,
     ecsRequestId: responseCorrelation.requestId,
     clientInvalidRecordCount,
   };
-  const requestedPage = routeCatalogSearchPage(criteria.page);
-  if (
-    requestedPage > 1 &&
-    requestBody.paginationContractVersion === ROUTE_CATALOG_PAGINATION_CONTRACT_VERSION &&
-    (
-      searchMeta.paginationContractVersion !== ROUTE_CATALOG_PAGINATION_CONTRACT_VERSION ||
-      searchMeta.nearbyRouteRpc !== 'route_catalog_nearby_public_route_cursor_page' ||
-      searchMeta.nearbyRouteRpcUsed !== true ||
-      searchMeta.fallbackQueryUsed === true
-    )
-  ) {
-    throw new InvalidRouteCatalogSearchResponseError();
-  }
-  if (
-    searchMeta.paginationContractVersion === ROUTE_CATALOG_PAGINATION_CONTRACT_VERSION &&
-    searchMeta.hasMore &&
-    !cleanText(searchMeta.nextCursor)
-  ) {
-    throw new InvalidRouteCatalogSearchResponseError();
-  }
+  searchMeta.resultLimit = normalizeRouteSearchResultLimit(requestBody.limit);
+  searchMeta.additionalMatchesAvailable =
+    searchMeta.additionalMatchesAvailable === true ||
+    searchMeta.totalMatchedCount > normalized.trailPacks.length;
+  searchMeta.hasMore = false;
+  searchMeta.page = 1;
+  searchMeta.pageSize = searchMeta.resultLimit;
+  searchMeta.offset = 0;
+  searchMeta.nextPage = null;
+  searchMeta.nextCursor = null;
   const normalizeEndedAtMs = getExplorePerformanceNow();
   recordExplorePerformancePhase(perfRun, 'filter_sort', {
     startedAtMs: normalizeStartedAtMs,
@@ -2005,8 +2096,9 @@ async function fetchLegacyTrailPacks(
     throw new Error(error.message || 'Live Trail Pack catalog unavailable.');
   }
 
-  return normalizeLiveTrailPackRecords(data)
+  return capUniqueRankedRoutes(normalizeLiveTrailPackRecords(data)
     .filter((trailPack) => legacyTrailPackMatchesCriteria(trailPack, criteria))
+    .sort((left, right) => compareLegacyTrailPacksForSearch(left, right, criteria))
     .map((trailPack) => ({
       ...trailPack,
       confidenceReasons: [
@@ -2023,7 +2115,7 @@ async function fetchLegacyTrailPacks(
         dataUsed: [],
         lastEvaluatedAt: trailPack.updatedAt,
       },
-    }));
+    })), (trailPack) => trailPack.id);
 }
 
 export function refreshLiveTrailPackCatalog(

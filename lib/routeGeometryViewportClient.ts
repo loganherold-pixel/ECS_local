@@ -8,8 +8,8 @@ import {
 import {
   ROUTE_GEOMETRY_VIEWPORT_DEFAULT_LIMIT,
   ROUTE_GEOMETRY_VIEWPORT_UNAVAILABLE_MESSAGE,
-  filterRouteGeometryViewportResultBySourceProviderPrefix,
   normalizeRouteGeometrySourceProviderPrefix,
+  normalizeRouteGeometryViewportLimit,
   normalizeRouteGeometryViewportResponse,
   type RouteGeometryViewportBbox,
   type RouteGeometryViewportResult,
@@ -151,6 +151,9 @@ export async function fetchRouteGeometryViewportSegments(args: {
     throw new RouteGeometryViewportProviderUnavailableError(providerAvailability);
   }
   const sourceProviderPrefix = normalizeRouteGeometrySourceProviderPrefix(args.sourceProviderPrefix);
+  const resultLimit = normalizeRouteGeometryViewportLimit(
+    args.limit ?? ROUTE_GEOMETRY_VIEWPORT_DEFAULT_LIMIT,
+  );
   const requestedTimeoutMs = args.timeoutMs ?? ROUTE_GEOMETRY_VIEWPORT_REQUEST_TIMEOUT_MS;
   const timeoutMs = Number.isFinite(requestedTimeoutMs)
     ? Math.max(1, Math.trunc(requestedTimeoutMs))
@@ -178,7 +181,7 @@ export async function fetchRouteGeometryViewportSegments(args: {
         body: {
           bbox: args.bbox,
           zoom: args.zoom,
-          limit: args.limit ?? ROUTE_GEOMETRY_VIEWPORT_DEFAULT_LIMIT,
+          limit: resultLimit,
           vehicleClass: args.vehicleClass ?? null,
           includeReferenceGeometry: args.includeReferenceGeometry !== false,
           sourceProviderPrefix,
@@ -211,15 +214,12 @@ export async function fetchRouteGeometryViewportSegments(args: {
 
   if (error) {
     const errorBody = data ?? await readRouteGeometryViewportErrorBody(error, response);
-    const normalized = normalizeRouteGeometryViewportResponse(errorBody);
+    const normalized = normalizeRouteGeometryViewportResponse(errorBody, sourceProviderPrefix);
     if (normalized.degraded || normalized.userMessage || normalized.unavailableReason) {
-      return filterRouteGeometryViewportResultBySourceProviderPrefix(normalized, sourceProviderPrefix);
+      return normalized;
     }
     throw new Error(friendlyRouteGeometryViewportError(routeGeometryViewportErrorText(errorBody) ?? error.message));
   }
 
-  return filterRouteGeometryViewportResultBySourceProviderPrefix(
-    normalizeRouteGeometryViewportResponse(data),
-    sourceProviderPrefix,
-  );
+  return normalizeRouteGeometryViewportResponse(data, sourceProviderPrefix);
 }

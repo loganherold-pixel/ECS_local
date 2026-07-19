@@ -3,9 +3,10 @@ import { Platform } from 'react-native';
 import type { TripBuilderRouteInput } from '../tripBuilder';
 import { getOfflinePrepRouteCoordinates } from '../offlinePrepPack/offlinePrepPackService';
 import { createPersistedKeyValueCache } from '../keyValuePersistence';
+import { capUniqueRankedRoutes } from './routeSearchResultPolicy';
 
 const EXPLORE_PLANNING_ROUTE_CONTEXT_KEY = 'ecs_explore_planning_route_context';
-const EXPLORE_PLANNING_CONTEXT_VERSION = 2;
+const EXPLORE_PLANNING_CONTEXT_VERSION = 3;
 const planningContextPersistence = createPersistedKeyValueCache('ecs_explore_planning_route_context');
 
 export type ExplorePlanningRouteContextSource = 'suggested_routes' | 'trip_builder_tab' | 'offline_prep_tab';
@@ -32,6 +33,16 @@ function routeGeometryPointCount(route: TripBuilderRouteInput | null | undefined
 
 function routeRecord(value: TripBuilderRouteInput | null | undefined): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+}
+
+function planningRouteIdentity(route: TripBuilderRouteInput): string {
+  return String(route.id ?? route.name ?? route.title ?? '').trim();
+}
+
+function normalizePlanningRoutes(
+  routes: readonly TripBuilderRouteInput[],
+): TripBuilderRouteInput[] {
+  return capUniqueRankedRoutes(routes, planningRouteIdentity);
 }
 
 export function mergeExplorePlanningRoute(
@@ -71,7 +82,7 @@ export function upsertExplorePlanningRoute(
   routeMap: Map<string, TripBuilderRouteInput>,
   route: TripBuilderRouteInput,
 ): void {
-  const id = String(route.id ?? route.name ?? route.title ?? '').trim();
+  const id = planningRouteIdentity(route);
   if (!id) return;
   routeMap.set(id, mergeExplorePlanningRoute(routeMap.get(id), route));
 }
@@ -88,10 +99,12 @@ function getStorage(): Storage | null {
 function normalizeContext(value: unknown): ExplorePlanningRouteContext | null {
   if (!value || typeof value !== 'object') return null;
   const parsed = value as Partial<ExplorePlanningRouteContext>;
-  if (!Array.isArray(parsed.routes)) return null;
+  if (parsed.schemaVersion !== EXPLORE_PLANNING_CONTEXT_VERSION || !Array.isArray(parsed.routes)) {
+    return null;
+  }
   return {
     schemaVersion: EXPLORE_PLANNING_CONTEXT_VERSION,
-    routes: parsed.routes,
+    routes: normalizePlanningRoutes(parsed.routes),
     radiusMiles: Number.isFinite(Number(parsed.radiusMiles)) ? Number(parsed.radiusMiles) : null,
     refinementLabel: typeof parsed.refinementLabel === 'string' ? parsed.refinementLabel : null,
     source: parsed.source ?? 'suggested_routes',
@@ -121,7 +134,7 @@ export function saveExplorePlanningRouteContext(args: {
 }): ExplorePlanningRouteContext {
   const context: ExplorePlanningRouteContext = {
     schemaVersion: EXPLORE_PLANNING_CONTEXT_VERSION,
-    routes: args.routes,
+    routes: normalizePlanningRoutes(args.routes),
     radiusMiles: args.radiusMiles,
     refinementLabel: args.refinementLabel ?? null,
     source: args.source ?? 'suggested_routes',

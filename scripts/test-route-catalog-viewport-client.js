@@ -76,11 +76,26 @@ const body = buildRouteCatalogViewportSearchBody(query);
 assert.strictEqual(body.latitude, query.center.latitude);
 assert.strictEqual(body.longitude, query.center.longitude);
 assert.strictEqual(body.radiusMiles, query.radiusMiles);
-assert.strictEqual(body.limit, 250);
+assert.deepStrictEqual(
+  body.viewportBbox,
+  query.bbox,
+  'The live map request must send the semantic viewport bbox so the server filters before top-20 selection.',
+);
+assert.deepStrictEqual(
+  body.regionTags,
+  query.regionTags,
+  'The live map request must preserve normalized region tags used by the viewport inclusion predicate.',
+);
+assert.strictEqual(query.limit, 20, 'Viewport consumer limits above 20 must clamp to the total-search cap.');
+assert.strictEqual(body.limit, 20);
 assert.strictEqual(body.includeGeometry, true);
 assert.strictEqual(body.includePreviewGeometry, true);
 assert.strictEqual(body.includeAssessment, true);
-assert.strictEqual(body.recommendationOnly, false);
+assert.strictEqual(
+  body.recommendationOnly,
+  true,
+  'Map-area searches must exclude non-recommendable rows before the server chooses its top 20.',
+);
 assert.strictEqual(body.locationSource, 'navigate_ecs_route_geometry_viewport');
 
 let invokedName = null;

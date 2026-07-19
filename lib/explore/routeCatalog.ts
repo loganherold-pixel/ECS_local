@@ -17,6 +17,11 @@ import type {
 import { normalizeECSRouteCatalogRequestId } from './routeCatalogRequestCorrelation';
 import { getRouteCatalogSourcePublishingBlocker } from './routeCatalogSourceRestrictions';
 import { classifyRouteCatalogTripType } from './routeCatalogDiscovery';
+import {
+  ECS_ROUTE_SEARCH_RESULT_LIMIT,
+  capUniqueRankedRoutes,
+  normalizeRouteSearchResultLimit,
+} from './routeSearchResultPolicy';
 
 export type RouteCatalogSourceType =
   | 'official'
@@ -165,6 +170,8 @@ export type RouteCatalogSearchMeta = {
   nextCursor?: string | null;
   totalMatchedCount: number;
   totalMatchedCountBounded: boolean;
+  resultLimit?: number;
+  additionalMatchesAvailable?: boolean;
   clientInvalidRecordCount?: number;
   knownRouteDiagnostics?: Record<string, unknown>[];
 };
@@ -172,6 +179,8 @@ export type RouteCatalogSearchMeta = {
 export type RouteCatalogSearchResult = {
   trailPacks: ECSTrailPack[];
   records: RouteCatalogRecord[];
+  /** Count after structural normalization but before policy filtering and the result cap. */
+  normalizedRecordCount: number;
   coverageState: RouteCatalogCoverageState;
   searchMeta: RouteCatalogSearchMeta;
 };
@@ -1310,13 +1319,9 @@ function normalizeRouteCatalogSearchMeta(value: unknown): RouteCatalogSearchMeta
   const record = readRecord(value);
   const radiusMatchedCount = record ? readNumber(record, 'radiusMatchedCount', 'radius_matched_count') ?? 0 : 0;
   const curationCandidateCount = record ? readNumber(record, 'curationCandidateCount', 'curation_candidate_count') ?? 0 : 0;
-  const page = record ? readNumber(record, 'page') ?? 1 : 1;
-  const pageSize = record ? readNumber(record, 'pageSize', 'page_size') ?? 0 : 0;
-  const offset = record ? readNumber(record, 'offset') ?? Math.max(0, (page - 1) * pageSize) : 0;
-  const nextPageValue = record ? readNumber(record, 'nextPage', 'next_page') : undefined;
-  const nextCursorValue = record
-    ? readString(record, 'nextCursor', 'next_cursor') ?? null
-    : null;
+  const resultLimit = normalizeRouteSearchResultLimit(
+    record ? readNumber(record, 'resultLimit', 'result_limit', 'pageSize', 'page_size') : undefined,
+  );
   return {
     ecsRequestId: normalizeECSRouteCatalogRequestId(
       record?.ecsRequestId ?? record?.ecs_request_id,
@@ -1346,17 +1351,25 @@ function normalizeRouteCatalogSearchMeta(value: unknown): RouteCatalogSearchMeta
         radiusMatchedCount + curationCandidateCount
       : 0,
     radiusFilterApplied: record ? readBoolean(record, 'radiusFilterApplied', 'radius_filter_applied') ?? false : false,
-    page: Math.max(1, Math.floor(page)),
-    pageSize: Math.max(0, Math.floor(pageSize)),
-    offset: Math.max(0, Math.floor(offset)),
-    hasMore: record ? readBoolean(record, 'hasMore', 'has_more') ?? false : false,
-    nextPage: nextPageValue != null && nextPageValue >= 1 ? Math.floor(nextPageValue) : null,
-    nextCursor: nextCursorValue,
+    // Provider pagination is internal. Every client-facing normalization path
+    // exposes one bounded, ranked search result set.
+    page: 1,
+    pageSize: resultLimit,
+    offset: 0,
+    hasMore: false,
+    nextPage: null,
+    nextCursor: null,
     totalMatchedCount: record
       ? readNumber(record, 'totalMatchedCount', 'total_matched_count') ?? radiusMatchedCount
       : 0,
     totalMatchedCountBounded: record
       ? readBoolean(record, 'totalMatchedCountBounded', 'total_matched_count_bounded') ?? false
+      : false,
+    resultLimit,
+    additionalMatchesAvailable: record
+      ? readBoolean(record, 'additionalMatchesAvailable', 'additional_matches_available') ??
+        (readNumber(record, 'totalMatchedCount', 'total_matched_count') ?? radiusMatchedCount) >
+          ECS_ROUTE_SEARCH_RESULT_LIMIT
       : false,
     knownRouteDiagnostics: Array.isArray(record?.knownRouteDiagnostics ?? record?.known_route_diagnostics)
       ? (record?.knownRouteDiagnostics ?? record?.known_route_diagnostics) as Record<string, unknown>[]
@@ -1364,8 +1377,32 @@ function normalizeRouteCatalogSearchMeta(value: unknown): RouteCatalogSearchMeta
   };
 }
 
+function compareRouteCatalogSearchRecords(
+  left: { route: RouteCatalogRecord; verification: RouteCatalogVerification },
+  right: { route: RouteCatalogRecord; verification: RouteCatalogVerification },
+): number {
+  const featured = (right.route.featuredRouteScore ?? 0) - (left.route.featuredRouteScore ?? 0);
+  if (featured !== 0) return featured;
+  const distance = (left.route.searchDistanceMiles ?? Number.MAX_SAFE_INTEGER) -
+    (right.route.searchDistanceMiles ?? Number.MAX_SAFE_INTEGER);
+  if (distance !== 0) return distance;
+  const confidence = right.verification.confidenceScore - left.verification.confidenceScore;
+  if (confidence !== 0) return confidence;
+  const quality =
+    ((right.route.campabilityScore ?? 0) + (right.route.remotenessScore ?? 0)) -
+    ((left.route.campabilityScore ?? 0) + (left.route.remotenessScore ?? 0));
+  if (quality !== 0) return quality;
+  const parsedRightUpdated = Date.parse(right.route.updatedAt);
+  const parsedLeftUpdated = Date.parse(left.route.updatedAt);
+  const updated = (Number.isFinite(parsedRightUpdated) ? parsedRightUpdated : 0) -
+    (Number.isFinite(parsedLeftUpdated) ? parsedLeftUpdated : 0);
+  if (updated !== 0) return updated;
+  return left.route.id.localeCompare(right.route.id);
+}
+
 export function normalizeRouteCatalogSearchResponse(value: unknown): RouteCatalogSearchResult {
   const record = readRecord(value);
+  const searchMeta = normalizeRouteCatalogSearchMeta(record?.meta);
   const rawRecords = Array.isArray(record?.records)
     ? record?.records
     : Array.isArray(record?.routes)
@@ -1379,9 +1416,25 @@ export function normalizeRouteCatalogSearchResponse(value: unknown): RouteCatalo
   const evaluated = records.map((route) => ({
     route,
     verification: verifyRouteCatalogRecord(route),
-  }));
-  const trailPacks = evaluated
-    .filter(({ verification }) => verification.publicRecommendation)
+  })).sort(compareRouteCatalogSearchRecords);
+  const revealable = capUniqueRankedRoutes(
+    evaluated.filter(({ route, verification }) =>
+      route.routeType !== 'unknown' && verification.publicRecommendation),
+    ({ route }) => route.publicId ?? route.id,
+    searchMeta.resultLimit,
+  );
+  // Blocked records remain available only when there is no revealable inventory,
+  // so diagnostics can explain a genuine all-blocked evaluation without taking
+  // result positions away from valid routes in a mixed response.
+  const selected = revealable.length > 0
+    ? revealable
+    : capUniqueRankedRoutes(
+        evaluated,
+        ({ route }) => route.publicId ?? route.id,
+        searchMeta.resultLimit,
+      );
+  const selectedRecords = selected.map(({ route }) => route);
+  const trailPacks = revealable
     .map(({ route, verification }) => catalogRouteToTrailPack(route, verification));
   const fallbackCoverage = getRouteCatalogCoverageState(trailPacks, {
     userHasCriteria: true,
@@ -1390,8 +1443,9 @@ export function normalizeRouteCatalogSearchResponse(value: unknown): RouteCatalo
 
   return {
     trailPacks,
-    records,
+    records: selectedRecords,
+    normalizedRecordCount: records.length,
     coverageState: normalizeCoverageState(record?.coverageState ?? record?.coverage_state, fallbackCoverage),
-    searchMeta: normalizeRouteCatalogSearchMeta(record?.meta),
+    searchMeta,
   };
 }

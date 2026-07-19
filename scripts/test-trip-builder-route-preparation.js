@@ -60,6 +60,27 @@ const {
 const {
   buildTripPlan,
 } = require(path.join(root, 'lib', 'tripBuilder', 'tripBuilderService.ts'));
+const {
+  buildTripItineraryFromSuggestedRoute,
+} = require(path.join(root, 'lib', 'tripBuilder', 'tripItineraryBuilderService.ts'));
+const {
+  applyTripItineraryEditSession,
+  createTripItineraryEditSession,
+} = require(path.join(root, 'lib', 'tripBuilder', 'tripItineraryEditSession.ts'));
+const {
+  buildTripBuilderPlanOutputSpine,
+} = require(path.join(root, 'lib', 'tripBuilder', 'tripBuilderPlanOutputSpine.ts'));
+
+function eligibilitySnapshot(route) {
+  const availability = classifyExploreRouteAvailability(route);
+  return {
+    discoverable: availability.discoverability.eligible,
+    tripBuilderEligible: availability.tripBuilder.eligible,
+    guidanceReady: availability.guidance.eligible,
+    exclusionCodes: availability.guidance.exclusionCodes,
+    detailState: availability.detailState,
+  };
+}
 
 function summaryRoute(id = 'summary-route') {
   return {
@@ -287,6 +308,8 @@ function lineCoordinates(route) {
   assert.strictEqual(shortCanonicalAvailability.guidance.eligible, false);
   assert.deepStrictEqual(shortCanonicalAvailability.guidance.exclusionCodes, ['too_short']);
 
+  const shortRouteBeforeSmartResupply = JSON.stringify(shortReady.canonicalRoute);
+  const shortEligibilityBeforeSmartResupply = eligibilitySnapshot(shortReady.canonicalRoute);
   const shortTripPlan = buildTripPlan({
     route: shortReady.canonicalRoute,
     input: {
@@ -299,11 +322,43 @@ function lineCoordinates(route) {
   });
   assert.strictEqual(shortTripPlan.route.routeId, shortReady.canonicalRoute.id);
   assert.strictEqual(shortTripPlan.route.distanceMiles, 2);
+  assert.ok(shortTripPlan.smartResupplyPlan, 'Smart Resupply recomputation should complete for a short route.');
   assert.ok(
     shortTripPlan.suggestedStops.some((stop) => stop.type === 'start') &&
       shortTripPlan.suggestedStops.some((stop) => stop.type === 'finish'),
     'Trip creation must complete for an eligible short route without guidance readiness.',
   );
+  assert.strictEqual(
+    JSON.stringify(shortReady.canonicalRoute),
+    shortRouteBeforeSmartResupply,
+    'Smart Resupply recomputation must not mutate the selected short route.',
+  );
+  assert.deepStrictEqual(
+    eligibilitySnapshot(shortReady.canonicalRoute),
+    shortEligibilityBeforeSmartResupply,
+    'Smart Resupply recomputation must not change short-route discovery, Trip Builder, or guidance eligibility.',
+  );
+
+  const shortItinerary = buildTripItineraryFromSuggestedRoute({
+    suggestedRoute: shortReady.canonicalRoute,
+    generatedAt: '2026-07-18T12:01:00.000Z',
+  });
+  assert.strictEqual(shortItinerary.sourceRouteId, shortReady.canonicalRoute.id);
+  const shortEditSession = createTripItineraryEditSession(
+    shortItinerary,
+    '2026-07-18T12:02:00.000Z',
+  );
+  const shortEditedItinerary = applyTripItineraryEditSession(shortItinerary, shortEditSession);
+  assert.ok(shortEditedItinerary, 'A short-route itinerary must remain editable after detail hydration.');
+  assert.strictEqual(shortEditedItinerary.sourceRouteId, shortReady.canonicalRoute.id);
+  assert.strictEqual(shortEditSession.sourceRouteId, shortReady.canonicalRoute.id);
+
+  const shortOutputSpine = buildTripBuilderPlanOutputSpine({
+    route: shortReady.canonicalRoute,
+  });
+  assert.strictEqual(shortOutputSpine.status, 'trail_only');
+  assert.strictEqual(shortOutputSpine.source, 'canonical_trail');
+  assert.ok(shortOutputSpine.lineString && shortOutputSpine.coordinates.length >= 2);
 
   const reloadedShort = restoreTripBuilderRoutePreparation(
     JSON.parse(JSON.stringify(shortReady.canonicalRoute)),
@@ -330,7 +385,77 @@ function lineCoordinates(route) {
   const handoffStorePath = path.join(root, 'lib', 'tripBuilder', 'tripBuilderRouteHandoffStore.ts');
   delete require.cache[require.resolve(handoffStorePath)];
   const firstHandoffStore = require(handoffStorePath);
-  firstHandoffStore.saveTripBuilderRouteHandoff(ready.canonicalRoute, {
+  firstHandoffStore.saveTripBuilderRouteHandoff(shortReady.canonicalRoute, {
+    createdAt: '2026-07-18T12:03:00.000Z',
+  });
+  delete require.cache[require.resolve(handoffStorePath)];
+  const shortRestartedHandoffStore = require(handoffStorePath);
+  const hydratedShortHandoff = await shortRestartedHandoffStore.loadTripBuilderRouteHandoffAsync();
+  assert.strictEqual(hydratedShortHandoff.route.id, shortReady.canonicalRoute.id);
+  const restoredShortHandoff = restoreTripBuilderRoutePreparation(
+    hydratedShortHandoff.route,
+    10,
+    3900,
+  );
+  assert.ok(restoredShortHandoff);
+  assert.strictEqual(restoredShortHandoff.status, 'ready');
+  assert.deepStrictEqual(
+    eligibilitySnapshot(restoredShortHandoff.canonicalRoute),
+    shortEligibilityBeforeSmartResupply,
+    'A persisted short-route handoff must retain guidance-only too_short semantics.',
+  );
+
+  const planStorePath = path.join(root, 'lib', 'tripBuilder', 'tripBuilderPlanStore.ts');
+  delete require.cache[require.resolve(planStorePath)];
+  const firstPlanStore = require(planStorePath);
+  await firstPlanStore.saveTripBuilderPlanState({
+    selectedRouteId: shortReady.canonicalRoute.id,
+    plan: shortTripPlan,
+    visible: true,
+    itinerarySaved: true,
+    itineraryEditSession: shortEditSession,
+  });
+  delete require.cache[require.resolve(planStorePath)];
+  const restartedPlanStore = require(planStorePath);
+  const hydratedShortPlanState = await restartedPlanStore.loadTripBuilderPlanState();
+  assert.strictEqual(hydratedShortPlanState.selectedRouteId, shortReady.canonicalRoute.id);
+  assert.strictEqual(hydratedShortPlanState.plan.route.routeId, shortReady.canonicalRoute.id);
+  assert.strictEqual(hydratedShortPlanState.plan.route.distanceMiles, 2);
+  assert.strictEqual(hydratedShortPlanState.itineraryEditSession.sourceRouteId, shortReady.canonicalRoute.id);
+
+  const routeStorePath = path.join(root, 'lib', 'routeStore.ts');
+  delete require.cache[require.resolve(routeStorePath)];
+  const { routeStore } = require(routeStorePath);
+  const savedShortRoute = routeStore.createCustomRoute([{
+    coordinates: shortOutputSpine.coordinates.map((point) => [
+      point.longitude,
+      point.latitude,
+    ]),
+    sourceMetadata: {
+      kind: 'snapped_trace',
+      sourceLabel: 'ecs_trip_builder_plan',
+      confidence: 'planning_geometry',
+      dataState: 'cached_geometry',
+      warnings: ['Synthetic short-route save regression.'],
+      guidanceReady: true,
+    },
+  }], {
+    name: shortTripPlan.route.name,
+    sourceApp: 'ecs_trip_builder',
+    externalSourceId: shortTripPlan.id,
+    externalSourceType: 'trip_plan',
+    idempotencyKey: `trip-builder:${shortTripPlan.id}`,
+    updateExisting: true,
+  });
+  assert.strictEqual(savedShortRoute.external_source_id, shortTripPlan.id);
+  assert.ok(savedShortRoute.segments[0].points.length >= 2);
+  assert.deepStrictEqual(
+    eligibilitySnapshot(shortReady.canonicalRoute),
+    shortEligibilityBeforeSmartResupply,
+    'Saving a derived itinerary route must not relabel the selected short source route.',
+  );
+
+  shortRestartedHandoffStore.saveTripBuilderRouteHandoff(ready.canonicalRoute, {
     createdAt: '2026-07-16T12:00:00.000Z',
   });
   delete require.cache[require.resolve(handoffStorePath)];
@@ -788,6 +913,39 @@ function lineCoordinates(route) {
     'Restored option identity must retain the selected pre-orientation endpoint.',
   );
 
+  console.log('Sanitized short-route acceptance state:', JSON.stringify({
+    summary: eligibilitySnapshot(shortSummary),
+    hydratedDetail: {
+      preparationStatus: shortAwaiting.status,
+      selectedRouteRetained: shortAwaiting.routeId === shortSummary.id,
+      eligibility: eligibilitySnapshot(shortAwaiting.detailRoute),
+    },
+    canonicalRoute: {
+      preparationStatus: shortReady.status,
+      distanceMiles: shortReady.canonicalRoute.distanceMiles,
+      eligibility: eligibilitySnapshot(shortReady.canonicalRoute),
+    },
+    editableItinerary: {
+      available: shortEditedItinerary != null,
+      selectedRouteRetained: shortEditedItinerary?.sourceRouteId === shortReady.canonicalRoute.id,
+    },
+    buildAndSave: {
+      planBuilt: shortTripPlan.route.routeId === shortReady.canonicalRoute.id,
+      planDistanceMiles: shortTripPlan.route.distanceMiles,
+      canonicalOutputStatus: shortOutputSpine.status,
+      savedOutputPointCount: savedShortRoute.segments[0].points.length,
+    },
+    reload: {
+      preparationStatus: restoredShortHandoff.status,
+      planRouteRetained: hydratedShortPlanState.plan.route.routeId === shortReady.canonicalRoute.id,
+      eligibility: eligibilitySnapshot(restoredShortHandoff.canonicalRoute),
+    },
+    smartResupply: {
+      computed: shortTripPlan.smartResupplyPlan != null,
+      selectedRouteMutated: JSON.stringify(shortReady.canonicalRoute) !== shortRouteBeforeSmartResupply,
+      eligibility: eligibilitySnapshot(shortReady.canonicalRoute),
+    },
+  }, null, 2));
   console.log('Trip Builder canonical route preparation behavior checks passed.');
 })().catch((error) => {
   console.error(error);

@@ -190,6 +190,9 @@ assert(
     searchFunction.includes('minRemotenessScore') &&
     searchFunction.includes('maxRemotenessScore') &&
     searchFunction.includes('minCampabilityScore') &&
+    searchFunction.includes('params.exploreRefinement ?? params.explore_refinement') &&
+    searchFunction.includes('filterRouteCatalogRecordsByExploreRefinement(') &&
+    searchFunction.includes('refinementMatchedCount') &&
     searchFunction.includes('availableFuelRangeMiles') &&
     searchFunction.includes('availableWaterCapacityGallons') &&
     searchFunction.includes('includePreviewGeometry') &&
@@ -227,28 +230,52 @@ assert(
     searchFunction.includes('spatialIndexFilterApplied') &&
     searchFunction.includes('radiusMatchedCount') &&
     searchFunction.includes('candidateLimit') &&
+    searchFunction.includes('const includeInternalEligibilityGeometry = true') &&
+    searchFunction.includes('shapeSearchRecords(') &&
     searchFunction.includes(".gte('distance_miles'") &&
     searchFunction.includes(".lte('estimated_duration_minutes'") &&
     searchFunction.includes(".gte('remoteness_score'") &&
     searchFunction.includes(".lte('minimum_fuel_range_miles'"),
-  'Route catalog search should honor server-side criteria for distance, duration, route type, difficulty, confidence, remoteness, campability, and resource margins',
+  'Route catalog search should honor server-side criteria for distance, duration, route type, difficulty, confidence, remoteness, Explore refinement, campability, and resource margins',
 );
 assert(
   searchFunction.includes("from './providerContract.ts'") &&
-    searchFunction.includes('partitionRouteCatalogRecordsForPage(') &&
-    searchFunction.includes('expandRouteCatalogCandidateLimit(queryLimit, pageSize)') &&
-    searchFunction.includes('revealablePage.hasMoreRevealable') &&
+    searchFunction.includes('selectRouteCatalogSearchResults(') &&
+    searchFunction.includes('requestedLimit: pageSize') &&
+    searchFunction.includes('compareRecords: compareDiscoveryRecords') &&
+    searchFunction.indexOf('const sourceEligibleRecords =') <
+      searchFunction.indexOf('const publicEligibilityPartition =') &&
+    searchFunction.indexOf('const publicEligibilityPartition =') <
+      searchFunction.indexOf('const viewportEligiblePartition =') &&
+    searchFunction.indexOf('const viewportEligiblePartition =') <
+      searchFunction.indexOf('const refinementEligibleRecords =') &&
+    searchFunction.indexOf('const refinementEligibleRecords =') <
+      searchFunction.indexOf('const selectedRefinementResults =') &&
+    searchFunction.includes('while (nearbyLookupCount < ROUTE_CATALOG_MAX_PAGINATION_WINDOW)') &&
+    searchFunction.includes('nextRouteCatalogCandidateInspectionBatch(nearbyLookupCount)') &&
+    searchFunction.includes('candidates.push(...nearby.records)') &&
+    searchFunction.includes('internalContinuationCursor = await decodeRouteCatalogPageCursor(') &&
     searchFunction.includes('diagnosticRecords,') &&
     searchFunction.includes('normalizeRouteCatalogPagination(params)') &&
     searchFunction.includes("'route_catalog_nearby_public_route_cursor_page'") &&
-    searchFunction.includes("'route_catalog_public_cursor_page_v2'") &&
+    searchFunction.includes("'route_catalog_total_search_v1'") &&
     searchFunction.includes('p_cursor_route_id: args.continuationCursor?.routeId ?? null') &&
-    searchFunction.includes('nextCursor: hasMore ? nextCursor : null') &&
-    searchFunction.includes("safeErrorCode: 'ROUTE_CATALOG_INVALID_CONTINUATION'") &&
-    searchFunction.includes("safeErrorCode: 'ROUTE_CATALOG_CONTINUATION_REQUIRED'") &&
+    searchFunction.includes('continuationCursor: internalContinuationCursor') &&
+    searchFunction.includes('resultLimit: resultSelection.resultLimit') &&
+    searchFunction.includes('additionalMatchesAvailable,') &&
+    searchFunction.includes('hasMore: false') &&
+    searchFunction.includes('nextPage: null') &&
+    searchFunction.includes('nextCursor: null') &&
+    searchFunction.includes('partitionRouteCatalogRecordsByPublicEligibility(') &&
+    searchFunction.includes('normalizeRouteCatalogViewportFilter(params)') &&
+    searchFunction.includes('filterRouteCatalogRecordsByViewport(') &&
+    searchFunction.includes('semanticViewportFilterApplied: viewportFilter != null') &&
+    viewportClient.includes('viewportBbox: { ...query.bbox }') &&
+    viewportClient.includes('regionTags: [...query.regionTags]') &&
+    searchFunction.includes('{ includeGeometry, includePreviewGeometry }') &&
     !searchFunction.includes('sourceMatchedRecords.slice(offset, windowEnd)') &&
     !searchFunction.includes('radiusFiltered.records.slice(offset, windowEnd)'),
-  'Route catalog search should exclude restricted geometry before assigning bounded revealable-route pagination slots.',
+  'Route catalog search should inspect candidates internally, then apply semantic viewport and eligibility filters before ranking, dedupe, and the one public top-20 result set.',
 );
 
 assert(
@@ -272,12 +299,13 @@ assert(
     liveCatalog.includes('includeGeometry: false') &&
     liveCatalog.includes('const includePreviewGeometry = criteria.includePreviewGeometry === true') &&
     liveCatalog.includes('includePreviewGeometry,') &&
-    liveCatalog.includes('const continuationCursor = cleanText(criteria.continuationCursor)') &&
-    liveCatalog.includes('...(continuationCursor ? { continuationCursor } : {})') &&
+    liveCatalog.includes('const offset = 0') &&
+    !liveCatalog.includes('...(continuationCursor ? { continuationCursor } : {})') &&
     liveCatalog.includes('paginationContractVersion: ROUTE_CATALOG_PAGINATION_CONTRACT_VERSION') &&
-    liveCatalog.includes("searchMeta.nearbyRouteRpc !== 'route_catalog_nearby_public_route_cursor_page'") &&
+    liveCatalog.includes('searchMeta.hasMore = false') &&
     liveCatalog.includes('delete family.continuationCursor') &&
-    liveCatalog.includes('nextCursor: page.nextCursor ?? null') &&
+    liveCatalog.includes('searchMeta.nextCursor = null') &&
+    liveCatalog.includes('capUniqueRankedRoutes') &&
     liveCatalog.includes('includeCoverageDiagnostics: false') &&
     liveCatalog.includes("expectedKnownRoutes: criteria.expectedKnownRoutes ?? ['rubicon']") &&
     liveCatalog.includes('normalizeRouteCatalogSearchResponse') &&
