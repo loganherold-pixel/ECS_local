@@ -6,6 +6,11 @@ import {
   type RouteCatalogCoverageState,
   type RouteCatalogSearchMeta,
 } from './routeCatalog';
+import {
+  capUniqueRankedRoutes,
+  ECS_ROUTE_SEARCH_RESULT_LIMIT,
+  normalizeRouteSearchResultLimit,
+} from './routeSearchResultPolicy';
 import type {
   ECSTrailPack,
   ECSTrailPackCoordinate,
@@ -433,7 +438,7 @@ export function buildRouteCatalogSearchBody(
   const routeType = cleanText(criteria.routeType);
   const difficulty = cleanText(criteria.difficulty);
   return {
-    limit: criteria.limit ?? 200,
+    limit: normalizeRouteSearchResultLimit(criteria.limit),
     includeGeometry: false,
     includePreviewGeometry: true,
     includeAssessment: true,
@@ -519,13 +524,13 @@ async function fetchLegacyTrailPacks(): Promise<ECSTrailPack[]> {
     .select(TRAIL_PACK_SELECT)
     .eq('review_status', 'approved')
     .order('updated_at', { ascending: false })
-    .limit(200);
+    .limit(ECS_ROUTE_SEARCH_RESULT_LIMIT);
 
   if (error) {
     throw new Error(error.message || 'Live Trail Pack catalog unavailable.');
   }
 
-  return normalizeLiveTrailPackRecords(data);
+  return capUniqueRankedRoutes(normalizeLiveTrailPackRecords(data), (pack) => pack.id);
 }
 
 export async function refreshLiveTrailPackCatalog(
@@ -546,7 +551,7 @@ export async function refreshLiveTrailPackCatalog(
     const routeCatalog = await fetchRouteCatalogTrailPacks(criteria);
     if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
     return setSnapshot({
-      trailPacks: routeCatalog.trailPacks,
+      trailPacks: capUniqueRankedRoutes(routeCatalog.trailPacks, (pack) => pack.id),
       status: 'ready',
       error: null,
       lastLoadedAt: loadedAt,
@@ -563,7 +568,7 @@ export async function refreshLiveTrailPackCatalog(
     const legacyTrailPacks = await fetchLegacyTrailPacks();
     if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
     return setSnapshot({
-      trailPacks: legacyTrailPacks,
+      trailPacks: capUniqueRankedRoutes(legacyTrailPacks, (pack) => pack.id),
       status: 'ready',
       error: routeCatalogError.message,
       lastLoadedAt: loadedAt,
@@ -588,7 +593,7 @@ export async function refreshLiveTrailPackCatalog(
 export const liveTrailPackCatalogStore = {
   getSnapshot(): LiveTrailPackCatalogSnapshot {
     return {
-      trailPacks: [...snapshot.trailPacks],
+      trailPacks: capUniqueRankedRoutes(snapshot.trailPacks, (pack) => pack.id),
       status: snapshot.status,
       error: snapshot.error,
       lastLoadedAt: snapshot.lastLoadedAt,

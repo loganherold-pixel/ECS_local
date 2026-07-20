@@ -148,6 +148,11 @@ import {
   refreshLiveTrailPackCatalog,
 } from '../../lib/explore/liveTrailPackCatalog';
 import {
+  capUniqueRankedRoutes,
+  ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE,
+  ECS_ROUTE_SEARCH_RESULT_LIMIT,
+} from '../../lib/explore/routeSearchResultPolicy';
+import {
   ROUTE_CATALOG_COVERAGE_AREAS,
   ROUTE_CATALOG_PRESET_SEARCH_AREAS,
   type RouteCatalogPresetSearchAreaKey,
@@ -1200,12 +1205,16 @@ function DiscoverScreenInner() {
       }),
     );
   }, [exploreRefinement, publicDiscoverableTrailPackRoutes]);
-  const publicRefinedTrailPacks = useMemo(
+  const publicRefinedTrailPackCandidates = useMemo(
     () =>
       exploreRefinement == null
         ? publicDiscoverableTrailPacks
         : publicDiscoverableTrailPacks.filter((trailPack) => publicRefinedTrailPackIds.has(trailPack.id)),
     [exploreRefinement, publicDiscoverableTrailPacks, publicRefinedTrailPackIds],
+  );
+  const publicRefinedTrailPacks = useMemo(
+    () => capUniqueRankedRoutes(publicRefinedTrailPackCandidates, (trailPack) => trailPack.id),
+    [publicRefinedTrailPackCandidates],
   );
 
   const activeTabMeta = UNIFIED_TRAIL_FILTER_META;
@@ -2669,7 +2678,7 @@ function DiscoverScreenInner() {
   }, [aiRouteIdeaPageIndex, publicRefinedAIRoutes]);
   const visibleAIRoutes = aiRouteIdeaPage.items;
   const trailPackPage = useMemo(() => {
-    const pageSize = TRAIL_PACK_PAGE_SIZE;
+    const pageSize = ECS_ROUTE_SEARCH_RESULT_LIMIT;
     const eligibleCount = publicRefinedTrailPacks.length;
     const totalPages = Math.max(1, Math.ceil(eligibleCount / pageSize));
     const normalizedPageIndex = eligibleCount === 0
@@ -3773,6 +3782,12 @@ function DiscoverScreenInner() {
                 <Text style={s.inlineSectionNoticeText}>
                   Showing verified routes within {activeDistanceRadius} mi of {routeCatalogEffectiveSearchArea.shortLabel}.
                 </Text>
+              </View>
+            ) : null}
+            {liveTrailPackCatalogSnapshot.searchMeta?.additionalMatchesExist ? (
+              <View style={s.inlineSectionNotice} testID="explore-route-search-result-cap-notice">
+                <Ionicons name="filter-outline" size={12} color={TACTICAL.info} />
+                <Text style={s.inlineSectionNoticeText}>{ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE}</Text>
               </View>
             ) : null}
             {visibleTrailPacks.some((trailPack) => trailPack.reviewStatus !== 'approved') ? (

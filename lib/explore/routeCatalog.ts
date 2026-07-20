@@ -1,3 +1,4 @@
+import { capUniqueRankedRoutes } from './routeSearchResultPolicy';
 import type {
   ECSTrailPack,
   ECSTrailPackActiveGuidance,
@@ -131,6 +132,7 @@ export type RouteCatalogSearchMeta = {
   curationCandidateCount: number;
   anySourceBackedCandidateCount: number;
   radiusFilterApplied: boolean;
+  additionalMatchesExist: boolean;
 };
 
 export type RouteCatalogSearchResult = {
@@ -1235,6 +1237,9 @@ function normalizeRouteCatalogSearchMeta(value: unknown): RouteCatalogSearchMeta
         radiusMatchedCount + curationCandidateCount
       : 0,
     radiusFilterApplied: record ? readBoolean(record, 'radiusFilterApplied', 'radius_filter_applied') ?? false : false,
+    additionalMatchesExist: record
+      ? readBoolean(record, 'additionalMatchesExist', 'additional_matches_exist') ?? false
+      : false,
   };
 }
 
@@ -1254,9 +1259,12 @@ export function normalizeRouteCatalogSearchResponse(value: unknown): RouteCatalo
     route,
     verification: verifyRouteCatalogRecord(route),
   }));
-  const trailPacks = evaluated
-    .filter(({ verification }) => verification.publicRecommendation)
-    .map(({ route, verification }) => catalogRouteToTrailPack(route, verification));
+  const eligible = evaluated.filter(({ verification }) => verification.publicRecommendation);
+  const selected = capUniqueRankedRoutes(
+    eligible,
+    ({ route }) => route.publicId || route.id,
+  );
+  const trailPacks = selected.map(({ route, verification }) => catalogRouteToTrailPack(route, verification));
   const fallbackCoverage = getRouteCatalogCoverageState(trailPacks, {
     userHasCriteria: true,
     lowerConfidenceCount: evaluated.length - trailPacks.length,
@@ -1264,7 +1272,7 @@ export function normalizeRouteCatalogSearchResponse(value: unknown): RouteCatalo
 
   return {
     trailPacks,
-    records,
+    records: selected.map(({ route }) => route),
     coverageState: normalizeCoverageState(record?.coverageState ?? record?.coverage_state, fallbackCoverage),
     searchMeta: normalizeRouteCatalogSearchMeta(record?.meta),
   };
