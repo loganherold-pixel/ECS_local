@@ -118,14 +118,47 @@ function buildFingerprint(profile) {
   };
 }
 
-module.exports = () => {
+function resolveScopeBSmartResupplyQaAcceptance(profile, env = process.env) {
+  const requestedFixture = firstNonEmpty(env.EXPO_PUBLIC_ECS_QA_SMART_RESUPPLY_PROVIDER_FIXTURE);
+  const authorized =
+    profile === 'scope-b-qa' &&
+    env.ECS_SCOPE_B_QA_ACCEPTANCE_BUILD === '1';
+
+  if (requestedFixture && !authorized) {
+    throw new Error(
+      '[Scope B QA] Smart Resupply provider fixtures require the scope-b-qa profile and ECS_SCOPE_B_QA_ACCEPTANCE_BUILD=1.',
+    );
+  }
+  if (requestedFixture && requestedFixture !== 'qualified_empty') {
+    throw new Error(`[Scope B QA] Unsupported Smart Resupply provider fixture: ${requestedFixture}.`);
+  }
+
+  const diagnosticsApproved =
+    authorized &&
+    env.ECS_SUPPORT_DIAGNOSTICS_ENABLED === '1' &&
+    env.ECS_SUPPORT_DIAGNOSTICS_APPROVED === '1';
+
+  return {
+    authorized,
+    diagnosticsApproved,
+    fixture: authorized && requestedFixture === 'qualified_empty' ? 'qualified_empty' : null,
+    consoleCapture: diagnosticsApproved && env.ECS_SCOPE_B_QA_CONSOLE_CAPTURE === '1',
+  };
+}
+
+function createExpoConfig() {
   const expo = JSON.parse(JSON.stringify(baseConfig.expo));
   const profile = resolveProfile();
   assertFieldtestRuntimeMapboxToken(profile);
+  const scopeBSmartResupplyQa = resolveScopeBSmartResupplyQaAcceptance(profile);
 
   const updates = { ...(expo.updates ?? {}) };
 
-  if (profile === 'fieldtest' || process.env.EXPO_PUBLIC_ECS_FIELD_TEST_BUILD === 'true') {
+  if (
+    profile === 'fieldtest' ||
+    process.env.EXPO_PUBLIC_ECS_FIELD_TEST_BUILD === 'true' ||
+    scopeBSmartResupplyQa.authorized
+  ) {
     updates.enabled = false;
     updates.checkAutomatically = 'NEVER';
   }
@@ -134,7 +167,11 @@ module.exports = () => {
   expo.extra = {
     ...(expo.extra ?? {}),
     buildFingerprint: buildFingerprint(profile),
+    scopeBSmartResupplyQa,
   };
 
   return expo;
-};
+}
+
+module.exports = createExpoConfig;
+module.exports.resolveScopeBSmartResupplyQaAcceptance = resolveScopeBSmartResupplyQaAcceptance;
