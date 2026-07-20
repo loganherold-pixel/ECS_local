@@ -11,6 +11,10 @@ import {
   ECS_ROUTE_SEARCH_RESULT_LIMIT,
   normalizeRouteSearchResultLimit,
 } from './routeSearchResultPolicy';
+import {
+  createPrivacySafeSearchFingerprint,
+  recordExplorePerformanceEvent,
+} from './explorePerformance';
 import type {
   ECSTrailPack,
   ECSTrailPackCoordinate,
@@ -52,12 +56,18 @@ export type LiveTrailPackCatalogSnapshot = {
   coverageState: RouteCatalogCoverageState;
   searchMeta: RouteCatalogSearchMeta | null;
   source: 'route_catalog' | 'trail_packs_fallback' | 'unavailable';
+  isRevalidating: boolean;
+  cacheHit: boolean;
+  searchFingerprint: string | null;
 };
 
 type Listener = () => void;
 
 const listeners = new Set<Listener>();
 let refreshRequestSequence = 0;
+const responseCache = new Map<string, LiveTrailPackCatalogSnapshot>();
+const activeRequests = new Map<string, Promise<LiveTrailPackCatalogSnapshot>>();
+const RESPONSE_CACHE_LIMIT = 24;
 let snapshot: LiveTrailPackCatalogSnapshot = {
   trailPacks: [],
   status: 'idle',
@@ -66,6 +76,9 @@ let snapshot: LiveTrailPackCatalogSnapshot = {
   coverageState: getRouteCatalogCoverageState([], { userHasCriteria: false }),
   searchMeta: null,
   source: 'unavailable',
+  isRevalidating: false,
+  cacheHit: false,
+  searchFingerprint: null,
 };
 
 const TRAIL_PACK_SELECT = [
@@ -484,7 +497,13 @@ async function fetchRouteCatalogTrailPacks(criteria: LiveTrailPackCatalogSearchC
     throw new Error(error.message || 'Verified route catalog unavailable.');
   }
 
+  recordExplorePerformanceEvent('explore_provider_result_available');
+  const normalizationStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const normalized = normalizeRouteCatalogSearchResponse(data);
+  recordExplorePerformanceEvent('explore_result_normalization_complete', {
+    durationMs: (typeof performance !== 'undefined' ? performance.now() : Date.now()) - normalizationStartedAt,
+    resultCount: normalized.trailPacks.length,
+  });
   return {
     trailPacks: normalized.trailPacks,
     coverageState: normalized.coverageState,
@@ -536,21 +555,62 @@ async function fetchLegacyTrailPacks(): Promise<ECSTrailPack[]> {
 export async function refreshLiveTrailPackCatalog(
   criteria: LiveTrailPackCatalogSearchCriteria = {},
 ): Promise<LiveTrailPackCatalogSnapshot> {
+  const requestBody = buildRouteCatalogSearchBody(criteria);
+  const searchFingerprint = createPrivacySafeSearchFingerprint(requestBody);
+  const existingRequest = activeRequests.get(searchFingerprint);
+  if (existingRequest) return existingRequest;
+
   const requestId = refreshRequestSequence + 1;
   refreshRequestSequence = requestId;
-  setSnapshot({
-    ...snapshot,
-    status: 'loading',
-    error: null,
-  });
+  if (snapshot.searchFingerprint && snapshot.searchFingerprint !== searchFingerprint) {
+    recordExplorePerformanceEvent('explore_search_cancelled', { searchFingerprint: snapshot.searchFingerprint });
+  }
+  recordExplorePerformanceEvent('explore_search_fingerprint_changed', { searchFingerprint });
+  const cached = responseCache.get(searchFingerprint);
+  if (cached) {
+    recordExplorePerformanceEvent('explore_cache_result_available', {
+      searchFingerprint,
+      cacheHit: true,
+      resultCount: cached.trailPacks.length,
+    });
+    setSnapshot({ ...cached, isRevalidating: true, cacheHit: true });
+  } else {
+    setSnapshot({
+      ...snapshot,
+      status: 'loading',
+      error: null,
+      isRevalidating: true,
+      cacheHit: false,
+      searchFingerprint,
+    });
+  }
+
+  recordExplorePerformanceEvent('explore_search_request_dispatched', { searchFingerprint, cacheHit: !!cached });
+  const request = refreshLiveTrailPackCatalogRequest(criteria, requestId, searchFingerprint);
+  activeRequests.set(searchFingerprint, request);
+  try {
+    return await request;
+  } finally {
+    if (activeRequests.get(searchFingerprint) === request) activeRequests.delete(searchFingerprint);
+  }
+}
+
+async function refreshLiveTrailPackCatalogRequest(
+  criteria: LiveTrailPackCatalogSearchCriteria,
+  requestId: number,
+  searchFingerprint: string,
+): Promise<LiveTrailPackCatalogSnapshot> {
 
   const loadedAt = new Date().toISOString();
   let routeCatalogError: Error | null = null;
 
   try {
     const routeCatalog = await fetchRouteCatalogTrailPacks(criteria);
-    if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
-    return setSnapshot({
+    if (requestId !== refreshRequestSequence) {
+      recordExplorePerformanceEvent('explore_stale_result_rejected', { searchFingerprint });
+      return liveTrailPackCatalogStore.getSnapshot();
+    }
+    const nextSnapshot: LiveTrailPackCatalogSnapshot = {
       trailPacks: capUniqueRankedRoutes(routeCatalog.trailPacks, (pack) => pack.id),
       status: 'ready',
       error: null,
@@ -558,9 +618,18 @@ export async function refreshLiveTrailPackCatalog(
       coverageState: routeCatalog.coverageState,
       searchMeta: routeCatalog.searchMeta,
       source: 'route_catalog',
-    });
+      isRevalidating: false,
+      cacheHit: false,
+      searchFingerprint,
+    };
+    responseCache.set(searchFingerprint, nextSnapshot);
+    if (responseCache.size > RESPONSE_CACHE_LIMIT) responseCache.delete(responseCache.keys().next().value as string);
+    return setSnapshot(nextSnapshot);
   } catch (error) {
-    if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
+    if (requestId !== refreshRequestSequence) {
+      recordExplorePerformanceEvent('explore_stale_result_rejected', { searchFingerprint });
+      return liveTrailPackCatalogStore.getSnapshot();
+    }
     routeCatalogError = error instanceof Error ? error : new Error('Verified route catalog unavailable.');
   }
 
@@ -575,9 +644,15 @@ export async function refreshLiveTrailPackCatalog(
       coverageState: getRouteCatalogCoverageState(legacyTrailPacks, { userHasCriteria: false }),
       searchMeta: null,
       source: 'trail_packs_fallback',
+      isRevalidating: false,
+      cacheHit: false,
+      searchFingerprint,
     });
   } catch (error) {
-    if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
+    if (requestId !== refreshRequestSequence) {
+      recordExplorePerformanceEvent('explore_stale_result_rejected', { searchFingerprint });
+      return liveTrailPackCatalogStore.getSnapshot();
+    }
     return setSnapshot({
       trailPacks: [],
       status: 'error',
@@ -586,6 +661,9 @@ export async function refreshLiveTrailPackCatalog(
       coverageState: getRouteCatalogCoverageState([], { unavailable: true }),
       searchMeta: null,
       source: 'unavailable',
+      isRevalidating: false,
+      cacheHit: false,
+      searchFingerprint,
     });
   }
 }
@@ -600,6 +678,9 @@ export const liveTrailPackCatalogStore = {
       coverageState: snapshot.coverageState,
       searchMeta: snapshot.searchMeta,
       source: snapshot.source,
+      isRevalidating: snapshot.isRevalidating,
+      cacheHit: snapshot.cacheHit,
+      searchFingerprint: snapshot.searchFingerprint,
     };
   },
 

@@ -321,7 +321,8 @@ assert(
     discover.includes('await hydrateRouteCatalogOpportunityForHandoff(route)') &&
     discover.includes('stageExploreReadinessPreview(routeForHandoff)') &&
     discover.includes('buildValidatedExploreNavigationPayload(routeForHandoff)') &&
-    discover.includes('stageTripBuilderItineraryHandoff(routeForHandoff)') &&
+    discover.includes('stageTripBuilderItineraryHandoff(route)') &&
+    discover.includes("recordExplorePerformanceEvent('explore_trip_builder_navigation_dispatched')") &&
     discover.includes('saveOfflinePrepPackHandoff({') &&
     discover.includes('route: routeForHandoff as any') &&
     discover.includes('trailPackPreviewDetailStatus') &&

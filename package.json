@@ -151,6 +151,7 @@
     "test:trail-packs": "node ./scripts/test-trail-packs.js",
     "test:route-catalog": "node ./scripts/test-route-catalog.js",
     "test:explore-route-search-result-cap": "node ./scripts/test-explore-route-search-result-cap.js",
+    "test:explore-interaction-performance": "node ./scripts/test-explore-interaction-performance.js",
     "test:route-catalog-source-restrictions": "node ./scripts/test-route-catalog-source-restrictions.js",
     "test:route-catalog-integration": "node ./scripts/test-route-catalog-integration.js",
     "test:route-catalog-fieldtest-visibility": "node ./scripts/test-explore-route-catalog-fieldtest-visibility.js",
