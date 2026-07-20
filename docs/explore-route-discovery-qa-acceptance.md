@@ -7,6 +7,7 @@ The `route-discovery-qa` EAS profile is an internal-only Android APK profile for
 - Both `EXPO_PUBLIC_ECS_BUILD_PROFILE=route-discovery-qa` and `EXPO_PUBLIC_ECS_ROUTE_DISCOVERY_QA_TRANSPORT=true` are required at build time.
 - Requesting the transport under any other profile makes Expo configuration fail.
 - Production and normal `fieldtest` profiles do not define the transport flag.
+- Metro resolves the QA transport import to a fail-closed stub outside the exact QA profile, excluding synthetic fixture records from production bundles.
 - The transport cannot be enabled by user settings, navigation, deep links, server responses, or remote configuration.
 - No Supabase service-role key, production record, private coordinate, device identity, or provider credential is present.
 - The synthetic region is a deterministic lattice near `0, -140`; it is not derived from device or user data.

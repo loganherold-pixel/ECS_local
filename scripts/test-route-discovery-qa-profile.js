@@ -1,9 +1,11 @@
 const assert = require('assert');
+const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
 const appConfig = require(path.join(root, 'app.config.js'));
 const eas = require(path.join(root, 'eas.json'));
+const metro = fs.readFileSync(path.join(root, 'metro.config.js'), 'utf8');
 
 assert.deepStrictEqual(appConfig.resolveRouteDiscoveryQa('production', {}), {
   enabled: false, label: null, transportId: null, remoteActivation: false,
@@ -33,5 +35,7 @@ assert.strictEqual(eas.build.fieldtest.env?.EXPO_PUBLIC_ECS_ROUTE_DISCOVERY_QA_T
 assert.strictEqual(JSON.stringify(qa).includes('SERVICE_ROLE'), false);
 assert.strictEqual(JSON.stringify(qa).includes('SUPABASE_URL'), false);
 assert.strictEqual(JSON.stringify(qa).includes('SUPABASE_ANON_KEY'), false);
+assert.match(metro, /routeDiscoveryQaTransport\.disabled\.ts/);
+assert.match(metro, /moduleName === '\.\/routeDiscoveryQaTransport'/);
 
 console.log('Route-discovery QA build-profile isolation checks passed.');

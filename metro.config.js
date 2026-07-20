@@ -121,4 +121,20 @@ config.resolver.extraNodeModules = {
   '@supabase/node-fetch': path.resolve(__dirname, 'shims', 'node-fetch.js'),
 };
 
+const defaultResolveRequest = config.resolver.resolveRequest;
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  const routeDiscoveryQaEnabled =
+    process.env.EXPO_PUBLIC_ECS_BUILD_PROFILE === 'route-discovery-qa' &&
+    process.env.EXPO_PUBLIC_ECS_ROUTE_DISCOVERY_QA_TRANSPORT === 'true';
+  if (!routeDiscoveryQaEnabled && moduleName === './routeDiscoveryQaTransport') {
+    return {
+      type: 'sourceFile',
+      filePath: path.resolve(__dirname, 'lib/explore/routeDiscoveryQaTransport.disabled.ts'),
+    };
+  }
+  return defaultResolveRequest
+    ? defaultResolveRequest(context, moduleName, platform)
+    : context.resolveRequest(context, moduleName, platform);
+};
+
 module.exports = config;
