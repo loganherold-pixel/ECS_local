@@ -66,12 +66,31 @@ function buildFingerprint(profile) {
   };
 }
 
+function resolveRouteDiscoveryQa(profile, env = process.env) {
+  const requested = env.EXPO_PUBLIC_ECS_ROUTE_DISCOVERY_QA_TRANSPORT === 'true';
+  const enabled = profile === 'route-discovery-qa' && requested;
+  if (requested && profile !== 'route-discovery-qa') {
+    throw new Error('Route-discovery QA transport requires the route-discovery-qa build profile.');
+  }
+  return {
+    enabled,
+    label: enabled ? 'ROUTE DISCOVERY QA — SYNTHETIC NON-PRODUCTION' : null,
+    transportId: enabled ? 'route-discovery-qa-v1' : null,
+    remoteActivation: false,
+  };
+}
+
 module.exports = () => {
   const expo = JSON.parse(JSON.stringify(baseConfig.expo));
   const profile = resolveProfile();
+  const routeDiscoveryQa = resolveRouteDiscoveryQa(profile);
   const updates = { ...(expo.updates ?? {}) };
 
-  if (profile === 'fieldtest' || process.env.EXPO_PUBLIC_ECS_FIELD_TEST_BUILD === 'true') {
+  if (
+    profile === 'fieldtest' ||
+    profile === 'route-discovery-qa' ||
+    process.env.EXPO_PUBLIC_ECS_FIELD_TEST_BUILD === 'true'
+  ) {
     updates.enabled = false;
     updates.checkAutomatically = 'NEVER';
   }
@@ -80,7 +99,10 @@ module.exports = () => {
   expo.extra = {
     ...(expo.extra ?? {}),
     buildFingerprint: buildFingerprint(profile),
+    routeDiscoveryQa,
   };
 
   return expo;
 };
+
+module.exports.resolveRouteDiscoveryQa = resolveRouteDiscoveryQa;

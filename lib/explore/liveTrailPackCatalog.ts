@@ -45,6 +45,10 @@ export type LiveTrailPackCatalogSearchCriteria = {
   availableFuelRangeMiles?: number | null;
   availableWaterCapacityGallons?: number | null;
   locationSource?: 'live_gps' | 'default_location' | string | null;
+  sourceAdapter?: string | null;
+  recommendationMode?: 'recommendable' | string | null;
+  accessPartition?: 'anonymous' | 'authenticated' | string | null;
+  contractVersion?: string | null;
   limit?: number;
 };
 
@@ -59,14 +63,30 @@ export type LiveTrailPackCatalogSnapshot = {
   isRevalidating: boolean;
   cacheHit: boolean;
   searchFingerprint: string | null;
+  requestId: number | null;
+  accessPartition: string;
+  cacheRevision: number;
 };
+
+type RouteCatalogTransportResult = { data: unknown; error: { message?: string } | null };
+type RouteCatalogSearchTransport = (
+  body: Record<string, unknown>,
+  criteria: LiveTrailPackCatalogSearchCriteria,
+) => Promise<RouteCatalogTransportResult>;
+type LegacyTrailPackTransport = () => Promise<ECSTrailPack[]>;
 
 type Listener = () => void;
 
 const listeners = new Set<Listener>();
 let refreshRequestSequence = 0;
+let lifecycleGeneration = 0;
+let lifecycleActive = true;
+let cachePublicationRevision = 0;
+let lastSearchCriteria: LiveTrailPackCatalogSearchCriteria | null = null;
 const responseCache = new Map<string, LiveTrailPackCatalogSnapshot>();
 const activeRequests = new Map<string, Promise<LiveTrailPackCatalogSnapshot>>();
+let searchTransportOverride: RouteCatalogSearchTransport | null = null;
+let legacyTransportOverride: LegacyTrailPackTransport | null = null;
 const RESPONSE_CACHE_LIMIT = 24;
 let snapshot: LiveTrailPackCatalogSnapshot = {
   trailPacks: [],
@@ -79,6 +99,9 @@ let snapshot: LiveTrailPackCatalogSnapshot = {
   isRevalidating: false,
   cacheHit: false,
   searchFingerprint: null,
+  requestId: null,
+  accessPartition: 'anonymous',
+  cacheRevision: 0,
 };
 
 const TRAIL_PACK_SELECT = [
@@ -450,6 +473,7 @@ export function buildRouteCatalogSearchBody(
   const availableWaterCapacityGallons = positiveNumber(criteria.availableWaterCapacityGallons);
   const routeType = cleanText(criteria.routeType);
   const difficulty = cleanText(criteria.difficulty);
+  const sourceAdapter = cleanText(criteria.sourceAdapter);
   return {
     limit: normalizeRouteSearchResultLimit(criteria.limit),
     includeGeometry: false,
@@ -470,6 +494,7 @@ export function buildRouteCatalogSearchBody(
     ...(maxDurationMinutes != null ? { maxDurationMinutes: criteria.maxDurationMinutes } : {}),
     ...(routeType ? { routeType: criteria.routeType } : {}),
     ...(difficulty ? { difficulty: criteria.difficulty } : {}),
+    ...(sourceAdapter ? { sourceAdapter } : {}),
     ...(minConfidenceScore != null ? { minConfidenceScore: criteria.minConfidenceScore } : {}),
     ...(minRemotenessScore != null ? { minRemotenessScore: criteria.minRemotenessScore } : {}),
     ...(maxRemotenessScore != null ? { maxRemotenessScore: criteria.maxRemotenessScore } : {}),
@@ -484,20 +509,69 @@ export function buildRouteCatalogSearchBody(
   };
 }
 
+export function buildRouteCatalogSearchFingerprintInput(
+  criteria: LiveTrailPackCatalogSearchCriteria = {},
+): Record<string, unknown> {
+  return {
+    ...buildRouteCatalogSearchBody(criteria),
+    accessPartition: cleanText(criteria.accessPartition) ?? 'anonymous',
+    recommendationMode: cleanText(criteria.recommendationMode) ?? 'recommendable',
+    contractVersion: cleanText(criteria.contractVersion) ?? 'strict-top-20-v1',
+  };
+}
+
+function isRouteDiscoveryQaBuild(): boolean {
+  return process.env.EXPO_PUBLIC_ECS_BUILD_PROFILE === 'route-discovery-qa' &&
+    process.env.EXPO_PUBLIC_ECS_ROUTE_DISCOVERY_QA_TRANSPORT === 'true';
+}
+
+function canConfigureAcceptanceTransport(): boolean {
+  return process.env.NODE_ENV === 'test' || isRouteDiscoveryQaBuild();
+}
+
+async function invokeRouteCatalogSearchTransport(
+  body: Record<string, unknown>,
+  criteria: LiveTrailPackCatalogSearchCriteria,
+): Promise<RouteCatalogTransportResult> {
+  if (searchTransportOverride) return searchTransportOverride(body, criteria);
+  if (isRouteDiscoveryQaBuild()) {
+    // The module is reachable only from the explicit internal QA build profile.
+    const qaTransport = require('./routeDiscoveryQaTransport') as {
+      invokeRouteDiscoveryQaTransport: RouteCatalogSearchTransport;
+    };
+    return qaTransport.invokeRouteDiscoveryQaTransport(body, criteria);
+  }
+  return supabase.functions.invoke('route-catalog-search', { body });
+}
+
+function assertValidRouteCatalogTransportEnvelope(value: unknown): void {
+  const record = readRecord(value);
+  if (!record || (!Array.isArray(record.records) && !Array.isArray(record.routes))) {
+    throw new Error('Verified route catalog returned an invalid contract.');
+  }
+  const meta = readRecord(record.meta);
+  if (!meta) throw new Error('Verified route catalog returned invalid metadata.');
+  for (const key of ['nextPage', 'nextCursor']) {
+    if (Object.prototype.hasOwnProperty.call(meta, key) && meta[key] != null) {
+      throw new Error('Verified route catalog returned unsupported continuation metadata.');
+    }
+  }
+}
+
 async function fetchRouteCatalogTrailPacks(criteria: LiveTrailPackCatalogSearchCriteria = {}): Promise<{
   trailPacks: ECSTrailPack[];
   coverageState: RouteCatalogCoverageState;
   searchMeta: RouteCatalogSearchMeta;
 }> {
-  const { data, error } = await supabase.functions.invoke('route-catalog-search', {
-    body: buildRouteCatalogSearchBody(criteria),
-  });
+  const body = buildRouteCatalogSearchBody(criteria);
+  const { data, error } = await invokeRouteCatalogSearchTransport(body, criteria);
 
   if (error) {
     throw new Error(error.message || 'Verified route catalog unavailable.');
   }
 
   recordExplorePerformanceEvent('explore_provider_result_available');
+  assertValidRouteCatalogTransportEnvelope(data);
   const normalizationStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const normalized = normalizeRouteCatalogSearchResponse(data);
   recordExplorePerformanceEvent('explore_result_normalization_complete', {
@@ -538,6 +612,7 @@ export async function fetchRouteCatalogTrailPackDetail(trailPack: ECSTrailPack |
 }
 
 async function fetchLegacyTrailPacks(): Promise<ECSTrailPack[]> {
+  if (legacyTransportOverride) return legacyTransportOverride();
   const { data, error } = await supabase
     .from('trail_packs')
     .select(TRAIL_PACK_SELECT)
@@ -555,13 +630,16 @@ async function fetchLegacyTrailPacks(): Promise<ECSTrailPack[]> {
 export async function refreshLiveTrailPackCatalog(
   criteria: LiveTrailPackCatalogSearchCriteria = {},
 ): Promise<LiveTrailPackCatalogSnapshot> {
-  const requestBody = buildRouteCatalogSearchBody(criteria);
-  const searchFingerprint = createPrivacySafeSearchFingerprint(requestBody);
+  lastSearchCriteria = { ...criteria };
+  if (!lifecycleActive) return liveTrailPackCatalogStore.getSnapshot();
+  const searchFingerprint = createPrivacySafeSearchFingerprint(buildRouteCatalogSearchFingerprintInput(criteria));
   const existingRequest = activeRequests.get(searchFingerprint);
   if (existingRequest) return existingRequest;
 
   const requestId = refreshRequestSequence + 1;
   refreshRequestSequence = requestId;
+  const requestGeneration = lifecycleGeneration;
+  const accessPartition = cleanText(criteria.accessPartition) ?? 'anonymous';
   if (snapshot.searchFingerprint && snapshot.searchFingerprint !== searchFingerprint) {
     recordExplorePerformanceEvent('explore_search_cancelled', { searchFingerprint: snapshot.searchFingerprint });
   }
@@ -582,11 +660,20 @@ export async function refreshLiveTrailPackCatalog(
       isRevalidating: true,
       cacheHit: false,
       searchFingerprint,
+      requestId,
+      accessPartition,
     });
   }
 
   recordExplorePerformanceEvent('explore_search_request_dispatched', { searchFingerprint, cacheHit: !!cached });
-  const request = refreshLiveTrailPackCatalogRequest(criteria, requestId, searchFingerprint);
+  const request = refreshLiveTrailPackCatalogRequest(
+    criteria,
+    requestId,
+    requestGeneration,
+    searchFingerprint,
+    accessPartition,
+    cached,
+  );
   activeRequests.set(searchFingerprint, request);
   try {
     return await request;
@@ -598,7 +685,10 @@ export async function refreshLiveTrailPackCatalog(
 async function refreshLiveTrailPackCatalogRequest(
   criteria: LiveTrailPackCatalogSearchCriteria,
   requestId: number,
+  requestGeneration: number,
   searchFingerprint: string,
+  accessPartition: string,
+  cached: LiveTrailPackCatalogSnapshot | undefined,
 ): Promise<LiveTrailPackCatalogSnapshot> {
 
   const loadedAt = new Date().toISOString();
@@ -606,7 +696,7 @@ async function refreshLiveTrailPackCatalogRequest(
 
   try {
     const routeCatalog = await fetchRouteCatalogTrailPacks(criteria);
-    if (requestId !== refreshRequestSequence) {
+    if (!isAuthoritativeRequest(requestId, requestGeneration)) {
       recordExplorePerformanceEvent('explore_stale_result_rejected', { searchFingerprint });
       return liveTrailPackCatalogStore.getSnapshot();
     }
@@ -621,21 +711,34 @@ async function refreshLiveTrailPackCatalogRequest(
       isRevalidating: false,
       cacheHit: false,
       searchFingerprint,
+      requestId,
+      accessPartition,
+      cacheRevision: cachePublicationRevision + 1,
     };
+    cachePublicationRevision = nextSnapshot.cacheRevision;
     responseCache.set(searchFingerprint, nextSnapshot);
     if (responseCache.size > RESPONSE_CACHE_LIMIT) responseCache.delete(responseCache.keys().next().value as string);
     return setSnapshot(nextSnapshot);
   } catch (error) {
-    if (requestId !== refreshRequestSequence) {
+    if (!isAuthoritativeRequest(requestId, requestGeneration)) {
       recordExplorePerformanceEvent('explore_stale_result_rejected', { searchFingerprint });
       return liveTrailPackCatalogStore.getSnapshot();
     }
     routeCatalogError = error instanceof Error ? error : new Error('Verified route catalog unavailable.');
   }
 
+  if (cached) {
+    return setSnapshot({
+      ...cached,
+      error: routeCatalogError.message,
+      isRevalidating: false,
+      cacheHit: true,
+    });
+  }
+
   try {
     const legacyTrailPacks = await fetchLegacyTrailPacks();
-    if (requestId !== refreshRequestSequence) return liveTrailPackCatalogStore.getSnapshot();
+    if (!isAuthoritativeRequest(requestId, requestGeneration)) return liveTrailPackCatalogStore.getSnapshot();
     return setSnapshot({
       trailPacks: capUniqueRankedRoutes(legacyTrailPacks, (pack) => pack.id),
       status: 'ready',
@@ -647,9 +750,12 @@ async function refreshLiveTrailPackCatalogRequest(
       isRevalidating: false,
       cacheHit: false,
       searchFingerprint,
+      requestId,
+      accessPartition,
+      cacheRevision: cachePublicationRevision,
     });
   } catch (error) {
-    if (requestId !== refreshRequestSequence) {
+    if (!isAuthoritativeRequest(requestId, requestGeneration)) {
       recordExplorePerformanceEvent('explore_stale_result_rejected', { searchFingerprint });
       return liveTrailPackCatalogStore.getSnapshot();
     }
@@ -664,8 +770,79 @@ async function refreshLiveTrailPackCatalogRequest(
       isRevalidating: false,
       cacheHit: false,
       searchFingerprint,
+      requestId,
+      accessPartition,
+      cacheRevision: cachePublicationRevision,
     });
   }
+}
+
+function isAuthoritativeRequest(requestId: number, requestGeneration: number): boolean {
+  return lifecycleActive && requestId === refreshRequestSequence && requestGeneration === lifecycleGeneration;
+}
+
+export function suspendLiveTrailPackCatalog(): LiveTrailPackCatalogSnapshot {
+  if (!lifecycleActive) return liveTrailPackCatalogStore.getSnapshot();
+  lifecycleActive = false;
+  lifecycleGeneration += 1;
+  refreshRequestSequence += 1;
+  activeRequests.clear();
+  return setSnapshot({
+    ...snapshot,
+    status: snapshot.status === 'loading' && snapshot.trailPacks.length === 0 ? 'idle' : snapshot.status,
+    isRevalidating: false,
+  });
+}
+
+export function resumeLiveTrailPackCatalog(): Promise<LiveTrailPackCatalogSnapshot> {
+  if (lifecycleActive) return Promise.resolve(liveTrailPackCatalogStore.getSnapshot());
+  lifecycleActive = true;
+  lifecycleGeneration += 1;
+  return lastSearchCriteria
+    ? refreshLiveTrailPackCatalog(lastSearchCriteria)
+    : Promise.resolve(liveTrailPackCatalogStore.getSnapshot());
+}
+
+export function configureRouteDiscoveryAcceptanceTransport(options: {
+  search: RouteCatalogSearchTransport;
+  legacy?: LegacyTrailPackTransport;
+}): void {
+  if (!canConfigureAcceptanceTransport()) {
+    throw new Error('Route discovery acceptance transport is unavailable outside tests and the internal QA profile.');
+  }
+  searchTransportOverride = options.search;
+  legacyTransportOverride = options.legacy ?? null;
+}
+
+export function resetRouteDiscoveryAcceptanceState(): void {
+  if (!canConfigureAcceptanceTransport()) {
+    throw new Error('Route discovery acceptance reset is unavailable outside tests and the internal QA profile.');
+  }
+  refreshRequestSequence = 0;
+  lifecycleGeneration = 0;
+  lifecycleActive = true;
+  cachePublicationRevision = 0;
+  lastSearchCriteria = null;
+  responseCache.clear();
+  activeRequests.clear();
+  searchTransportOverride = null;
+  legacyTransportOverride = null;
+  snapshot = {
+    trailPacks: [],
+    status: 'idle',
+    error: null,
+    lastLoadedAt: null,
+    coverageState: getRouteCatalogCoverageState([], { userHasCriteria: false }),
+    searchMeta: null,
+    source: 'unavailable',
+    isRevalidating: false,
+    cacheHit: false,
+    searchFingerprint: null,
+    requestId: null,
+    accessPartition: 'anonymous',
+    cacheRevision: 0,
+  };
+  emit();
 }
 
 export const liveTrailPackCatalogStore = {
@@ -681,6 +858,9 @@ export const liveTrailPackCatalogStore = {
       isRevalidating: snapshot.isRevalidating,
       cacheHit: snapshot.cacheHit,
       searchFingerprint: snapshot.searchFingerprint,
+      requestId: snapshot.requestId,
+      accessPartition: snapshot.accessPartition,
+      cacheRevision: snapshot.cacheRevision,
     };
   },
 
@@ -690,4 +870,6 @@ export const liveTrailPackCatalogStore = {
   },
 
   refresh: refreshLiveTrailPackCatalog,
+  suspend: suspendLiveTrailPackCatalog,
+  resume: resumeLiveTrailPackCatalog,
 };

@@ -50,7 +50,7 @@ const edge = fs.readFileSync(path.join(root, 'supabase', 'functions', 'route-cat
 
 assert(liveCatalog.includes('normalizeRouteSearchResultLimit(criteria.limit)'));
 assert(liveCatalog.includes('.limit(ECS_ROUTE_SEARCH_RESULT_LIMIT)'));
-assert(liveCatalog.includes('requestId !== refreshRequestSequence'), 'stale searches must be rejected');
+assert(liveCatalog.includes('isAuthoritativeRequest'), 'stale searches must be rejected');
 assert(routeCatalog.includes('verification.publicRecommendation'), 'validation must precede selection');
 assert(routeCatalog.includes('capUniqueRankedRoutes'), 'normalized responses must be capped');
 assert(discover.includes('const pageSize = ECS_ROUTE_SEARCH_RESULT_LIMIT'));

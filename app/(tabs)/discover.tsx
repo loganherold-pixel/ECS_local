@@ -25,6 +25,7 @@ import {
   useWindowDimensions,
   Image,
   Alert,
+  AppState,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -146,6 +147,8 @@ import {
   fetchRouteCatalogTrailPackDetail,
   liveTrailPackCatalogStore,
   refreshLiveTrailPackCatalog,
+  resumeLiveTrailPackCatalog,
+  suspendLiveTrailPackCatalog,
 } from '../../lib/explore/liveTrailPackCatalog';
 import {
   capUniqueRankedRoutes,
@@ -153,6 +156,7 @@ import {
   ECS_ROUTE_SEARCH_RESULT_LIMIT,
 } from '../../lib/explore/routeSearchResultPolicy';
 import { recordExplorePerformanceEvent } from '../../lib/explore/explorePerformance';
+import { dispatchSummaryFirstTripBuilderNavigation } from '../../lib/explore/routeSummaryNavigation';
 import { runAfterShellInteractions } from '../../lib/shellInteractionScheduler';
 import {
   ROUTE_CATALOG_COVERAGE_AREAS,
@@ -814,10 +818,19 @@ function DiscoverScreenInner() {
   }, []);
 
   useEffect(() => {
+    void resumeLiveTrailPackCatalog();
     const unsubscribe = liveTrailPackCatalogStore.subscribe(() => {
       setLiveTrailPackCatalogSnapshot(liveTrailPackCatalogStore.getSnapshot());
     });
-    return unsubscribe;
+    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') void resumeLiveTrailPackCatalog();
+      else suspendLiveTrailPackCatalog();
+    });
+    return () => {
+      appStateSubscription.remove();
+      unsubscribe();
+      suspendLiveTrailPackCatalog();
+    };
   }, []);
 
   const refreshRigContext = useCallback(() => {
@@ -1631,19 +1644,24 @@ function DiscoverScreenInner() {
     (route: ExpeditionOpportunity) => {
       hapticMicro();
       if (!guardPublicSuggestedTrailheadHandoff(route, 'trip_builder')) return;
-      recordExplorePerformanceEvent('explore_route_card_press_received');
-      stageExploreReadinessPreview(route);
-      stageTripBuilderItineraryHandoff(route);
-      setAnalysisVisible(false);
-      setSelectedOpportunity(null);
-      setAiPreviewVisible(false);
-      setAiPreviewRoute(null);
-      setTrailPackPreview(null);
-      recordExplorePerformanceEvent('explore_trip_builder_navigation_dispatched');
-      router.push({
-        pathname: '/explore-trip-builder',
-        params: { routeId: route.id },
-      } as any);
+      dispatchSummaryFirstTripBuilderNavigation({
+        route,
+        stageReadiness: stageExploreReadinessPreview,
+        stageItinerary: stageTripBuilderItineraryHandoff,
+        clearTransientUi: () => {
+          setAnalysisVisible(false);
+          setSelectedOpportunity(null);
+          setAiPreviewVisible(false);
+          setAiPreviewRoute(null);
+          setTrailPackPreview(null);
+        },
+        navigate: (selectedRoute) => {
+          router.push({
+            pathname: '/explore-trip-builder',
+            params: { routeId: selectedRoute.id },
+          } as any);
+        },
+      });
     },
     [guardPublicSuggestedTrailheadHandoff, router, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff],
   );

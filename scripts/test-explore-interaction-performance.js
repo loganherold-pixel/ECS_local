@@ -14,6 +14,7 @@ require.extensions['.ts'] = function compileTs(module, filename) {
 };
 
 const performance = require(path.join(root, 'lib', 'explore', 'explorePerformance.ts'));
+const summaryNavigation = require(path.join(root, 'lib', 'explore', 'routeSummaryNavigation.ts'));
 let now = 0;
 performance.setExplorePerformanceClockForTests(() => now);
 performance.resetExplorePerformanceRecords();
@@ -45,13 +46,20 @@ assert(catalog.includes('const responseCache = new Map'));
 assert(catalog.includes("recordExplorePerformanceEvent('explore_cache_result_available'"));
 assert(catalog.indexOf("recordExplorePerformanceEvent('explore_cache_result_available'") < catalog.indexOf("recordExplorePerformanceEvent('explore_search_request_dispatched'"));
 assert(catalog.includes("recordExplorePerformanceEvent('explore_stale_result_rejected'"));
-assert(catalog.includes('requestId !== refreshRequestSequence'));
+assert(catalog.includes('isAuthoritativeRequest'));
 assert(discover.includes("recordExplorePerformanceEvent('explore_control_tap_received')"));
 assert(discover.includes("recordExplorePerformanceEvent('explore_control_visual_acknowledged')"));
 assert(discover.includes('runAfterShellInteractions(() => aiRouteStore.clearAll())'));
 assert(!discover.includes('runAfterShellInteractions(() => {\n    void refreshLiveTrailPackCatalog'));
-assert(discover.includes("recordExplorePerformanceEvent('explore_trip_builder_navigation_dispatched')"));
-assert(discover.indexOf("recordExplorePerformanceEvent('explore_trip_builder_navigation_dispatched')") < discover.indexOf("pathname: '/explore-trip-builder'"));
+const navigationOrder = [];
+summaryNavigation.dispatchSummaryFirstTripBuilderNavigation({
+  route: { id: 'acceptance-summary' },
+  stageReadiness: () => navigationOrder.push('readiness'),
+  stageItinerary: () => navigationOrder.push('itinerary'),
+  clearTransientUi: () => navigationOrder.push('clear'),
+  navigate: () => navigationOrder.push('navigate'),
+});
+assert.deepStrictEqual(navigationOrder, ['readiness', 'itinerary', 'clear', 'navigate']);
 assert(!discover.slice(discover.indexOf('const handleBuildTripFromRoute'), discover.indexOf('const handlePrepareOfflineFromRoute')).includes('hydrateRouteCatalogOpportunityForHandoff'));
 assert(catalog.includes('includeGeometry: false'));
 assert(!catalog.slice(catalog.indexOf('async function fetchRouteCatalogTrailPacks'), catalog.indexOf('export async function fetchRouteCatalogTrailPackDetail')).includes("invoke('route-catalog-detail'"));
