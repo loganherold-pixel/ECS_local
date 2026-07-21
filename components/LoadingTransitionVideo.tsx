@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Image, Platform, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Image, Platform, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { VideoView, useVideoPlayer } from 'expo-video';
+import { VideoView } from 'expo-video';
 
 import LegalFooter from './legal/LegalFooter';
 import { TACTICAL } from '../lib/theme';
+import { useOwnedVideoPlayer } from '../lib/auth/useOwnedVideoPlayer';
 
 const LOADING_TRANSITION_VIDEO = require('../assets/auth/loading-transition.mp4');
 const LOADING_FALLBACK = require('../assets/attitude/backgrounds/darker-tactical-canyon.png');
@@ -27,8 +28,9 @@ export default function LoadingTransitionVideo() {
       ) : null}
       <View pointerEvents="none" style={styles.tint} />
       {!videoReady || videoFailed ? (
-        <View pointerEvents="none" style={styles.loadingFallback}>
+        <View style={styles.loadingFallback} accessibilityRole="progressbar" accessibilityLabel="Preparing ECS offline workspace">
           <ActivityIndicator size="small" color={TACTICAL.amber} />
+          <Text style={styles.loadingLabel}>Preparing your offline workspace…</Text>
         </View>
       ) : null}
       <View pointerEvents="none" style={styles.legalOverlay}>
@@ -53,30 +55,33 @@ function LoadingTransitionVideoLayer({
     setVideoFailed(true);
     onFailed();
   }, [onFailed]);
-  const player = useVideoPlayer(LOADING_TRANSITION_VIDEO, (videoPlayer) => {
-    try {
-      videoPlayer.loop = true;
-      videoPlayer.muted = true;
-      videoPlayer.play();
-    } catch {
-      markVideoFailed();
-    }
+  const playerOwner = useOwnedVideoPlayer(LOADING_TRANSITION_VIDEO, (videoPlayer) => {
+    videoPlayer.loop = true;
+    videoPlayer.muted = true;
+    videoPlayer.play();
   });
+  const player = playerOwner.player;
 
   const safePlaybackAction = useCallback(
     (action: 'play' | 'pause' | 'replay') => {
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || !playerOwner.active()) return;
       try {
-        player[action]();
+        playerOwner.action((ownedPlayer) => ownedPlayer[action]());
       } catch {
         markVideoFailed();
       }
     },
-    [markVideoFailed, player],
+    [markVideoFailed, playerOwner],
   );
 
   useEffect(() => {
     isMountedRef.current = true;
+    if (playerOwner.initializationError) {
+      markVideoFailed();
+      return () => {
+        isMountedRef.current = false;
+      };
+    }
     safePlaybackAction('play');
 
     const cycleTimer = setInterval(() => {
@@ -87,14 +92,11 @@ function LoadingTransitionVideoLayer({
     return () => {
       isMountedRef.current = false;
       clearInterval(cycleTimer);
-      try {
-        player.pause();
-      } catch {}
     };
-  }, [player, safePlaybackAction]);
+  }, [markVideoFailed, playerOwner, safePlaybackAction]);
 
   useEffect(() => {
-    const subscription = player.addListener('statusChange', ({ status, error }) => {
+    const subscription = playerOwner.listen('statusChange', ({ status, error }: any) => {
       if (!isMountedRef.current) return;
       if (status === 'readyToPlay') {
         setVideoReady((current) => current || true);
@@ -110,7 +112,7 @@ function LoadingTransitionVideoLayer({
     return () => {
       subscription.remove();
     };
-  }, [markVideoFailed, onReady, player, safePlaybackAction]);
+  }, [markVideoFailed, onReady, playerOwner, safePlaybackAction]);
 
   return (
     <>
@@ -163,6 +165,12 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 10,
+  },
+  loadingLabel: {
+    color: '#F2F5F7',
+    fontSize: 14,
+    fontWeight: '600',
   },
   legalOverlay: {
     position: 'absolute',

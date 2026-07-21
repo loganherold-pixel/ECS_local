@@ -1,9 +1,10 @@
 import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, type AppStateStatus, Animated, Easing, Image, Platform, StyleSheet, View } from 'react-native';
-import { VideoView, useVideoPlayer } from 'expo-video';
+import { VideoView } from 'expo-video';
 
 import { useReducedMotion } from '../../lib/ecsAnimations';
 import { ecsLog } from '../../lib/ecsLogger';
+import { useOwnedVideoPlayer } from '../../lib/auth/useOwnedVideoPlayer';
 
 const LOGIN_VIDEO = require('../../assets/login/intro-login-video.mp4');
 const LOGIN_FALLBACK = require('../../assets/attitude/backgrounds/darker-tactical-canyon.png');
@@ -49,38 +50,33 @@ function LoginHeroVideoLayer({ reducedMotion }: { reducedMotion: boolean }) {
     });
     setVideoFailed(true);
   }, []);
-  const player = useVideoPlayer(LOGIN_VIDEO, (instance) => {
-    try {
-      instance.loop = true;
-      instance.muted = true;
-      instance.play();
-    } catch (error) {
-      markVideoFailed(error);
-    }
+  const playerOwner = useOwnedVideoPlayer(LOGIN_VIDEO, (instance) => {
+    instance.loop = true;
+    instance.muted = true;
+    instance.play();
   });
+  const player = playerOwner.player;
 
   const safePlayerAction = useCallback(
     (action: 'play' | 'pause') => {
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || !playerOwner.active()) return;
       try {
-        player[action]();
+        playerOwner.action((ownedPlayer) => ownedPlayer[action]());
       } catch (error) {
         markVideoFailed(error);
       }
     },
-    [markVideoFailed, player],
+    [markVideoFailed, playerOwner],
   );
 
   useEffect(() => {
     isMountedRef.current = true;
+    if (playerOwner.initializationError) markVideoFailed(playerOwner.initializationError);
 
     return () => {
       isMountedRef.current = false;
-      try {
-        player.pause();
-      } catch {}
     };
-  }, [player]);
+  }, [markVideoFailed, playerOwner]);
 
   useEffect(() => {
     if (videoFailed) {
@@ -113,7 +109,7 @@ function LoginHeroVideoLayer({ reducedMotion }: { reducedMotion: boolean }) {
   }, [safePlayerAction, videoFailed, videoReady]);
 
   useEffect(() => {
-    const statusSubscription = player.addListener('statusChange', ({ status, error }) => {
+    const statusSubscription = playerOwner.listen('statusChange', ({ status, error }: any) => {
       if (!isMountedRef.current) return;
 
       if (status === 'readyToPlay') {
@@ -129,7 +125,7 @@ function LoginHeroVideoLayer({ reducedMotion }: { reducedMotion: boolean }) {
     return () => {
       statusSubscription.remove();
     };
-  }, [markVideoFailed, player, safePlayerAction]);
+  }, [markVideoFailed, playerOwner, safePlayerAction]);
 
   useEffect(() => {
     if (videoFailed) {

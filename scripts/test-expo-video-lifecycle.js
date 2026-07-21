@@ -32,8 +32,8 @@ for (const [name, source] of [
   ['LoadingTransitionVideo', loadingTransition],
 ]) {
   assert(source.includes('isMountedRef'), `${name} should guard async video callbacks after unmount.`);
-  assert(source.includes('player.pause()'), `${name} should pause safely during unmount cleanup.`);
-  assert(!source.includes('.release('), `${name} should not manually release expo-video players.`);
+  assert(source.includes('useOwnedVideoPlayer'), `${name} should use the single explicit video owner.`);
+  assert(!source.includes('useVideoPlayer'), `${name} should not mix expo hook release with component cleanup.`);
 }
 
 assert(
@@ -59,11 +59,12 @@ assert(
   'LoginHeroBackground should keep the fallback image underneath the video while it loads.',
 );
 assert(
-  loadingTransition.includes('safePlaybackAction') && loadingTransition.includes('clearInterval(cycleTimer)'),
+  loadingTransition.includes('safePlaybackAction') && loadingTransition.includes('clearInterval(cycleTimer)') && loadingTransition.includes('playerOwner.listen'),
   'LoadingTransitionVideo should guard interval playback calls and clear the interval on unmount.',
 );
 assert(
-  loadingTransition.includes("safePlaybackAction('play');\n\n    const cycleTimer = setInterval(() => {"),
+  loadingTransition.indexOf("safePlaybackAction('play');") >= 0 &&
+    loadingTransition.indexOf("safePlaybackAction('play');") < loadingTransition.indexOf('const cycleTimer = setInterval'),
   'LoadingTransitionVideo should kick playback immediately after VideoView mounts, before the 5 second replay guard.',
 );
 assert(

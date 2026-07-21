@@ -31,7 +31,8 @@ import {
   Easing,
 } from 'react-native';
 import { Image } from 'expo-image';
-import { VideoView, useVideoPlayer } from 'expo-video';
+import { VideoView } from 'expo-video';
+import { useOwnedVideoPlayer } from '../../lib/auth/useOwnedVideoPlayer';
 
 // ── Video source (Supabase public URL — no token needed) ──────
 const VIDEO_URI =
@@ -115,36 +116,31 @@ const NativeVideo = memo(function NativeVideo({
   const hasSignalled = useRef(false);
   const isMountedRef = useRef(true);
 
-  const player = useVideoPlayer(
+  const playerOwner = useOwnedVideoPlayer(
     NATIVE_VIDEO_SOURCE,
     (playerInstance) => {
-      try {
-        playerInstance.loop = true;
-        playerInstance.muted = true;
-        playerInstance.play();
-      } catch (e) {
-        if (isMountedRef.current && !hasSignalled.current) {
-          hasSignalled.current = true;
-          logVideoBackgroundDev('[ECS] Video player init error:', e);
-          onError();
-        }
-      }
+      playerInstance.loop = true;
+      playerInstance.muted = true;
+      playerInstance.play();
     }
   );
+  const player = playerOwner.player;
 
   useEffect(() => {
     isMountedRef.current = true;
+    if (playerOwner.initializationError && !hasSignalled.current) {
+      hasSignalled.current = true;
+      logVideoBackgroundDev('[ECS] Video player init error:', playerOwner.initializationError);
+      onError();
+    }
 
     return () => {
       isMountedRef.current = false;
-      try {
-        player.pause();
-      } catch {}
     };
-  }, [player]);
+  }, [onError, playerOwner]);
 
   useEffect(() => {
-    const statusSub = player.addListener('statusChange', ({ status, error }) => {
+    const statusSub = playerOwner.listen('statusChange', ({ status, error }: any) => {
       if (!isMountedRef.current || hasSignalled.current) return;
 
       if (status === 'readyToPlay') {
@@ -163,7 +159,7 @@ const NativeVideo = memo(function NativeVideo({
     return () => {
       statusSub.remove();
     };
-  }, [player, onLoad, onError]);
+  }, [playerOwner, onLoad, onError]);
 
   return (
     <VideoView
