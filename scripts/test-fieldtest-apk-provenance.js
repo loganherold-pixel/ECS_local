@@ -182,13 +182,59 @@ function runMapboxEnvGuard(envOverrides) {
   );
 }
 
+function runMapboxGuard(args, envOverrides = {}) {
+  return spawnSync(process.execPath, [mapboxEnvGuardPath, ...args], {
+    cwd: root,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      EXPO_PUBLIC_MAPBOX_TOKEN: '',
+      EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN: '',
+      MAPBOX_DOWNLOADS_TOKEN: '',
+      EAS_BUILD: '',
+      ...envOverrides,
+    },
+  });
+}
+
+const localMissingPublic = runMapboxGuard(['--require-runtime-env', '--local-preflight']);
+assert.notStrictEqual(localMissingPublic.status, 0);
+assert.match(localMissingPublic.stderr + localMissingPublic.stdout, /EXPO_PUBLIC_MAPBOX_TOKEN is required/);
+
+const localWithoutDownloadsSecret = runMapboxGuard(
+  ['--require-runtime-env', '--local-preflight'],
+  { EXPO_PUBLIC_MAPBOX_TOKEN: 'pk.test-public-runtime-token' },
+);
+assert.strictEqual(localWithoutDownloadsSecret.status, 0, localWithoutDownloadsSecret.stderr);
+assert.doesNotMatch(localWithoutDownloadsSecret.stdout, /sk\.test/);
+
+const remoteMissingDownloads = runMapboxGuard(
+  ['--remote-native-build'],
+  { EAS_BUILD: 'true', ECS_REQUIRE_MAPBOX_DOWNLOADS_TOKEN: 'true' },
+);
+assert.notStrictEqual(remoteMissingDownloads.status, 0);
+assert.match(remoteMissingDownloads.stderr + remoteMissingDownloads.stdout, /MAPBOX_DOWNLOADS_TOKEN is required/);
+
+const remoteWithDownloads = runMapboxGuard(
+  ['--remote-native-build'],
+  { EAS_BUILD: 'true', ECS_REQUIRE_MAPBOX_DOWNLOADS_TOKEN: 'true', MAPBOX_DOWNLOADS_TOKEN: 'sk.test-downloads-token' },
+);
+assert.strictEqual(remoteWithDownloads.status, 0, remoteWithDownloads.stderr);
+assert.ok(!remoteWithDownloads.stdout.includes('sk.test-downloads-token'));
+
+assert.strictEqual(packageJson.scripts['eas-build-pre-install'], 'node ./scripts/check-fieldtest-mapbox-token-split.mjs --remote-native-build');
+assert.strictEqual(easJson.build.fieldtest.env.ECS_REQUIRE_MAPBOX_DOWNLOADS_TOKEN, 'true');
+assert.strictEqual(easJson.build.production.env.ECS_REQUIRE_MAPBOX_DOWNLOADS_TOKEN, 'true');
+assert.ok(!JSON.stringify(appJson).includes('MAPBOX_DOWNLOADS_TOKEN'));
+assert.ok(!appConfig.includes('extra.MAPBOX_DOWNLOADS_TOKEN'));
+
 const validSplit = runMapboxEnvGuard({
   EXPO_PUBLIC_MAPBOX_TOKEN: 'pk.test-public-runtime-token',
   MAPBOX_DOWNLOADS_TOKEN: 'sk.test-downloads-token',
 });
 assert.strictEqual(validSplit.status, 0, validSplit.stderr || validSplit.stdout);
 assert.match(validSplit.stdout, /runtimeTokenShape=pk\.\*/);
-assert.match(validSplit.stdout, /downloadsTokenShape=sk\.\*/);
+assert.match(validSplit.stdout, /downloadsTokenState=present/);
 assert.ok(
   !validSplit.stdout.includes('pk.test-public-runtime-token') &&
     !validSplit.stdout.includes('sk.test-downloads-token'),

@@ -133,6 +133,7 @@ async function run() {
   assert.deepEqual(resolveTripBuilderPlanRuntimeState(persistedAfterClear), {
     selectedRouteId: null,
     plan: null,
+    selectedResupplyStop: null,
     visible: false,
     itinerarySaved: false,
     itineraryEditSession: null,

@@ -2410,6 +2410,9 @@ const EMPTY_THROTTLED_GPS: ThrottledGPSOutput = {
   canAskAgain: null,
   permissionRequestPending: false,
   requestPermission: async () => {},
+  applicationPermissionState: 'unknown',
+  locationPrecision: 'unknown',
+  openLocationSettings: async () => {},
   rawGPS: {
     position: null,
     isAvailable: false,
@@ -2425,6 +2428,9 @@ const EMPTY_THROTTLED_GPS: ThrottledGPSOutput = {
     canAskAgain: null,
     permissionRequestPending: false,
     requestPermission: async () => {},
+    applicationPermissionState: 'unknown',
+    locationPrecision: 'unknown',
+    openLocationSettings: async () => {},
   },
 };
 

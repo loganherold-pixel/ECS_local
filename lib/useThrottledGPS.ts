@@ -38,6 +38,7 @@ import {
 import { gpsUIState, type GPSUIState } from './gpsUIState';
 import { useSharedGPSLocation } from './sharedGPSLocation';
 import type { ForegroundLocationPermissionState } from './locationPermissions';
+import type { ApplicationLocationPermissionState, LocationPrecision } from './locationPermissions';
 
 // ── Output type (extends GPSLocationOutput with rawGPS) ────
 export interface ThrottledGPSOutput {
@@ -66,6 +67,9 @@ export interface ThrottledGPSOutput {
   permissionRequestPending: boolean;
   /** Opens the supported native/browser permission flow once per activation. */
   requestPermission: () => Promise<void>;
+  applicationPermissionState: ApplicationLocationPermissionState;
+  locationPrecision: LocationPrecision;
+  openLocationSettings: () => Promise<void>;
   /**
    * Raw (unthrottled) GPS output — use for internal calculations
    * that need every update (distance tracking, waypoint detection)
@@ -112,6 +116,8 @@ export function useThrottledGPS(
     rawGPS.permissionState,
     rawGPS.canAskAgain,
     rawGPS.permissionRequestPending,
+    rawGPS.applicationPermissionState,
+    rawGPS.locationPrecision,
   ]);
 
   // ── Subscribe to throttled state changes ─────────────
@@ -146,6 +152,9 @@ export function useThrottledGPS(
     canAskAgain: throttledState.canAskAgain,
     permissionRequestPending: throttledState.permissionRequestPending,
     requestPermission: rawGPS.requestPermission ?? (async () => {}),
+    applicationPermissionState: rawGPS.applicationPermissionState ?? 'unknown',
+    locationPrecision: rawGPS.locationPrecision ?? 'unknown',
+    openLocationSettings: rawGPS.openLocationSettings ?? (async () => {}),
     rawGPS,
   };
 }

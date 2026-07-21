@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AppState, Platform, type AppStateStatus } from 'react-native';
+import { AppState, Linking, Platform, type AppStateStatus } from 'react-native';
 import { ecsLog } from './ecsLogger';
 import {
   inspectForegroundLocationPermission,
   requestForegroundLocationPermission,
   type ForegroundLocationPermissionSnapshot,
   type ForegroundLocationPermissionState,
+  resolveApplicationLocationPermissionState,
+  type ApplicationLocationPermissionState,
+  type LocationPrecision,
 } from './locationPermissions';
 import type { GPSLocationOptions, GPSLocationOutput, GPSPosition } from './useGPSLocation';
 
@@ -25,6 +28,8 @@ type SharedGPSState = Omit<GPSLocationOutput, 'refresh' | 'requestPermission'> &
   permissionState: ForegroundLocationPermissionState;
   canAskAgain: boolean | null;
   permissionRequestPending: boolean;
+  applicationPermissionState: ApplicationLocationPermissionState;
+  locationPrecision: LocationPrecision;
 };
 
 const DEFAULT_OUTPUT: SharedGPSState = {
@@ -40,6 +45,8 @@ const DEFAULT_OUTPUT: SharedGPSState = {
   permissionState: 'unknown',
   canAskAgain: null,
   permissionRequestPending: false,
+  applicationPermissionState: 'unknown',
+  locationPrecision: 'unknown',
 };
 
 function normalizeOptions(options: GPSLocationOptions): SubscriberOptions {
@@ -111,6 +118,7 @@ class SharedGPSLocationStore {
         void this.refresh();
       },
       requestPermission: () => this.requestPermission(),
+      openLocationSettings: () => this.openLocationSettings(),
     };
   }
 
@@ -133,6 +141,21 @@ class SharedGPSLocationStore {
         this.removeAppStateSubscription();
       }
     };
+  }
+
+  async openLocationSettings(): Promise<void> {
+    try {
+      if (Platform.OS === 'android' && this.state.applicationPermissionState === 'services_disabled') {
+        await Linking.sendIntent('android.settings.LOCATION_SOURCE_SETTINGS');
+      } else {
+        await Linking.openSettings();
+      }
+    } catch {
+      this.setState({
+        applicationPermissionState: 'request_error',
+        error: 'Unable to open device location settings',
+      });
+    }
   }
 
   async refresh(): Promise<void> {
@@ -175,11 +198,18 @@ class SharedGPSLocationStore {
     const request = this.requestPermissionOnce().finally(() => {
       if (this.permissionRequestPromise === request) {
         this.permissionRequestPromise = null;
-        this.setState({ permissionRequestPending: false });
+        const applicationPermissionState = this.state.permissionState === 'granted'
+          ? this.state.locationPrecision === 'approximate' ? 'approximate_granted' : 'precise_granted'
+          : this.state.permissionState === 'blocked' || this.state.permissionState === 'restricted'
+            ? 'denied_permanent_or_settings_required'
+            : this.state.permissionState === 'denied_requestable' || this.state.permissionState === 'requestable'
+              ? 'denied_requestable'
+              : this.state.applicationPermissionState;
+        this.setState({ permissionRequestPending: false, applicationPermissionState });
       }
     });
     this.permissionRequestPromise = request;
-    this.setState({ permissionRequestPending: true });
+    this.setState({ permissionRequestPending: true, applicationPermissionState: 'requesting' });
     return request;
   }
 
@@ -196,7 +226,7 @@ class SharedGPSLocationStore {
       const Location = await import('expo-location');
       const servicesEnabled = await Location.hasServicesEnabledAsync();
       if (!servicesEnabled) {
-        this.applyLocationUnavailable('Location services are disabled');
+        this.applyLocationUnavailable('Location services are disabled', 'services_disabled');
         return;
       }
 
@@ -222,10 +252,8 @@ class SharedGPSLocationStore {
         this.reconcileWatchers();
       }
     } catch (error: any) {
-      ecsLog.warn('GPS', '[GPS SHARED] Permission request failed', {
-        error: error?.message || String(error),
-      });
-      this.applyLocationUnavailable('Native location permission unavailable');
+      ecsLog.warn('GPS', '[GPS SHARED] Permission request failed', { category: 'permission_request_error' });
+      this.applyLocationUnavailable('Native location permission unavailable', 'request_error');
     }
   }
 
@@ -256,10 +284,18 @@ class SharedGPSLocationStore {
       isWatching: snapshot.state === 'granted' ? this.state.isWatching : false,
       position: snapshot.state === 'granted' ? this.state.position : null,
       error,
+      locationPrecision: snapshot.precision ?? 'unknown',
+      applicationPermissionState: resolveApplicationLocationPermissionState({
+        permission: snapshot,
+        requesting: this.state.permissionRequestPending,
+      }),
     });
   }
 
-  private applyLocationUnavailable(message: string): void {
+  private applyLocationUnavailable(
+    message: string,
+    applicationPermissionState: ApplicationLocationPermissionState = 'request_error',
+  ): void {
     this.setState({
       permissionState: 'unavailable',
       canAskAgain: null,
@@ -268,6 +304,8 @@ class SharedGPSLocationStore {
       isWatching: false,
       position: null,
       error: message,
+      applicationPermissionState,
+      locationPrecision: 'unknown',
     });
   }
 
@@ -351,7 +389,11 @@ class SharedGPSLocationStore {
 
   private handleAppStateChange = (nextState: AppStateStatus): void => {
     if (this.appState === nextState) return;
+    const returningToForeground = nextState === 'active' && !this.isAppForeground();
     this.appState = nextState;
+    if (returningToForeground) {
+      this.activeHighAccuracy = null;
+    }
     this.reconcileWatchers();
   };
 
@@ -466,7 +508,7 @@ class SharedGPSLocationStore {
       const servicesEnabled = await Location.hasServicesEnabledAsync();
       if (generation !== this.startGeneration) return;
       if (!servicesEnabled) {
-        this.applyLocationUnavailable('Location services are disabled');
+        this.applyLocationUnavailable('Location services are disabled', 'services_disabled');
         return;
       }
 

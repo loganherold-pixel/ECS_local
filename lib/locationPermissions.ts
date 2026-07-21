@@ -1,7 +1,21 @@
 export type LocationPermissionResponse = {
   status?: string;
   canAskAgain?: boolean;
+  android?: { accuracy?: 'fine' | 'coarse' | 'none' };
+  ios?: { scope?: 'whenInUse' | 'always' | 'none' };
 };
+
+export type ApplicationLocationPermissionState =
+  | 'unknown'
+  | 'requesting'
+  | 'precise_granted'
+  | 'approximate_granted'
+  | 'denied_requestable'
+  | 'denied_permanent_or_settings_required'
+  | 'services_disabled'
+  | 'request_error';
+
+export type LocationPrecision = 'precise' | 'approximate' | 'unknown';
 
 export type ForegroundLocationPermissionModule = {
   getForegroundPermissionsAsync?: () => Promise<LocationPermissionResponse>;
@@ -21,7 +35,32 @@ export type ForegroundLocationPermissionSnapshot = {
   state: ForegroundLocationPermissionState;
   canAskAgain: boolean | null;
   response: LocationPermissionResponse;
+  precision?: LocationPrecision;
 };
+
+export function resolveApplicationLocationPermissionState(input: {
+  permission: ForegroundLocationPermissionSnapshot;
+  servicesEnabled?: boolean | null;
+  requesting?: boolean;
+  requestError?: boolean;
+}): ApplicationLocationPermissionState {
+  if (input.requesting) return 'requesting';
+  if (input.requestError) return 'request_error';
+  if (input.servicesEnabled === false) return 'services_disabled';
+  if (input.permission.state === 'granted') {
+    return input.permission.precision === 'approximate'
+      ? 'approximate_granted'
+      : 'precise_granted';
+  }
+  if (input.permission.state === 'denied_requestable' || input.permission.state === 'requestable') {
+    return 'denied_requestable';
+  }
+  if (input.permission.state === 'blocked' || input.permission.state === 'restricted') {
+    return 'denied_permanent_or_settings_required';
+  }
+  if (input.permission.state === 'unavailable') return 'request_error';
+  return 'unknown';
+}
 
 export type ForegroundLocationPermissionRecoveryAction =
   | 'none'
@@ -73,6 +112,13 @@ export function normalizeForegroundLocationPermission(
     state,
     canAskAgain,
     response: response ?? { status: 'unknown' },
+    precision: response?.android?.accuracy === 'coarse'
+      ? 'approximate'
+      : response?.android?.accuracy === 'fine'
+        ? 'precise'
+        : status === 'granted' && response?.ios?.scope !== 'none'
+          ? 'precise'
+          : 'unknown',
   };
 }
 

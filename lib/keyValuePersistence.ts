@@ -15,6 +15,7 @@ export interface PersistedKeyValueCache {
   delete: (key: string) => void;
   clear: () => void;
   flush: () => Promise<void>;
+  flushStrict: () => Promise<void>;
   waitForHydration: () => Promise<void>;
   isHydrated: () => boolean;
 }
@@ -203,7 +204,7 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
     return resolvedNativePath;
   }
 
-  async function writeNativeSnapshot(snapshot: Record<string, string>) {
+  async function writeNativeSnapshot(snapshot: Record<string, string>, strict = false) {
     try {
       const path = await getPreferredNativePath();
       debugLog('writing snapshot', {
@@ -217,6 +218,7 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
     } catch (error) {
       diagnostic.lastError = safePersistenceError(error);
       console.warn(`[KeyValuePersistence] Failed to write "${fileKey}":`, error);
+      if (strict) throw error;
     } finally {
       updateDiagnostic();
     }
@@ -317,11 +319,12 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
     hydrateNative().catch(() => {});
   }
 
-  function enqueueNativeWrite() {
+  function enqueueNativeWrite(strict = false) {
     writePromise = writePromise.catch(() => undefined).then(async () => {
       await hydrationPromise;
-      await writeNativeSnapshot({ ...cache });
+      await writeNativeSnapshot({ ...cache }, strict);
     });
+    return writePromise;
   }
 
   function scheduleNativeWrite() {
@@ -493,6 +496,22 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
 
       await hydrationPromise;
       await writePromise;
+    },
+
+    async flushStrict() {
+      if (isWeb) {
+        if (diagnostic.lastError) throw new Error(diagnostic.lastError);
+        return;
+      }
+
+      if (pendingWrite) {
+        clearTimeout(pendingWrite);
+        pendingWrite = null;
+        updateDiagnostic();
+      }
+
+      await hydrationPromise;
+      await enqueueNativeWrite(true);
     },
 
     waitForHydration() {

@@ -926,6 +926,7 @@ function DiscoverScreenInner() {
   const [discoverSourceHydrated, setDiscoverSourceHydrated] = useState(false);
   const [discoverRouteSourceFailureReason, setDiscoverRouteSourceFailureReason] = useState<string | null>(null);
   const gps = useThrottledGPS({ enabled: isFocused, highAccuracy: false });
+  const locationRecoveryState = gps.applicationPermissionState;
   const tripBuilderHandoffUserLocation = useMemo(
     () => hasGPSFix
       ? {
@@ -1251,9 +1252,12 @@ function DiscoverScreenInner() {
 
   // ── Acquire user location (one-shot) ──────────────────────
   useEffect(() => {
-    if (!gps.hasFix || !gps.position) return;
+    if (!gps.hasFix || !gps.position || locationRecoveryState !== 'precise_granted') {
+      setHasGPSFix(false);
+      return;
+    }
     applyExplorerLocationFix(gps.position.latitude, gps.position.longitude);
-  }, [applyExplorerLocationFix, gps.hasFix, gps.position]);
+  }, [applyExplorerLocationFix, gps.hasFix, gps.position, locationRecoveryState]);
 
   useEffect(() => {
     const unsubscribeActiveVehicle = subscribeActiveVehicleState(() => {
@@ -6223,6 +6227,85 @@ function DiscoverScreenInner() {
                     </TouchableOpacity>
                   ) : null}
                 </View>
+                {locationRecoveryState !== 'precise_granted' ? (
+                  <View
+                    style={s.locationRecoveryPanel}
+                    testID="explore-location-permission-recovery"
+                    accessible
+                    accessibilityRole="alert"
+                    accessibilityLiveRegion="polite"
+                    accessibilityLabel={
+                      locationRecoveryState === 'approximate_granted'
+                        ? 'Approximate location enabled. Precise location is required for GPS route search. Choose an area or open app settings.'
+                        : locationRecoveryState === 'services_disabled'
+                          ? 'Device location services are disabled. Choose an area or open location settings.'
+                          : locationRecoveryState === 'denied_permanent_or_settings_required'
+                            ? 'Location permission must be restored in app settings. Choose an area or open app settings.'
+                            : locationRecoveryState === 'request_error'
+                              ? 'Location permission could not be checked. Choose an area or retry.'
+                              : locationRecoveryState === 'requesting'
+                                ? 'Requesting location permission.'
+                                : 'Location permission is needed for GPS route search. Choose an area or retry permission.'
+                    }
+                  >
+                    <Text style={s.locationRecoveryText} testID="explore-location-permission-status">
+                      {locationRecoveryState === 'approximate_granted'
+                        ? 'Approximate location is enabled. Precise location is required for GPS-backed route search; approximate location will not be used as precise.'
+                        : locationRecoveryState === 'services_disabled'
+                          ? 'Device location services are disabled. Turn them on, then return to ECS. Approved-area search remains available.'
+                          : locationRecoveryState === 'denied_permanent_or_settings_required'
+                            ? 'Location access must be restored in app settings. ECS will recheck it when you return.'
+                            : locationRecoveryState === 'request_error'
+                              ? 'ECS could not check location permission. No location details were recorded; retry or use an approved area.'
+                              : locationRecoveryState === 'requesting'
+                                ? 'Waiting for the device permission response. ECS will not repeat the dialog automatically.'
+                                : 'Allow location to use precise GPS route search, or continue with an approved area.'}
+                    </Text>
+                    {locationRecoveryState !== 'requesting' ? (
+                      <TouchableOpacity
+                        style={s.locationRecoveryButton}
+                        testID={
+                          locationRecoveryState === 'denied_permanent_or_settings_required' ||
+                          locationRecoveryState === 'approximate_granted'
+                            ? 'explore-open-app-settings'
+                            : locationRecoveryState === 'services_disabled'
+                              ? 'explore-open-location-settings'
+                              : 'explore-retry-location-permission'
+                        }
+                        onPress={() => {
+                          hapticMicro();
+                          if (
+                            locationRecoveryState === 'denied_permanent_or_settings_required' ||
+                            locationRecoveryState === 'approximate_granted' ||
+                            locationRecoveryState === 'services_disabled'
+                          ) {
+                            void gps.openLocationSettings();
+                          } else {
+                            void gps.requestPermission();
+                          }
+                        }}
+                        accessibilityRole="button"
+                        accessibilityLabel={
+                          locationRecoveryState === 'services_disabled'
+                            ? 'Open device location settings'
+                            : locationRecoveryState === 'denied_permanent_or_settings_required' ||
+                                locationRecoveryState === 'approximate_granted'
+                              ? 'Open ECS app location settings'
+                              : 'Retry location permission'
+                        }
+                      >
+                        <Text style={s.locationRecoveryButtonText}>
+                          {locationRecoveryState === 'services_disabled'
+                            ? 'OPEN LOCATION SETTINGS'
+                            : locationRecoveryState === 'denied_permanent_or_settings_required' ||
+                                locationRecoveryState === 'approximate_granted'
+                              ? 'OPEN APP SETTINGS'
+                              : 'RETRY PERMISSION'}
+                        </Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                ) : null}
               </View>
 
               <DistanceRadiusFilter
@@ -8353,6 +8436,35 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 6,
+  },
+  locationRecoveryPanel: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: ECS_SURFACE.border.quiet,
+    gap: 8,
+  },
+  locationRecoveryText: {
+    ...TYPO.B2,
+    color: TACTICAL.textMuted,
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  locationRecoveryButton: {
+    alignSelf: 'flex-start',
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: TACTICAL.amber,
+    backgroundColor: ECS_SURFACE.background.compact,
+  },
+  locationRecoveryButtonText: {
+    ...TYPO.U2,
+    color: TACTICAL.amber,
+    fontSize: 10,
+    letterSpacing: 1.2,
   },
   routeSearchAreaButton: {
     minHeight: 34,

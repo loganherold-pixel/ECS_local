@@ -18,6 +18,7 @@ export * from './trailheadStartValidation';
 export * from './tripBuilderSuggestedRouteHandoff';
 export * from './tripBuilderRouteHandoffStore';
 export * from './tripBuilderPlanStore';
+export * from './smartResupplySelectionLifecycle';
 export * from './tripBuilderRoutePreparation';
 export * from './tripBuilderCanonicalRouteSpine';
 export * from './tripBuilderGuidanceItinerary';

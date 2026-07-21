@@ -50,7 +50,7 @@ function runFieldtestMapboxEnvGuard(profile) {
   const environmentName = resolveEasEnvironmentName(profile);
   const command = process.platform === "win32" ? "eas.cmd" : "eas";
   const guardCommand =
-    "node ./scripts/check-fieldtest-mapbox-token-split.mjs --require-runtime-env --require-build-env";
+    "node ./scripts/check-fieldtest-mapbox-token-split.mjs --require-runtime-env --local-preflight";
   const result =
     process.platform === "win32"
       ? spawnSync(
@@ -80,7 +80,7 @@ function runFieldtestMapboxEnvGuard(profile) {
   if (result.status !== 0) {
     console.error(
       `Fieldtest Mapbox token split guard failed for EAS environment "${environmentName}". ` +
-        "Fix EXPO_PUBLIC_MAPBOX_TOKEN/MAPBOX_DOWNLOADS_TOKEN before building.",
+        "Fix the public runtime token metadata before building; the downloads secret is checked only on the remote worker.",
     );
     process.exit(result.status ?? 1);
   }

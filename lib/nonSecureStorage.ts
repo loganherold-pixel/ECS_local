@@ -74,6 +74,21 @@ export function createMigratingNonSecureStorage(
       await clearLegacySecureStore(key);
     },
 
+    async writeStrict(key: string, value: string | null): Promise<void> {
+      await cache.waitForHydration();
+
+      if (typeof value === 'string' && value.length > 0) cache.set(key, value);
+      else cache.delete(key);
+
+      await cache.flushStrict();
+      await clearLegacySecureStore(key);
+    },
+
+    async flushStrict(): Promise<void> {
+      await cache.waitForHydration();
+      await cache.flushStrict();
+    },
+
     async remove(key: string): Promise<void> {
       await cache.waitForHydration();
       cache.delete(key);

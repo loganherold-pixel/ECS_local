@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   BackHandler,
   FlatList,
   InteractionManager,
@@ -78,9 +79,13 @@ import {
   resolveSmartResupplyEvaluationOrigin,
   SMART_RESUPPLY_PROVIDER_POLICY,
   smartResupplySelectionDisabledReason,
+  reconcileCommittedSmartResupplySelection,
+  shouldInvalidateSmartResupplySelection,
+  normalizeSmartResupplySemanticFingerprint,
   loadTripBuilderRouteHandoffAsync,
   saveTripBuilderRouteHandoff,
   loadTripBuilderPlanState,
+  flushTripBuilderPlanState,
   resolveTripBuilderPlanRuntimeState,
   saveTripBuilderPlanState,
   mergeApproachResupplyRouteEvidence,
@@ -224,9 +229,9 @@ import { fsReadFileFromPickerUri } from '../lib/fsCompat';
 
 let lastTripBuilderPlanState = resolveTripBuilderPlanRuntimeState(null);
 
-function updateLastTripBuilderPlanState(next: typeof lastTripBuilderPlanState): void {
+async function updateLastTripBuilderPlanState(next: typeof lastTripBuilderPlanState): Promise<void> {
   lastTripBuilderPlanState = next;
-  void saveTripBuilderPlanState(next);
+  await saveTripBuilderPlanState(next);
 }
 
 const TRIP_TYPE_OPTIONS: { value: TripType; label: string }[] = [
@@ -424,6 +429,13 @@ type SmartResupplyRequestStatus = 'idle' | 'deferred' | 'loading' | 'ready' | 'e
 type SmartResupplyRequestState = {
   status: SmartResupplyRequestStatus;
   error: string | null;
+};
+type SelectedSmartResupplyValidationStatus = 'verified' | 'refreshing' | 'incomplete' | 'restored' | 'invalidated';
+type SelectedSmartResupplyContext = {
+  routeId: string | null;
+  approachFingerprint: string | null;
+  category: SmartResupplyPoi['category'];
+  physicalIdentity: string;
 };
 
 type TripPlanOutputAction = 'offline' | 'save' | 'navigate' | null;
@@ -3120,9 +3132,63 @@ function refreshSelectedSmartResupplyOption(
   selected: SmartResupplyPoi | null,
   options: SmartResupplyPoi[],
 ): SmartResupplyPoi | null {
-  if (!selected) return selected;
-  const selectedKey = smartResupplyOptionStableKey(selected);
-  return options.find((option) => smartResupplyOptionStableKey(option) === selectedKey) ?? null;
+  return reconcileCommittedSmartResupplySelection({
+    selected,
+    availableOptions: options,
+    identity: smartResupplyPhysicalIdentity,
+  });
+}
+
+function persistedResupplyPointToSmartOption(point: ResupplyPoint | null): SmartResupplyPoi | null {
+  if (!point?.location || !isValidMapCoordinate(point.location)) return null;
+  const category = point.category === 'food_supplies' ? 'food_supplies' : point.category === 'fuel' ? 'fuel' : null;
+  if (!category) return null;
+  return {
+    id: point.id,
+    title: point.name,
+    subtitle: null,
+    category,
+    coordinate: point.location,
+    distanceFromRouteStartMiles: point.distanceFromStartMiles ?? null,
+    distanceFromOriginMiles: point.approachEvidence?.distanceFromOriginMiles ?? null,
+    distanceFromTrailheadMiles: point.distanceFromEndMiles ?? null,
+    distanceFromApproachRouteMiles: point.approachEvidence?.corridorOffsetMiles ?? null,
+    routeDeviationMiles: point.approachEvidence?.detourDistanceMiles ?? null,
+    detourDurationMinutes: point.approachEvidence?.detourDurationMinutes ?? null,
+    remainingApproachMilesToTrailhead: point.approachEvidence?.distanceBeforeTrailheadMiles ?? null,
+    distanceBeforeRemoteEntryMiles: point.approachEvidence?.distanceBeforeRemoteEntryMiles ?? null,
+    approachProgressRatio: point.approachEvidence?.progressRatio ?? null,
+    approachScore: point.approachEvidence?.score ?? null,
+    rank: point.approachEvidence?.rank ?? null,
+    beforeTrailEntry: point.approachEvidence?.beforeTrailhead ?? true,
+    beforeRemoteEntry: point.approachEvidence?.beforeRemoteEntry ?? null,
+    fallbackState: point.approachEvidence?.detourSource === 'provider_route' ? 'approach_route' : 'trailhead_only',
+    routeEvidenceState: point.approachEvidence?.detourSource === 'provider_route' ? 'provider_route' : 'unavailable',
+    routeAwareConfidence: point.approachEvidence?.routeAwareConfidence ?? point.reliability ?? 'unknown',
+    remoteEntrySource: 'unavailable',
+    remoteEntryConfidence: 'unknown',
+    remoteEntryEstimated: true,
+    remoteEntryLabel: 'Previously selected route entry',
+    categoryCoverage: point.categoryCoverage ?? [category],
+    categoryUsefulness: point.categoryCoverage?.length === 2 ? 'combined' : 'category_match',
+    operatingStatus: point.approachEvidence?.operatingStatus ?? 'unknown',
+    providerConfidence: point.reliability ?? 'unknown',
+    coordinateConfidence: point.reliability ?? 'unknown',
+    accessStatus: point.accessStatus ?? 'unknown',
+    providerScore: null,
+    providerId: 'persisted_selected_option',
+    providerResultState: 'stale',
+    warnings: ['Live verification is pending for this previously selected stop.'],
+    diesel: false,
+    sourceType: point.source ?? 'persisted_selection',
+    suggestion: {
+      id: point.id,
+      title: point.name,
+      subtitle: null,
+      coordinate: { lat: point.location.latitude, lng: point.location.longitude },
+      sourceType: 'manual_selection',
+    },
+  };
 }
 
 function smartResupplyOptionsFromRouteContext(
@@ -4723,6 +4789,7 @@ export default function ExploreTripBuilderScreen() {
   const smartResupplyQaDiagnosticsApproved = isSmartResupplyQaDiagnosticsApproved();
   const smartResupplyQualifiedEmptyFixture = isSmartResupplyQualifiedEmptyFixtureEnabled();
   const [routes, setRoutes] = useState<ExpeditionOpportunity[]>([]);
+  const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [tripSetupStarted, setTripSetupStarted] = useState(false);
   const [tripSetupDeferredGroupsReady, setTripSetupDeferredGroupsReady] = useState(false);
@@ -4741,6 +4808,9 @@ export default function ExploreTripBuilderScreen() {
   const [routeContextSnapshot, setRouteContextSnapshot] = useState<RouteContext | null>(null);
   const [selectedSmartFuel, setSelectedSmartFuel] = useState<SmartResupplyPoi | null>(null);
   const [selectedSmartSupply, setSelectedSmartSupply] = useState<SmartResupplyPoi | null>(null);
+  const [selectedSmartFuelValidation, setSelectedSmartFuelValidation] =
+    useState<SelectedSmartResupplyValidationStatus>('invalidated');
+  const selectedSmartFuelContextRef = useRef<SelectedSmartResupplyContext | null>(null);
   const [smartResupplyFuelRequest, setSmartResupplyFuelRequest] = useState<SmartResupplyRequestState>(IDLE_SMART_RESUPPLY_REQUEST);
   const [smartResupplySupplyRequest, setSmartResupplySupplyRequest] = useState<SmartResupplyRequestState>(IDLE_SMART_RESUPPLY_REQUEST);
   const [smartResupplyFuelRetryGeneration, setSmartResupplyFuelRetryGeneration] = useState(0);
@@ -4898,25 +4968,42 @@ export default function ExploreTripBuilderScreen() {
     handleSmartResupplyQaMountedChange('food_supplies', evaluationId, optionKey, mounted);
   }, [handleSmartResupplyQaMountedChange]);
 
-  const closeTripPlanOverlay = useCallback(() => {
+  const closeTripPlanOverlay = useCallback(async () => {
+    try {
+      await updateLastTripBuilderPlanState({
+        selectedRouteId,
+        plan,
+        selectedResupplyStop: lastTripBuilderPlanState.selectedResupplyStop,
+        visible: false,
+        itinerarySaved,
+        itineraryEditSession: savedTripItineraryEditSession,
+      });
+      setPersistenceError(null);
+    } catch {
+      setPersistenceError('Trip plan could not be saved. Retry closing the plan.');
+      return;
+    }
     planOutputGenerationRef.current += 1;
     planOutputBusyRef.current = null;
     setPlanOutputBusy(null);
     setPlanMapScope(null);
     setPlanModalVisible(false);
-    updateLastTripBuilderPlanState({
-      selectedRouteId,
-      plan,
-      visible: false,
-      itinerarySaved,
-      itineraryEditSession: savedTripItineraryEditSession,
-    });
   }, [itinerarySaved, plan, savedTripItineraryEditSession, selectedRouteId]);
 
   useEffect(() => () => {
     generatingRef.current = false;
     planOutputGenerationRef.current += 1;
     preparedTripPlanRoadRouteGenerationRef.current += 1;
+  }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') return;
+      void flushTripBuilderPlanState().catch(() => {
+        setPersistenceError('Trip plan storage could not be flushed while ECS moved to the background. Retry the last save action.');
+      });
+    });
+    return () => subscription.remove();
   }, []);
 
   useFocusEffect(
@@ -4939,7 +5026,7 @@ export default function ExploreTripBuilderScreen() {
           return true;
         }
         if (planModalVisible) {
-          closeTripPlanOverlay();
+          void closeTripPlanOverlay();
           return true;
         }
         return false;
@@ -5026,7 +5113,9 @@ export default function ExploreTripBuilderScreen() {
           ? nextRoutes.find((route) => String(route.id) === String(handoffRoute.id)) ?? null
           : null;
         const requestedRouteId = params.routeId ? String(params.routeId) : null;
-        const restoredRouteId = lastTripBuilderPlanState.visible ? lastTripBuilderPlanState.selectedRouteId : null;
+        const restoredRouteId = lastTripBuilderPlanState.visible || lastTripBuilderPlanState.selectedResupplyStop
+          ? lastTripBuilderPlanState.selectedRouteId
+          : null;
         const selectedRouteIdForState = requestedRouteId ?? restoredRouteId ?? (
           acceptedHandoffRoute?.id ? String(acceptedHandoffRoute.id) : null
         );
@@ -5040,6 +5129,17 @@ export default function ExploreTripBuilderScreen() {
         setCapturedTripOrigin(handoffOrigin && selectedRouteIdForState
           ? { routeId: selectedRouteIdForState, coordinate: handoffOrigin }
           : null);
+        const restoredSelectedOption = persistedResupplyPointToSmartOption(lastTripBuilderPlanState.selectedResupplyStop);
+        if (restoredSelectedOption && selectedRouteIdForState === lastTripBuilderPlanState.selectedRouteId) {
+          setSelectedSmartFuel(restoredSelectedOption);
+          setSelectedSmartFuelValidation('restored');
+          selectedSmartFuelContextRef.current = {
+            routeId: lastTripBuilderPlanState.selectedRouteId,
+            approachFingerprint: null,
+            category: restoredSelectedOption.category,
+            physicalIdentity: smartResupplyPhysicalIdentity(restoredSelectedOption),
+          };
+        }
         if (
           lastTripBuilderPlanState.visible &&
           lastTripBuilderPlanState.plan &&
@@ -5158,15 +5258,6 @@ export default function ExploreTripBuilderScreen() {
             ? route
             : persistedRoute
       )));
-      if (persistHandoff) {
-        updateLastTripBuilderPlanState({
-          selectedRouteId: String(ready.canonicalRoute.id),
-          plan: null,
-          visible: false,
-          itinerarySaved: false,
-          itineraryEditSession: null,
-        });
-      }
       if (params.setup === '1' && String(params.routeId ?? '') === String(ready.canonicalRoute.id)) {
         setPreparedTripRoutePreview(buildPreparedTripRoutePreview(persistedRoute));
         setTripSetupStarted(true);
@@ -5416,6 +5507,33 @@ export default function ExploreTripBuilderScreen() {
     : liveApproachRouteMatchesRequest
       ? liveApproachRouteState.status
       : 'loading';
+  useEffect(() => {
+    const context = selectedSmartFuelContextRef.current;
+    if (!selectedSmartFuel || !context || !liveApproachRouteFingerprint) return;
+    if (shouldInvalidateSmartResupplySelection({
+      context,
+      routeId: selectedRouteId,
+      approachFingerprint: normalizeSmartResupplySemanticFingerprint(liveApproachRouteFingerprint),
+      category: selectedSmartFuel.category,
+    })) {
+      setSelectedSmartFuel(null);
+      selectedSmartFuelContextRef.current = null;
+      setSelectedSmartFuelValidation('invalidated');
+      void updateLastTripBuilderPlanState({
+        ...lastTripBuilderPlanState,
+        selectedRouteId,
+        selectedResupplyStop: null,
+      }).catch(() => setPersistenceError('The invalidated resupply selection could not be removed from durable storage.'));
+      return;
+    }
+    if (context.approachFingerprint == null) {
+      selectedSmartFuelContextRef.current = {
+        ...context,
+        approachFingerprint: normalizeSmartResupplySemanticFingerprint(liveApproachRouteFingerprint),
+      };
+      return;
+    }
+  }, [liveApproachRouteFingerprint, selectedRouteId, selectedSmartFuel]);
   const liveApproachRoutePoints = useMemo(
     () => liveApproachRouteMatchesRequest && liveApproachRouteState.status === 'ready'
       ? liveApproachRouteState.points
@@ -6033,6 +6151,10 @@ export default function ExploreTripBuilderScreen() {
     if (smartResupplyPreference === 'no') return true;
     return selectedSmartResupplyStopPlan.missingCategories.length === 0;
   }, [selectedSmartResupplyStopPlan.missingCategories.length, smartResupplyPending, smartResupplyPreference]);
+  const selectedSmartFuelInAvailableOptions = selectedSmartFuel != null && smartResupplyFuelOptions.some(
+    (option) => sameSmartResupplyPhysicalPlace(option, selectedSmartFuel),
+  );
+  const showRetainedSmartFuel = selectedSmartFuel != null && !selectedSmartFuelInAvailableOptions;
   const routeContextFuelOptions = useMemo(() => {
     const incoming = smartResupplyOptionsFromRouteContext(
       routeContextSnapshot,
@@ -6218,6 +6340,8 @@ export default function ExploreTripBuilderScreen() {
 
   useEffect(() => {
     setSelectedSmartFuel(null);
+    selectedSmartFuelContextRef.current = null;
+    setSelectedSmartFuelValidation('invalidated');
     setSelectedSmartSupply(null);
     smartResupplyFuelRequestRef.current += 1;
     smartResupplySupplyRequestRef.current += 1;
@@ -6338,6 +6462,7 @@ export default function ExploreTripBuilderScreen() {
       mountedKeys: new Set(),
     };
     setSmartResupplyFuelRequest({ status: 'loading', error: null });
+    if (selectedSmartFuelContextRef.current) setSelectedSmartFuelValidation('refreshing');
     const fuelLookupTask = scheduleTripBuilderBackgroundLookup(() => {
       void (async () => {
         try {
@@ -6356,6 +6481,7 @@ export default function ExploreTripBuilderScreen() {
                 state: nextRequest,
               };
               setSmartResupplyFuelRequest(nextRequest);
+              if (selectedSmartFuelContextRef.current) setSelectedSmartFuelValidation('incomplete');
               return;
             }
             throw new Error('Map search unavailable until Mapbox token is ready.');
@@ -6403,6 +6529,11 @@ export default function ExploreTripBuilderScreen() {
             emitSmartResupplyQaCountSnapshot('smart_evaluation_completed', qaSnapshot);
           }
           const uiAdaptedCount = commitSmartResupplyFuelOptions(mergedOptions);
+          if (selectedSmartFuelContextRef.current) {
+            const selectedIdentity = selectedSmartFuelContextRef.current.physicalIdentity;
+            const selectedReturned = mergedOptions.some((option) => smartResupplyPhysicalIdentity(option) === selectedIdentity);
+            setSelectedSmartFuelValidation(providerPartial || !selectedReturned ? 'incomplete' : 'verified');
+          }
           if (qaSnapshot?.evaluationId === evaluationId) {
             qaSnapshot.uiAdaptedCount = uiAdaptedCount;
             emitSmartResupplyQaCountSnapshot('smart_ui_adapter_completed', qaSnapshot);
@@ -6438,6 +6569,7 @@ export default function ExploreTripBuilderScreen() {
               emitSmartResupplyQaCountSnapshot('smart_evaluation_completed', qaSnapshot);
             }
             const uiAdaptedCount = commitSmartResupplyFuelOptions(fallbackOptions);
+            if (selectedSmartFuelContextRef.current) setSelectedSmartFuelValidation('incomplete');
             if (qaSnapshot?.evaluationId === evaluationId) {
               qaSnapshot.uiAdaptedCount = uiAdaptedCount;
               emitSmartResupplyQaCountSnapshot('smart_ui_adapter_completed', qaSnapshot);
@@ -6793,26 +6925,82 @@ export default function ExploreTripBuilderScreen() {
     };
   }, [bailoutPlanPreference, tripSetupStarted]);
 
-  const handleSmartResupplyPreference = (preference: SmartResupplyPreference) => {
+  const handleSmartResupplyPreference = async (preference: SmartResupplyPreference) => {
     hapticMicro();
     setSmartResupplyPreference(preference);
     setSelectedSmartFuel(null);
+    selectedSmartFuelContextRef.current = null;
+    setSelectedSmartFuelValidation('invalidated');
     setSelectedSmartSupply(null);
     setSmartResupplyFuelRequest(IDLE_SMART_RESUPPLY_REQUEST);
     setSmartResupplySupplyRequest(IDLE_SMART_RESUPPLY_REQUEST);
+    try {
+      await updateLastTripBuilderPlanState({
+        ...lastTripBuilderPlanState,
+        selectedRouteId,
+        selectedResupplyStop: null,
+      });
+      setPersistenceError(null);
+    } catch {
+      setPersistenceError('The cleared resupply selection was not saved. Repeat the selection change to retry.');
+    }
   };
 
-  const handleSelectSmartFuel = useCallback((option: SmartResupplyPoi) => {
+  const handleSelectSmartFuel = useCallback(async (option: SmartResupplyPoi) => {
     hapticMicro();
+    if (selectedSmartFuel && sameSmartResupplyPhysicalPlace(selectedSmartFuel, option)) {
+      setSelectedSmartFuel(null);
+      setSelectedSmartSupply(null);
+      selectedSmartFuelContextRef.current = null;
+      setSelectedSmartFuelValidation('invalidated');
+      try {
+        await updateLastTripBuilderPlanState({
+          ...lastTripBuilderPlanState,
+          selectedRouteId,
+          selectedResupplyStop: null,
+        });
+        setPersistenceError(null);
+      } catch {
+        setPersistenceError('The cleared fuel selection was not saved. Repeat the selection change to retry.');
+      }
+      return;
+    }
     setSelectedSmartFuel(option);
+    selectedSmartFuelContextRef.current = {
+      routeId: selectedRouteId,
+      approachFingerprint: normalizeSmartResupplySemanticFingerprint(liveApproachRouteFingerprint),
+      category: option.category,
+      physicalIdentity: smartResupplyPhysicalIdentity(option),
+    };
+    setSelectedSmartFuelValidation('verified');
     setSelectedSmartSupply(null);
     setSmartResupplySupplyRequest(IDLE_SMART_RESUPPLY_REQUEST);
-  }, []);
+    try {
+      await updateLastTripBuilderPlanState({
+        ...lastTripBuilderPlanState,
+        selectedRouteId,
+        selectedResupplyStop: smartResupplyPointForPlan(option),
+      });
+      setPersistenceError(null);
+    } catch {
+      setPersistenceError('The selected fuel stop remains selected in this session but was not saved. Select it again to retry.');
+    }
+  }, [liveApproachRouteFingerprint, selectedRouteId, selectedSmartFuel]);
 
-  const handleSelectSmartSupply = useCallback((option: SmartResupplyPoi) => {
+  const handleSelectSmartSupply = useCallback(async (option: SmartResupplyPoi) => {
     hapticMicro();
     setSelectedSmartSupply(option);
-  }, []);
+    try {
+      await updateLastTripBuilderPlanState({
+        ...lastTripBuilderPlanState,
+        selectedRouteId,
+        selectedResupplyStop: smartResupplyPointForPlan(option),
+      });
+      setPersistenceError(null);
+    } catch {
+      setPersistenceError('The selected supply stop remains selected in this session but was not saved. Select it again to retry.');
+    }
+  }, [selectedRouteId]);
 
   const handleRetrySmartResupply = useCallback((kind: SmartResupplySearchKind) => {
     hapticMicro();
@@ -6899,7 +7087,7 @@ export default function ExploreTripBuilderScreen() {
     });
   }, []);
 
-  const selectPlanningRoute = useCallback((routeId: string) => {
+  const selectPlanningRoute = useCallback(async (routeId: string) => {
     hapticMicro();
     const routeForContext = routes.find((route) => String(route.id) === routeId) ?? null;
     latestSelectedPlanningRouteRef.current = routeForContext;
@@ -6932,13 +7120,19 @@ export default function ExploreTripBuilderScreen() {
     planOutputBusyRef.current = null;
     setPlanOutputMessage(null);
     setPlanOutputError(null);
-    updateLastTripBuilderPlanState({
-      selectedRouteId: routeId,
-      plan: null,
-      visible: false,
-      itinerarySaved: false,
-      itineraryEditSession: null,
-    });
+    try {
+      await updateLastTripBuilderPlanState({
+        selectedRouteId: routeId,
+        plan: null,
+        selectedResupplyStop: null,
+        visible: false,
+        itinerarySaved: false,
+        itineraryEditSession: null,
+      });
+      setPersistenceError(null);
+    } catch {
+      setPersistenceError('Selected route remains active in this session but was not saved. Select it again to retry.');
+    }
   }, [routes]);
 
   const handleImportRouteFile = async () => {
@@ -7010,13 +7204,15 @@ export default function ExploreTripBuilderScreen() {
         status: 'success',
         message: `${fileName} parsed. ECS will use the practical route entry and orient the route automatically.`,
       });
-      updateLastTripBuilderPlanState({
+      await updateLastTripBuilderPlanState({
         selectedRouteId: importedRoute.id,
         plan: null,
+        selectedResupplyStop: null,
         visible: false,
         itinerarySaved: false,
         itineraryEditSession: null,
       });
+      setPersistenceError(null);
     } catch (importError) {
       setRouteImportState({
         status: 'error',
@@ -7192,7 +7388,7 @@ export default function ExploreTripBuilderScreen() {
       preparedTripPlanRoadRouteRequestRef.current = null;
       const preparationGeneration = preparedTripPlanRoadRouteGenerationRef.current + 1;
       preparedTripPlanRoadRouteGenerationRef.current = preparationGeneration;
-      setPlanOutputMessage('Trip built. Preparing detailed road guidance for the ordered stops...');
+      setPlanOutputMessage('Securing this trip plan in durable storage...');
       setPlanOutputError(null);
       setPlan(finalizedPlan);
       setPlanModalVisible(true);
@@ -7204,13 +7400,22 @@ export default function ExploreTripBuilderScreen() {
       setInsertState(null);
       setItinerarySaved(false);
       setResupplyOverrides({});
-      updateLastTripBuilderPlanState({
-        selectedRouteId: String(selectedRoute.id),
-        plan: finalizedPlan,
-        visible: true,
-        itinerarySaved: false,
-        itineraryEditSession: null,
-      });
+      try {
+        await updateLastTripBuilderPlanState({
+          selectedRouteId: String(selectedRoute.id),
+          plan: finalizedPlan,
+          selectedResupplyStop: selectedSmartOptions[0] ? smartResupplyPointForPlan(selectedSmartOptions[0]) : null,
+          visible: true,
+          itinerarySaved: false,
+          itineraryEditSession: null,
+        });
+        setPersistenceError(null);
+        setPlanOutputMessage('Trip built. Preparing detailed road guidance for the ordered stops...');
+      } catch {
+        setPlanOutputMessage(null);
+        setPersistenceError('The plan is available in this session but was not saved. Tap Build Trip Plan again to retry.');
+        return;
+      }
       void prepareTripPlanRoadRoute(finalizedPlan).then(() => {
         if (preparedTripPlanRoadRouteGenerationRef.current !== preparationGeneration) return;
         setPlanOutputError(null);
@@ -7259,46 +7464,50 @@ export default function ExploreTripBuilderScreen() {
     setItineraryEditMode(false);
   }, []);
 
-  const handleSaveItineraryEdit = useCallback(() => {
+  const handleSaveItineraryEdit = useCallback(async () => {
     if (!plan) return;
     hapticMicro();
     const nextPlan = updateTripPlanStops(plan, draftItineraryStops);
     const nextTripItineraryEditSession = draftTripItineraryEditSession;
-    preparedTripPlanRoadRouteRef.current = null;
-    preparedTripPlanRoadRouteRequestRef.current = null;
-    planOutputGenerationRef.current += 1;
-    const preparationGeneration = preparedTripPlanRoadRouteGenerationRef.current + 1;
-    preparedTripPlanRoadRouteGenerationRef.current = preparationGeneration;
-    setPlanOutputMessage('Itinerary updated. Road guidance will use this new stop order.');
+    setPlanOutputMessage('Securing itinerary changes in durable storage...');
     setPlanOutputError(null);
-    void prepareTripPlanRoadRoute(nextPlan).then(() => {
-      if (preparedTripPlanRoadRouteGenerationRef.current !== preparationGeneration) return;
-      setPlanOutputError(null);
-      setPlanOutputMessage('Itinerary updated. Detailed road guidance now follows the new stop order.');
-    }).catch((roadRouteError) => {
-      if (preparedTripPlanRoadRouteGenerationRef.current !== preparationGeneration) return;
-      setPlanOutputError(
-        roadRouteError instanceof Error
-          ? roadRouteError.message
-          : 'Detailed road guidance could not be refreshed for this stop order.',
-      );
-    });
     setPlan(nextPlan);
-    setDraftItineraryStops([]);
-    setSavedTripItineraryEditSession(nextTripItineraryEditSession);
-    setDraftTripItineraryEditSession(null);
-    setInsertState(null);
-    setItinerarySearchSuggestions([]);
-    setItinerarySearchError(null);
-    setItineraryEditMode(false);
-    setItinerarySaved(true);
-    updateLastTripBuilderPlanState({
-      selectedRouteId,
-      plan: nextPlan,
-      visible: planModalVisible,
-      itinerarySaved: true,
-      itineraryEditSession: nextTripItineraryEditSession,
-    });
+    try {
+      await updateLastTripBuilderPlanState({
+        selectedRouteId,
+        plan: nextPlan,
+        selectedResupplyStop: lastTripBuilderPlanState.selectedResupplyStop,
+        visible: planModalVisible,
+        itinerarySaved: true,
+        itineraryEditSession: nextTripItineraryEditSession,
+      });
+      preparedTripPlanRoadRouteRef.current = null;
+      preparedTripPlanRoadRouteRequestRef.current = null;
+      planOutputGenerationRef.current += 1;
+      const preparationGeneration = preparedTripPlanRoadRouteGenerationRef.current + 1;
+      preparedTripPlanRoadRouteGenerationRef.current = preparationGeneration;
+      setPlanOutputMessage('Itinerary updated. Road guidance will use this new stop order.');
+      void prepareTripPlanRoadRoute(nextPlan).then(() => {
+        if (preparedTripPlanRoadRouteGenerationRef.current !== preparationGeneration) return;
+        setPlanOutputError(null);
+        setPlanOutputMessage('Itinerary updated. Detailed road guidance now follows the new stop order.');
+      }).catch((roadRouteError) => {
+        if (preparedTripPlanRoadRouteGenerationRef.current !== preparationGeneration) return;
+        setPlanOutputError(roadRouteError instanceof Error ? roadRouteError.message : 'Detailed road guidance could not be refreshed for this stop order.');
+      });
+      setDraftItineraryStops([]);
+      setSavedTripItineraryEditSession(nextTripItineraryEditSession);
+      setDraftTripItineraryEditSession(null);
+      setInsertState(null);
+      setItinerarySearchSuggestions([]);
+      setItinerarySearchError(null);
+      setItineraryEditMode(false);
+      setItinerarySaved(true);
+      setPersistenceError(null);
+    } catch {
+      setPlanOutputMessage(null);
+      setPersistenceError('Itinerary changes remain open in this session but were not saved. Tap Save Itinerary again to retry.');
+    }
   }, [
     draftItineraryStops,
     draftTripItineraryEditSession,
@@ -8534,6 +8743,22 @@ export default function ExploreTripBuilderScreen() {
                                 : 'No on-corridor fuel stop was found within 0.20 miles of the driving approach. ECS did not silently widen the limit; verify fuel manually.'}
                             </Text>
                           ) : null}
+                          {showRetainedSmartFuel && selectedSmartFuel ? (
+                            <View testID="trip-builder-smart-resupply-retained-selection">
+                              <SmartResupplyOptionCard
+                                option={selectedSmartFuel}
+                                selected
+                                disabled={false}
+                                markerLabel="SELECTED"
+                                onSelect={handleSelectSmartFuel}
+                              />
+                              <Text style={styles.smartResupplyErrorText} accessibilityRole="alert">
+                                {selectedSmartFuelValidation === 'refreshing'
+                                  ? 'Selected stop retained while live verification refreshes.'
+                                  : 'Selected stop retained. Live provider verification is incomplete; retry when available.'}
+                              </Text>
+                            </View>
+                          ) : null}
                           {smartResupplyFuelOptions.length > 0 ? (
                             <ScrollView
                               style={styles.smartResupplyOptionScroll}
@@ -8900,6 +9125,13 @@ export default function ExploreTripBuilderScreen() {
                   <View style={styles.errorCard}>
                     <Ionicons name="warning-outline" size={14} color="#EF5350" />
                     <Text style={styles.errorText}>{error}</Text>
+                  </View>
+                ) : null}
+
+                {persistenceError ? (
+                  <View style={styles.errorCard} accessibilityRole="alert">
+                    <Ionicons name="save-outline" size={14} color="#EF5350" />
+                    <Text style={styles.errorText}>{persistenceError}</Text>
                   </View>
                 ) : null}
 

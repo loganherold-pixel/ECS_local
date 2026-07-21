@@ -21,7 +21,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { Platform } from 'react-native';
 import { ecsLog } from './ecsLogger';
 import { ensureForegroundLocationPermission } from './locationPermissions';
-import type { ForegroundLocationPermissionState } from './locationPermissions';
+import type { ApplicationLocationPermissionState, ForegroundLocationPermissionState, LocationPrecision } from './locationPermissions';
 
 export interface GPSPosition {
   latitude: number;
@@ -49,6 +49,9 @@ export interface GPSLocationOutput {
   canAskAgain?: boolean | null;
   permissionRequestPending?: boolean;
   requestPermission?: () => Promise<void>;
+  applicationPermissionState?: ApplicationLocationPermissionState;
+  locationPrecision?: LocationPrecision;
+  openLocationSettings?: () => Promise<void>;
 }
 
 export interface GPSLocationOptions {

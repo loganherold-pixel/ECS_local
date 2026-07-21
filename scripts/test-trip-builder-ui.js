@@ -300,7 +300,7 @@ assertIncludes(screen, 'latestSelectedPlanningRouteRef.current = routeForContext
 assertIncludes(screen, 'const routeForSetup = resolvedSelectedRouteDetail;', 'Open Trip Builder must not fall back to an unprepared summary route.');
 assertIncludes(screen, 'buildPreparedTripRoutePreview(routeForSetup)', 'Open Trip Builder should prepare geometry from the route actually used for setup.');
 {
-  const selectRouteStart = screen.indexOf('const selectPlanningRoute = useCallback((routeId: string) => {');
+  const selectRouteStart = screen.indexOf('const selectPlanningRoute = useCallback(async (routeId: string) => {');
   const selectRouteEnd = screen.indexOf('const handleImportRouteFile = async () => {');
   assert(selectRouteStart > -1 && selectRouteEnd > selectRouteStart, 'Route selection source block should be discoverable.');
   const selectRouteBlock = screen.slice(selectRouteStart, selectRouteEnd);

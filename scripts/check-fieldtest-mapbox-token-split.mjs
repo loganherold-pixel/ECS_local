@@ -2,10 +2,29 @@ const args = new Set(process.argv.slice(2));
 
 const requireRuntimeEnv = args.has('--require-runtime-env');
 const requireBuildEnv = args.has('--require-build-env');
+const localPreflight = args.has('--local-preflight');
+const remoteNativeBuild = args.has('--remote-native-build');
+
+if (localPreflight && requireBuildEnv) {
+  console.error('FAIL: Local preflight must not require MAPBOX_DOWNLOADS_TOKEN.');
+  process.exit(1);
+}
+
+if (remoteNativeBuild && process.env.ECS_REQUIRE_MAPBOX_DOWNLOADS_TOKEN !== 'true') {
+  console.log('PASS: Remote Mapbox downloads validation is not required for this build profile.');
+  process.exit(0);
+}
+
+if (remoteNativeBuild && process.env.EAS_BUILD !== 'true') {
+  console.error('FAIL: MAPBOX_DOWNLOADS_TOKEN validation must run on the remote EAS build worker.');
+  process.exit(1);
+}
 
 const runtimeToken = String(process.env.EXPO_PUBLIC_MAPBOX_TOKEN ?? '').trim();
 const runtimeAliasToken = String(process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '').trim();
-const downloadsToken = String(process.env.MAPBOX_DOWNLOADS_TOKEN ?? '').trim();
+const downloadsToken = localPreflight
+  ? ''
+  : String(process.env.MAPBOX_DOWNLOADS_TOKEN ?? '').trim();
 
 function describeTokenShape(token) {
   const value = String(token ?? '').trim();
@@ -47,7 +66,9 @@ if (runtimeAliasToken && !isPublicRuntimeMapboxToken(runtimeAliasToken)) {
   );
 }
 
-if (requireBuildEnv && !downloadsToken) {
+const downloadsSecretRequired = requireBuildEnv || remoteNativeBuild;
+
+if (downloadsSecretRequired && !downloadsToken) {
   errors.push('MAPBOX_DOWNLOADS_TOKEN is required for Android native fieldtest builds.');
 }
 
@@ -64,7 +85,7 @@ if (runtimeToken && downloadsToken && runtimeToken === downloadsToken) {
 console.log('Fieldtest Mapbox token split check');
 console.log(`runtimeTokenShape=${describeTokenShape(runtimeToken)}`);
 console.log(`runtimeAliasTokenShape=${describeTokenShape(runtimeAliasToken)}`);
-console.log(`downloadsTokenShape=${describeTokenShape(downloadsToken)}`);
+console.log(`downloadsTokenState=${downloadsToken ? 'present' : 'missing'}`);
 
 if (errors.length > 0) {
   for (const error of errors) {
