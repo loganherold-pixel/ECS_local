@@ -35,6 +35,7 @@ import { TACTICAL, GOLD_RAIL, ECS, TYPO } from '../../lib/theme';
 import { ECS_SURFACE } from '../../lib/ecsSurfaceTokens';
 import TopoBackground from '../../components/TopoBackground';
 import Header from '../../components/Header';
+import RouteDiscoveryQaIdentity from '../../components/explore/RouteDiscoveryQaIdentity';
 import { ECSSegmentedControl } from '../../components/ECSChip';
 import { ECSSection, ECSSectionBadge, ECSSectionHeader } from '../../components/ECSSurface';
 import {
@@ -66,6 +67,7 @@ import {
 import { useThrottledGPS } from '../../lib/useThrottledGPS';
 import { haversineDistanceMiles } from '../../lib/useGPSLocation';
 import { offlineDiscoveryBridge } from '../../lib/offlineDiscoveryBridge';
+import { getRouteDiscoveryQaRuntime } from '../../lib/explore/routeDiscoveryQaRuntime';
 import {
   type CompatibilityResult,
   type VehicleProfile,
@@ -1044,8 +1046,10 @@ function DiscoverScreenInner() {
     () => ROUTE_CATALOG_PRESET_SEARCH_AREAS.find((area) => area.key === routeCatalogSearchAreaKey) ?? null,
     [routeCatalogSearchAreaKey],
   );
+  const routeDiscoveryQaRuntime = useMemo(() => getRouteDiscoveryQaRuntime(), []);
   const routeCatalogEffectiveSearchArea = useMemo(
     () => {
+      if (routeDiscoveryQaRuntime.enabled) return routeDiscoveryQaRuntime.region;
       if (routeCatalogSelectedSearchArea) return routeCatalogSelectedSearchArea;
       if (!hasGPSFix) return null;
       return {
@@ -1057,7 +1061,7 @@ function DiscoverScreenInner() {
         source: 'live_gps' as const,
       };
     },
-    [hasGPSFix, routeCatalogSelectedSearchArea, userLat, userLng],
+    [hasGPSFix, routeCatalogSelectedSearchArea, routeDiscoveryQaRuntime, userLat, userLng],
   );
   const routeCatalogHasSearchArea = !!routeCatalogEffectiveSearchArea;
   const routeCatalogCurationCoverageNotice = useMemo(() => {
@@ -1094,6 +1098,13 @@ function DiscoverScreenInner() {
         availableFuelRangeMiles: vehicleProfile?.fuel_range_miles,
         availableWaterCapacityGallons: vehicleProfile?.water_capacity_gal,
         locationSource: routeCatalogEffectiveSearchArea ? routeCatalogEffectiveSearchArea.source : 'search_area_required',
+        ...(routeDiscoveryQaRuntime.enabled
+          ? {
+              qaMode: routeDiscoveryQaRuntime.mode,
+              qaRegionId: routeDiscoveryQaRuntime.region.regionId,
+              accessPartition: routeDiscoveryQaRuntime.accessPartition,
+            }
+          : {}),
         ...routeCatalogRefinementCriteria,
       };
     },
@@ -1101,6 +1112,7 @@ function DiscoverScreenInner() {
       activeDistanceRadius,
       routeCatalogEffectiveSearchArea,
       routeCatalogRefinementCriteria,
+      routeDiscoveryQaRuntime,
       vehicleProfile?.fuel_range_miles,
       vehicleProfile?.water_capacity_gal,
       vehicleProfile?.vehicleType,
@@ -4038,6 +4050,7 @@ function DiscoverScreenInner() {
     <TopoBackground>
       <View style={[s.safeContainer, { paddingBottom: dockClearance }]}>
         <Header title="Explore" />
+        <RouteDiscoveryQaIdentity />
 
         <View style={s.explorerBody}>
         <ScrollView style={s.scrollArea} contentContainerStyle={[s.scrollContent, contentFrameStyle]} showsVerticalScrollIndicator={false}>

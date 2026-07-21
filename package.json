@@ -155,6 +155,7 @@
     "test:explore-interaction-performance": "node ./scripts/test-explore-interaction-performance.js",
     "test:explore-client-orchestration-acceptance": "node ./scripts/test-explore-client-orchestration-acceptance.js",
     "test:route-discovery-qa-profile": "node ./scripts/test-route-discovery-qa-profile.js",
+    "test:explore-route-discovery-qa-physical-prerequisites": "node ./scripts/test-explore-route-discovery-qa-physical-prerequisites.js",
     "test:route-catalog-source-restrictions": "node ./scripts/test-route-catalog-source-restrictions.js",
     "test:route-catalog-integration": "node ./scripts/test-route-catalog-integration.js",
     "test:route-catalog-fieldtest-visibility": "node ./scripts/test-explore-route-catalog-fieldtest-visibility.js",

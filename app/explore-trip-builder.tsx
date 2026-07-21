@@ -14,6 +14,7 @@ import * as DocumentPicker from 'expo-document-picker';
 
 import { parseGeoFile, getPrimaryRouteCoordinates } from '../lib/gpxParser';
 import Header from '../components/Header';
+import RouteDiscoveryQaIdentity from '../components/explore/RouteDiscoveryQaIdentity';
 import { ExplorePlanningTabs } from '../components/discover/ExplorePlanningTabs';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 import TopoBackground from '../components/TopoBackground';
@@ -4479,6 +4480,7 @@ export default function ExploreTripBuilderScreen() {
     <TopoBackground>
       <View style={[styles.safeContainer, { paddingBottom: bottomClearance }]}>
         <Header title="Explore" />
+        <RouteDiscoveryQaIdentity />
         <ExplorePlanningTabs activeTab="trip_builder" />
         <View style={styles.bodyFrame}>
           <View

@@ -49,6 +49,8 @@ export type LiveTrailPackCatalogSearchCriteria = {
   recommendationMode?: 'recommendable' | string | null;
   accessPartition?: 'anonymous' | 'authenticated' | string | null;
   contractVersion?: string | null;
+  qaMode?: string | null;
+  qaRegionId?: string | null;
   limit?: number;
 };
 
@@ -506,6 +508,8 @@ export function buildRouteCatalogSearchBody(
     ...(typeof criteria.locationSource === 'string' && criteria.locationSource.trim().length > 0
       ? { locationSource: criteria.locationSource }
       : {}),
+    ...(cleanText(criteria.qaMode) ? { qaMode: criteria.qaMode } : {}),
+    ...(cleanText(criteria.qaRegionId) ? { qaRegionId: criteria.qaRegionId } : {}),
   };
 }
 

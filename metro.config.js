@@ -135,6 +135,18 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
       filePath: path.resolve(__dirname, 'lib/explore/routeDiscoveryQaTransport.disabled.ts'),
     };
   }
+  if (!routeDiscoveryQaEnabled && moduleName.endsWith('routeDiscoveryQaRuntime')) {
+    return {
+      type: 'sourceFile',
+      filePath: path.resolve(__dirname, 'lib/explore/routeDiscoveryQaRuntime.disabled.ts'),
+    };
+  }
+  if (!routeDiscoveryQaEnabled && moduleName.endsWith('RouteDiscoveryQaIdentity')) {
+    return {
+      type: 'sourceFile',
+      filePath: path.resolve(__dirname, 'components/explore/RouteDiscoveryQaIdentity.disabled.tsx'),
+    };
+  }
   return defaultResolveRequest
     ? defaultResolveRequest(context, moduleName, platform)
     : context.resolveRequest(context, moduleName, platform);

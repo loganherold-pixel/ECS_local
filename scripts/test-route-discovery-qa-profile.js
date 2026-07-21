@@ -11,10 +11,10 @@ const {
 } = require(path.join(root, 'lib/explore/routeDiscoveryQaNetworkIsolation.js'));
 
 assert.deepStrictEqual(appConfig.resolveRouteDiscoveryQa('production', {}), {
-  enabled: false, label: null, transportId: null, remoteActivation: false,
+  enabled: false, label: null, transportId: null, regionId: null, remoteActivation: false,
 });
 assert.deepStrictEqual(appConfig.resolveRouteDiscoveryQa('fieldtest', {}), {
-  enabled: false, label: null, transportId: null, remoteActivation: false,
+  enabled: false, label: null, transportId: null, regionId: null, remoteActivation: false,
 });
 assert.throws(
   () => appConfig.resolveRouteDiscoveryQa('production', { EXPO_PUBLIC_ECS_ROUTE_DISCOVERY_QA_TRANSPORT: 'true' }),
@@ -41,6 +41,8 @@ assert.strictEqual(JSON.stringify(qa).includes('SUPABASE_URL'), false);
 assert.strictEqual(JSON.stringify(qa).includes('SUPABASE_ANON_KEY'), false);
 assert.match(metro, /routeDiscoveryQaTransport\.disabled\.ts/);
 assert.match(metro, /moduleName === '\.\/routeDiscoveryQaTransport'/);
+assert.match(metro, /routeDiscoveryQaRuntime\.disabled\.ts/);
+assert.match(metro, /RouteDiscoveryQaIdentity\.disabled\.tsx/);
 
 const isolatedEnv = {
   EXPO_PUBLIC_ECS_BUILD_PROFILE: 'route-discovery-qa',
