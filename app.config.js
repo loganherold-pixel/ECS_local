@@ -1,5 +1,6 @@
 const { execSync } = require('node:child_process');
 const baseConfig = require('./app.json');
+const { applyRouteDiscoveryQaNetworkIsolation } = require('./lib/explore/routeDiscoveryQaNetworkIsolation');
 
 function readGitValue(command) {
   try {
@@ -81,6 +82,7 @@ function resolveRouteDiscoveryQa(profile, env = process.env) {
 }
 
 module.exports = () => {
+  const supabaseNetworkDisabled = applyRouteDiscoveryQaNetworkIsolation(process.env);
   const expo = JSON.parse(JSON.stringify(baseConfig.expo));
   const profile = resolveProfile();
   const routeDiscoveryQa = resolveRouteDiscoveryQa(profile);
@@ -99,7 +101,7 @@ module.exports = () => {
   expo.extra = {
     ...(expo.extra ?? {}),
     buildFingerprint: buildFingerprint(profile),
-    routeDiscoveryQa,
+    routeDiscoveryQa: { ...routeDiscoveryQa, supabaseNetworkDisabled },
   };
 
   return expo;

@@ -1,5 +1,8 @@
 const path = require('path');
 const appConfig = require('./app.json');
+const { applyRouteDiscoveryQaNetworkIsolation } = require('./lib/explore/routeDiscoveryQaNetworkIsolation');
+
+applyRouteDiscoveryQaNetworkIsolation(process.env);
 
 if (process.platform === 'win32') {
   const spawnAsyncPath = require.resolve('@expo/spawn-async');

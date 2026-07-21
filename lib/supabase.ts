@@ -11,8 +11,15 @@ import { createPersistedKeyValueCache } from "./keyValuePersistence";
  * When credentials are missing we expose a no-op client so imports stay safe,
  * but cloud-backed features are treated as unavailable.
  */
-const url = process.env.EXPO_PUBLIC_SUPABASE_URL?.trim() || "";
-const anon = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY?.trim() || "";
+export const isRouteDiscoveryQaNetworkDisabled =
+  process.env.EXPO_PUBLIC_ECS_BUILD_PROFILE === "route-discovery-qa" &&
+  process.env.EXPO_PUBLIC_ECS_ROUTE_DISCOVERY_QA_TRANSPORT === "true" &&
+  process.env.EXPO_PUBLIC_ECS_SUPABASE_NETWORK_DISABLED === "true";
+const url = isRouteDiscoveryQaNetworkDisabled ? "" : process.env.EXPO_PUBLIC_SUPABASE_URL?.trim() || "";
+const anon = isRouteDiscoveryQaNetworkDisabled ? "" : process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY?.trim() || "";
+const unavailableMessage = isRouteDiscoveryQaNetworkDisabled
+  ? "Unavailable in the network-disabled route-discovery QA build"
+  : "Supabase not configured";
 
 const DEPLOYED_EDGE_FUNCTIONS = new Set([
   "auth-handler",
@@ -136,7 +143,7 @@ function createSafeClient(): SupabaseClient {
   );
 
   const noopError = {
-    message: "Supabase not configured",
+    message: unavailableMessage,
     details: "",
     hint: "",
     code: SUPABASE_CONFIG_UNAVAILABLE_CODE,
@@ -193,7 +200,7 @@ function createSafeClient(): SupabaseClient {
       Promise.resolve({
         data: null,
         error: {
-          message: "Supabase not configured",
+          message: unavailableMessage,
           code: SUPABASE_CONFIG_UNAVAILABLE_CODE,
           missing: missingSupabaseEnv,
         },
@@ -239,6 +246,7 @@ export function getSupabaseConfigurationDiagnostics() {
     urlPresent: Boolean(url),
     anonKeyPresent: Boolean(anon),
     missingEnvironmentVariables: [...missingSupabaseEnv],
+    networkDisabledForRouteDiscoveryQa: isRouteDiscoveryQaNetworkDisabled,
   };
 }
 
