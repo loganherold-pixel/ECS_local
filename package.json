@@ -156,6 +156,7 @@
     "test:explore-native-diagnostic-bridge": "node ./scripts/test-explore-native-diagnostic-bridge.js",
     "test:explore-client-orchestration-acceptance": "node ./scripts/test-explore-client-orchestration-acceptance.js",
     "test:route-discovery-qa-profile": "node ./scripts/test-route-discovery-qa-profile.js",
+    "test:route-discovery-qa-vehicle-bootstrap": "node ./scripts/test-route-discovery-qa-vehicle-bootstrap.js",
     "test:explore-route-discovery-qa-physical-prerequisites": "node ./scripts/test-explore-route-discovery-qa-physical-prerequisites.js",
     "test:route-catalog-source-restrictions": "node ./scripts/test-route-catalog-source-restrictions.js",
     "test:route-catalog-integration": "node ./scripts/test-route-catalog-integration.js",

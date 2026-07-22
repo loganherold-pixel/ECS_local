@@ -164,7 +164,7 @@ async function fullPipeline(overrides = {}) {
     ),
     'viewport exclusion must be exercised by the controlled 500-mile fixture',
   );
-  for (const copy of ['ROUTE DISCOVERY QA', 'LOCAL SYNTHETIC FIXTURES', 'SUPABASE DISABLED']) assert.ok(identitySource.includes(copy));
+  for (const copy of ['ROUTE DISCOVERY QA', 'LOCAL SYNTHETIC FIXTURES', 'QA SYNTHETIC VEHICLE', 'SUPABASE DISABLED']) assert.ok(identitySource.includes(copy));
   assert.ok(identitySource.includes('accessibilityLabel='));
   assert.ok(discoverSource.includes("recordExplorePerformanceEvent('availability_classification_complete'") && discoverSource.includes("recordExplorePerformanceEvent('visible_card_projection_complete'") && discoverSource.includes("recordExplorePerformanceEvent('list_commit_complete'"), '28: full pipeline diagnostics and existing strict-cap/performance gates remain wired');
 

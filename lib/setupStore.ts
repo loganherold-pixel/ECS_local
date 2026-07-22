@@ -8,7 +8,9 @@ import { createPersistedKeyValueCache } from './keyValuePersistence';
 import { vehicleStore } from './vehicleStore';
 import { vehicleSpecStore } from './vehicleSpecStore';
 
-const cache = createPersistedKeyValueCache('ecs_setup_state');
+const cache = createPersistedKeyValueCache('ecs_setup_state', {
+  partitionByBuildProfile: true,
+});
 
 const SETUP_COMPLETE_KEY = 'ecs_setup_complete';
 const SETUP_VEHICLE_ID_KEY = 'ecs_setup_vehicle_id';

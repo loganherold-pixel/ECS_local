@@ -9,7 +9,9 @@
  */
 import { createPersistedKeyValueCache } from './keyValuePersistence';
 
-const cache = createPersistedKeyValueCache('ecs_vehicle_setup_state');
+const cache = createPersistedKeyValueCache('ecs_vehicle_setup_state', {
+  partitionByBuildProfile: true,
+});
 
 function read(key: string): string | null {
   return cache.get(key);

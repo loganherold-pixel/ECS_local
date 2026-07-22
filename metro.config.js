@@ -147,6 +147,18 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
       filePath: path.resolve(__dirname, 'components/explore/RouteDiscoveryQaIdentity.disabled.tsx'),
     };
   }
+  if (!routeDiscoveryQaEnabled && moduleName.endsWith('routeDiscoveryQaVehicleBootstrap')) {
+    return {
+      type: 'sourceFile',
+      filePath: path.resolve(__dirname, 'lib/explore/routeDiscoveryQaVehicleBootstrap.disabled.ts'),
+    };
+  }
+  if (!routeDiscoveryQaEnabled && moduleName.endsWith('RouteDiscoveryQaVehicleBootstrapGate')) {
+    return {
+      type: 'sourceFile',
+      filePath: path.resolve(__dirname, 'components/explore/RouteDiscoveryQaVehicleBootstrapGate.disabled.tsx'),
+    };
+  }
   return defaultResolveRequest
     ? defaultResolveRequest(context, moduleName, platform)
     : context.resolveRequest(context, moduleName, platform);

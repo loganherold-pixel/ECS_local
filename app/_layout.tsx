@@ -20,6 +20,7 @@ import AuthBrandLockup from '../components/login/AuthBrandLockup';
 import ShellBodyBackground from '../components/ShellBodyBackground';
 import LoadingTransitionVideo from '../components/LoadingTransitionVideo';
 import RouteDiscoveryQaIdentity from '../components/explore/RouteDiscoveryQaIdentity';
+import RouteDiscoveryQaVehicleBootstrapGate from '../components/explore/RouteDiscoveryQaVehicleBootstrapGate';
 
 import { AppProvider, useApp } from '../context/AppContext';
 import { ThemeProvider, useTheme } from '../context/ThemeContext';
@@ -2321,14 +2322,16 @@ export default function RootLayout() {
 
   return (
     <View style={styles.rootStartupFrame}>
-      <AppProvider>
-        <ThemeProvider>
-          <View style={styles.rootStartupFrame}>
-            <RouteDiscoveryQaIdentity />
-            <AuthGate />
-          </View>
-        </ThemeProvider>
-      </AppProvider>
+      <RouteDiscoveryQaIdentity />
+      <RouteDiscoveryQaVehicleBootstrapGate>
+        <AppProvider>
+          <ThemeProvider>
+            <View style={styles.rootStartupFrame}>
+              <AuthGate />
+            </View>
+          </ThemeProvider>
+        </AppProvider>
+      </RouteDiscoveryQaVehicleBootstrapGate>
     </View>
   );
 }

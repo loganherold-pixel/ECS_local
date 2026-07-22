@@ -43,6 +43,8 @@ assert.match(metro, /routeDiscoveryQaTransport\.disabled\.ts/);
 assert.match(metro, /moduleName === '\.\/routeDiscoveryQaTransport'/);
 assert.match(metro, /routeDiscoveryQaRuntime\.disabled\.ts/);
 assert.match(metro, /RouteDiscoveryQaIdentity\.disabled\.tsx/);
+assert.match(metro, /routeDiscoveryQaVehicleBootstrap\.disabled\.ts/);
+assert.match(metro, /RouteDiscoveryQaVehicleBootstrapGate\.disabled\.tsx/);
 
 const isolatedEnv = {
   EXPO_PUBLIC_ECS_BUILD_PROFILE: 'route-discovery-qa',

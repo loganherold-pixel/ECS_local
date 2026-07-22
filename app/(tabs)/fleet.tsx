@@ -102,6 +102,7 @@ import {
 import {
   selectFleetVehicleStateFromRecord,
 } from '../../lib/fleet/fleetVehicleStateSelectors';
+import { shouldOpenFleetFirstVehicleSetup } from '../../lib/fleet/fleetFirstVehicleSetup';
 import { emitFleetTelemetryEvent } from '../../lib/fleet/fleetTelemetryEvents';
 import {
   getFleetPremiumRolloutDisabledCopy,
@@ -2328,8 +2329,13 @@ function FleetScreenInner() {
   ]);
 
   useEffect(() => {
-    if (loading || authLoading || vehicles.length > 0 || profileModalVisible) return;
-    if (firstRunVccSetupOpenedRef.current) return;
+    if (!shouldOpenFleetFirstVehicleSetup({
+      loading,
+      authLoading,
+      vehicleCount: vehicles.length,
+      profileModalVisible,
+      alreadyOpened: firstRunVccSetupOpenedRef.current,
+    })) return;
 
     firstRunVccSetupOpenedRef.current = true;
     closeFleetDetailFlows();
