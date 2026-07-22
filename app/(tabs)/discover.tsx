@@ -157,7 +157,10 @@ import {
   ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE,
   ECS_ROUTE_SEARCH_RESULT_LIMIT,
 } from '../../lib/explore/routeSearchResultPolicy';
-import { recordExplorePerformanceEvent } from '../../lib/explore/explorePerformance';
+import {
+  isInternalExploreDiagnosticsEnabled,
+  recordExplorePerformanceEvent,
+} from '../../lib/explore/explorePerformance';
 import { dispatchSummaryFirstTripBuilderNavigation } from '../../lib/explore/routeSummaryNavigation';
 import { runAfterShellInteractions } from '../../lib/shellInteractionScheduler';
 import {
@@ -1505,6 +1508,7 @@ function DiscoverScreenInner() {
 
   const handleRadiusChange = useCallback((radius: DistanceRadius | null) => {
     hapticMicro();
+    recordExplorePerformanceEvent('explore_radius_tap_received');
     recordExplorePerformanceEvent('explore_control_tap_received');
     pendingExploreControlAckRef.current = true;
     setDistanceRadius(radius);
@@ -1518,6 +1522,7 @@ function DiscoverScreenInner() {
 
   const handleExploreRefinementChange = useCallback((refinement: ExploreRefinementFilter | null) => {
     hapticMicro();
+    recordExplorePerformanceEvent('explore_refinement_tap_received');
     recordExplorePerformanceEvent('explore_control_tap_received');
     pendingExploreControlAckRef.current = true;
     setExploreRefinement(refinement);
@@ -3073,26 +3078,29 @@ function DiscoverScreenInner() {
   const visibleRouteCount = visibleExploreWizardProjection.count;
   const showRefinementEmptyState = exploreRefinement != null && visibleRouteCount === 0;
   useEffect(() => {
-    if (!routeDiscoveryQaRuntime.enabled) return;
+    if (!routeDiscoveryQaRuntime.enabled && !isInternalExploreDiagnosticsEnabled()) return;
+    const qaDiagnosticContext = routeDiscoveryQaRuntime.enabled
+      ? { qaRegionId: routeDiscoveryQaRuntime.region.regionId }
+      : {};
     recordExplorePerformanceEvent('availability_classification_complete', {
       inputCount: visibleTrailPacks.length,
       outputCount: exploreWizardCandidateSet.candidates.length,
       resultCount: exploreWizardCandidateSet.candidates.length,
-      qaRegionId: routeDiscoveryQaRuntime.region.regionId,
+      ...qaDiagnosticContext,
       searchFingerprint: liveTrailPackCatalogSnapshot.searchFingerprint ?? undefined,
     });
     recordExplorePerformanceEvent('visible_card_projection_complete', {
       inputCount: exploreWizardCandidateSet.candidates.length,
       outputCount: visibleRouteCount,
       resultCount: visibleRouteCount,
-      qaRegionId: routeDiscoveryQaRuntime.region.regionId,
+      ...qaDiagnosticContext,
       searchFingerprint: liveTrailPackCatalogSnapshot.searchFingerprint ?? undefined,
     });
     recordExplorePerformanceEvent('list_commit_complete', {
       inputCount: visibleRouteCount,
       outputCount: visibleRouteCount,
       resultCount: visibleRouteCount,
-      qaRegionId: routeDiscoveryQaRuntime.region.regionId,
+      ...qaDiagnosticContext,
       searchFingerprint: liveTrailPackCatalogSnapshot.searchFingerprint ?? undefined,
     });
   }, [exploreWizardCandidateSet.candidates.length, liveTrailPackCatalogSnapshot.searchFingerprint, routeDiscoveryQaRuntime, visibleRouteCount, visibleTrailPacks.length]);
@@ -3741,6 +3749,7 @@ function DiscoverScreenInner() {
 
   const handleOpenExplorerCategoryPanel = useCallback((category: ExplorerCategoryPanelKey) => {
     hapticMicro();
+    recordExplorePerformanceEvent('explore_category_tap_received');
     recordExplorePerformanceEvent('explore_control_tap_received');
     pendingExploreControlAckRef.current = true;
     setActiveExplorerCategoryPanel(category);

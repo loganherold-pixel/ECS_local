@@ -33,6 +33,7 @@
         "EXPO_NO_TELEMETRY": "1",
         "EXPO_PUBLIC_ECS_FIELD_TEST_BUILD": "true",
         "EXPO_PUBLIC_ECS_BUILD_PROFILE": "fieldtest",
+        "EXPO_PUBLIC_ECS_INTERNAL_DIAGNOSTICS": "true",
         "EXPO_PUBLIC_ECS_DISPERSED_CAMPING_LAYER": "true",
         "EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER": "true"
       }
@@ -49,6 +50,7 @@
         "EXPO_NO_TELEMETRY": "1",
         "EXPO_PUBLIC_APP_ENV": "internal-qa",
         "EXPO_PUBLIC_ECS_BUILD_PROFILE": "route-discovery-qa",
+        "EXPO_PUBLIC_ECS_INTERNAL_DIAGNOSTICS": "true",
         "EXPO_PUBLIC_ECS_ROUTE_DISCOVERY_QA_TRANSPORT": "true",
         "EXPO_PUBLIC_ECS_SUPABASE_NETWORK_DISABLED": "true",
         "EXPO_PUBLIC_ECS_FIELD_TEST_BUILD": "false",

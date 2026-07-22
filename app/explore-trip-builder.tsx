@@ -14,6 +14,7 @@ import * as DocumentPicker from 'expo-document-picker';
 
 import { parseGeoFile, getPrimaryRouteCoordinates } from '../lib/gpxParser';
 import Header from '../components/Header';
+import { recordExplorePerformanceEvent } from '../lib/explore/explorePerformance';
 import { ExplorePlanningTabs } from '../components/discover/ExplorePlanningTabs';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 import TopoBackground from '../components/TopoBackground';
@@ -3175,6 +3176,9 @@ export default function ExploreTripBuilderScreen() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    recordExplorePerformanceEvent('explore_trip_builder_mounted');
+  }, []);
   const roadSearchSessionTokenRef = useRef(createRoadSearchSessionToken());
   const smartResupplyFuelOptionsRef = useRef<SmartResupplyPoi[]>([]);
   const smartResupplySupplyOptionsRef = useRef<SmartResupplyPoi[]>([]);

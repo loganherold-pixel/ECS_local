@@ -598,6 +598,8 @@ async function fetchRouteCatalogTrailPacks(criteria: LiveTrailPackCatalogSearchC
 
 export async function fetchRouteCatalogTrailPackDetail(trailPack: ECSTrailPack | string): Promise<ECSTrailPack> {
   const routeId = typeof trailPack === 'string' ? trailPack : trailPack.id;
+  recordExplorePerformanceEvent('route_catalog_detail_request_started');
+  recordExplorePerformanceEvent('route_catalog_full_geometry_request_started');
   const { data, error } = await supabase.functions.invoke('route-catalog-detail', {
     body: {
       id: routeId,

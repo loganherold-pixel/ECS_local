@@ -153,6 +153,7 @@
     "test:route-catalog": "node ./scripts/test-route-catalog.js",
     "test:explore-route-search-result-cap": "node ./scripts/test-explore-route-search-result-cap.js",
     "test:explore-interaction-performance": "node ./scripts/test-explore-interaction-performance.js",
+    "test:explore-native-diagnostic-bridge": "node ./scripts/test-explore-native-diagnostic-bridge.js",
     "test:explore-client-orchestration-acceptance": "node ./scripts/test-explore-client-orchestration-acceptance.js",
     "test:route-discovery-qa-profile": "node ./scripts/test-route-discovery-qa-profile.js",
     "test:explore-route-discovery-qa-physical-prerequisites": "node ./scripts/test-explore-route-discovery-qa-physical-prerequisites.js",

@@ -10,6 +10,12 @@ export type ExplorePerformanceEventName =
   | 'explore_first_route_list_commit'
   | 'explore_route_card_press_received'
   | 'explore_trip_builder_navigation_dispatched'
+  | 'explore_trip_builder_mounted'
+  | 'explore_radius_tap_received'
+  | 'explore_refinement_tap_received'
+  | 'explore_category_tap_received'
+  | 'route_catalog_detail_request_started'
+  | 'route_catalog_full_geometry_request_started'
   | 'explore_search_cancelled'
   | 'explore_stale_result_rejected'
   | 'fixture_records_created'
@@ -41,12 +47,57 @@ export type ExplorePerformanceRecord = {
   qaRegionId?: string;
   radiusCategory?: string;
   exclusionReasonCounts?: Record<string, number>;
+  generation?: number;
+};
+
+export type InternalExploreDiagnosticPayload = {
+  event: ExplorePerformanceEventName;
+  monotonicTimestampMs: number;
+  durationMs?: number;
+  aggregateRouteCount?: number;
+  requestCorrelationHash?: string;
+  cacheHit?: boolean;
+  profile: 'fieldtest' | 'route-discovery-qa';
+  generation: number;
 };
 
 type Clock = () => number;
 let clock: Clock = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 const records: ExplorePerformanceRecord[] = [];
 const MAX_RECORDS = 200;
+let diagnosticGeneration = 0;
+export const INTERNAL_EXPLORE_DIAGNOSTIC_PREFIX = 'ECS_EXPLORE_DIAGNOSTIC ';
+
+export function resolveInternalExploreDiagnosticProfile(
+  env: Record<string, string | undefined> = process.env,
+): InternalExploreDiagnosticPayload['profile'] | null {
+  if (env.EXPO_PUBLIC_ECS_INTERNAL_DIAGNOSTICS !== 'true') return null;
+  if (env.EXPO_PUBLIC_ECS_BUILD_PROFILE === 'fieldtest') return 'fieldtest';
+  if (env.EXPO_PUBLIC_ECS_BUILD_PROFILE === 'route-discovery-qa') return 'route-discovery-qa';
+  return null;
+}
+
+export function isInternalExploreDiagnosticsEnabled(): boolean {
+  return resolveInternalExploreDiagnosticProfile() != null;
+}
+
+function emitInternalExploreDiagnostic(record: ExplorePerformanceRecord): void {
+  const profile = resolveInternalExploreDiagnosticProfile();
+  if (!profile) return;
+  diagnosticGeneration += 1;
+  const aggregateRouteCount = record.resultCount ?? record.outputCount ?? record.inputCount;
+  const payload: InternalExploreDiagnosticPayload = {
+    event: record.event,
+    monotonicTimestampMs: record.atMs,
+    ...(record.durationMs != null ? { durationMs: record.durationMs } : {}),
+    ...(aggregateRouteCount != null ? { aggregateRouteCount } : {}),
+    ...(record.searchFingerprint ? { requestCorrelationHash: record.searchFingerprint } : {}),
+    ...(record.cacheHit != null ? { cacheHit: record.cacheHit } : {}),
+    profile,
+    generation: record.generation ?? diagnosticGeneration,
+  };
+  console.info(`${INTERNAL_EXPLORE_DIAGNOSTIC_PREFIX}${JSON.stringify(payload)}`);
+}
 
 export function recordExplorePerformanceEvent(
   event: ExplorePerformanceEventName,
@@ -55,6 +106,7 @@ export function recordExplorePerformanceEvent(
   const record = { event, atMs: clock(), ...details };
   records.push(record);
   if (records.length > MAX_RECORDS) records.splice(0, records.length - MAX_RECORDS);
+  emitInternalExploreDiagnostic(record);
   return record;
 }
 
@@ -64,6 +116,7 @@ export function getExplorePerformanceRecords(): ExplorePerformanceRecord[] {
 
 export function resetExplorePerformanceRecords(): void {
   records.length = 0;
+  diagnosticGeneration = 0;
 }
 
 export function setExplorePerformanceClockForTests(nextClock: Clock | null): void {
