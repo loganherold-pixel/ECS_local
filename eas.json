@@ -6,7 +6,10 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "ECS_ANDROID_APPLICATION_ID": "com.expeditioncommand.planningofflinesync.development"
+      }
     },
     "preview": {
       "distribution": "internal",
@@ -17,6 +20,7 @@
       },
       "env": {
         "EXPO_NO_TELEMETRY": "1",
+        "ECS_ANDROID_APPLICATION_ID": "com.expeditioncommand.planningofflinesync.preview",
         "EXPO_PUBLIC_ECS_DISPERSED_CAMPING_LAYER": "true",
         "EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER": "true",
         "EXPO_PUBLIC_ECS_ROUTE_GEOMETRY_VIEWPORT_OVERLAY": "true"
@@ -27,6 +31,7 @@
       "environment": "preview",
       "channel": "fieldtest",
       "autoIncrement": true,
+      "credentialsSource": "remote",
       "android": {
         "buildType": "apk"
       },
@@ -35,6 +40,18 @@
         "EXPO_PUBLIC_APP_ENV": "internal",
         "EXPO_PUBLIC_ECS_FIELD_TEST_BUILD": "true",
         "EXPO_PUBLIC_ECS_BUILD_PROFILE": "fieldtest",
+        "ECS_PROVIDER_MODE": "live",
+        "ECS_QA_FIXTURES_ENABLED": "false",
+        "ECS_DETERMINISTIC_PROVIDER_TRANSPORT": "false",
+        "EXPO_PUBLIC_ECS_ROUTE_DISCOVERY_QA_TRANSPORT": "false",
+        "ECS_SCOPE_B_QA_ACCEPTANCE_BUILD": "0",
+        "ECS_QA_ACCEPTANCE_OVERLAY_ENABLED": "false",
+        "ECS_SUPPORT_DIAGNOSTICS_ENABLED": "0",
+        "ECS_SUPPORT_DIAGNOSTICS_APPROVED": "0",
+        "ECS_INTERNAL_DIAGNOSTICS_ENABLED": "0",
+        "ECS_UPDATES_POLICY": "disabled",
+        "ECS_PRODUCTION_SIGNING_POLICY": "approved-remote",
+        "ECS_PRODUCTION_SIGNING_CERT_SHA256": "C564902A06F8440845BF4D63D59ADC64950B1B60B13187E2DF77E9115BE0FB5B",
         "ECS_REQUIRE_MAPBOX_DOWNLOADS_TOKEN": "true",
         "EXPO_PUBLIC_ECS_MISSION_COMMAND": "true",
         "EXPO_PUBLIC_ECS_DISPERSED_CAMPING_LAYER": "true",
@@ -51,6 +68,7 @@
       },
       "env": {
         "EXPO_NO_TELEMETRY": "1",
+        "ECS_ANDROID_APPLICATION_ID": "com.expeditioncommand.planningofflinesync.campopspreview",
         "EXPO_PUBLIC_ECS_DISPERSED_CAMPING_LAYER": "true",
         "EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER": "true",
         "EXPO_PUBLIC_ECS_ROUTE_GEOMETRY_VIEWPORT_OVERLAY": "true"
@@ -59,12 +77,25 @@
     "production": {
       "environment": "production",
       "autoIncrement": true,
+      "credentialsSource": "remote",
       "android": {
         "buildType": "app-bundle"
       },
       "env": {
         "EXPO_NO_TELEMETRY": "1",
         "EXPO_PUBLIC_APP_ENV": "production",
+        "ECS_PROVIDER_MODE": "live",
+        "ECS_QA_FIXTURES_ENABLED": "false",
+        "ECS_DETERMINISTIC_PROVIDER_TRANSPORT": "false",
+        "EXPO_PUBLIC_ECS_ROUTE_DISCOVERY_QA_TRANSPORT": "false",
+        "ECS_SCOPE_B_QA_ACCEPTANCE_BUILD": "0",
+        "ECS_QA_ACCEPTANCE_OVERLAY_ENABLED": "false",
+        "ECS_SUPPORT_DIAGNOSTICS_ENABLED": "0",
+        "ECS_SUPPORT_DIAGNOSTICS_APPROVED": "0",
+        "ECS_INTERNAL_DIAGNOSTICS_ENABLED": "0",
+        "ECS_UPDATES_POLICY": "disabled",
+        "ECS_PRODUCTION_SIGNING_POLICY": "approved-remote",
+        "ECS_PRODUCTION_SIGNING_CERT_SHA256": "C564902A06F8440845BF4D63D59ADC64950B1B60B13187E2DF77E9115BE0FB5B",
         "EXPO_PUBLIC_ECS_MISSION_COMMAND": "false",
         "ECS_REQUIRE_MAPBOX_DOWNLOADS_TOKEN": "true",
         "EXPO_PUBLIC_ECS_ROUTE_GEOMETRY_VIEWPORT_OVERLAY": "true"

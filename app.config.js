@@ -1,5 +1,12 @@
 const { execSync } = require('node:child_process');
 const baseConfig = require('./app.json');
+const easConfig = require('./eas.json');
+const {
+  applyUpdatesPolicy,
+  assertSourceBuildPolicy,
+  resolveAndroidApplicationId,
+  resolveEasBuildProfile,
+} = require('./scripts/build-profile-policy.cjs');
 
 function readGitValue(command) {
   try {
@@ -118,6 +125,14 @@ function buildFingerprint(profile) {
   };
 }
 
+function shouldValidateBuildProfile() {
+  return Boolean(firstNonEmpty(
+    process.env.ECS_BUILD_PROFILE,
+    process.env.EAS_BUILD_PROFILE,
+    process.env.EXPO_PUBLIC_ECS_BUILD_PROFILE,
+  )) || process.env.EAS_BUILD === 'true';
+}
+
 function resolveScopeBSmartResupplyQaAcceptance(profile, env = process.env) {
   const requestedFixture = firstNonEmpty(env.EXPO_PUBLIC_ECS_QA_SMART_RESUPPLY_PROVIDER_FIXTURE);
   const authorized =
@@ -149,10 +164,16 @@ function resolveScopeBSmartResupplyQaAcceptance(profile, env = process.env) {
 function createExpoConfig() {
   const expo = JSON.parse(JSON.stringify(baseConfig.expo));
   const profile = resolveProfile();
+  const sourceProfile = resolveEasBuildProfile(easConfig, profile) ?? {};
+  const buildPolicyEnv = {
+    ...(sourceProfile.env ?? {}),
+    ...(sourceProfile.android?.env ?? {}),
+    ...process.env,
+  };
   assertFieldtestRuntimeMapboxToken(profile);
   const scopeBSmartResupplyQa = resolveScopeBSmartResupplyQaAcceptance(profile);
 
-  const updates = { ...(expo.updates ?? {}) };
+  let updates = applyUpdatesPolicy(expo.updates, buildPolicyEnv.ECS_UPDATES_POLICY);
 
   if (
     profile === 'fieldtest' ||
@@ -163,12 +184,26 @@ function createExpoConfig() {
     updates.checkAutomatically = 'NEVER';
   }
 
+  expo.android = {
+    ...(expo.android ?? {}),
+    package: resolveAndroidApplicationId(expo.android?.package, buildPolicyEnv),
+  };
   expo.updates = updates;
   expo.extra = {
     ...(expo.extra ?? {}),
     buildFingerprint: buildFingerprint(profile),
     scopeBSmartResupplyQa,
   };
+
+  if (shouldValidateBuildProfile()) {
+    assertSourceBuildPolicy({
+      applicationId: expo.android.package,
+      profileName: profile,
+      env: buildPolicyEnv,
+      sourceProfile,
+      updates: expo.updates,
+    });
+  }
 
   return expo;
 }

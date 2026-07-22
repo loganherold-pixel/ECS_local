@@ -3,6 +3,8 @@ apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
+def ecsAndroidApplicationId =
+    System.getenv("ECS_ANDROID_APPLICATION_ID") ?: "com.expeditioncommand.planningofflinesync"
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -93,7 +95,8 @@ android {
 
     namespace 'com.expeditioncommand.planningofflinesync'
     defaultConfig {
-        applicationId 'com.expeditioncommand.planningofflinesync'
+        // The Java namespace stays stable; isolated QA/preview profiles override only the install identity.
+        applicationId ecsAndroidApplicationId
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 4

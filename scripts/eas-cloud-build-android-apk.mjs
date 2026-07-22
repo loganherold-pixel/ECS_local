@@ -44,6 +44,30 @@ function resolveEasEnvironmentName(profile) {
   }
 }
 
+function runBuildProfilePolicyGuard(profile) {
+  const result = spawnSync(
+    process.execPath,
+    [path.join(scriptDir, 'check-build-profile-policy.mjs'), '--profile', profile],
+    {
+      cwd: projectRoot,
+      env: {
+        ...process.env,
+        ECS_BUILD_PROFILE: profile,
+      },
+      stdio: 'inherit',
+    },
+  );
+
+  if (result.error) {
+    console.error(`Build-profile policy guard failed to run: ${result.error.message}`);
+    process.exit(1);
+  }
+  if (result.status !== 0) {
+    console.error('EAS build stopped before upload because a build-profile invariant failed.');
+    process.exit(result.status ?? 1);
+  }
+}
+
 function runFieldtestMapboxEnvGuard(profile) {
   if (profile !== "fieldtest") return;
 
@@ -87,6 +111,7 @@ function runFieldtestMapboxEnvGuard(profile) {
 }
 
 const buildProfile = resolveProfileArg(process.argv.slice(2));
+runBuildProfilePolicyGuard(buildProfile);
 runFieldtestMapboxEnvGuard(buildProfile);
 
 const args = [
