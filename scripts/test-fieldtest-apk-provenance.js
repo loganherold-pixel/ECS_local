@@ -55,18 +55,21 @@ assert.strictEqual(
   'Field-test profile should identify itself to runtime config.',
 );
 
-assertIncludes(buildScript, 'resolveProfileArg', 'Cloud APK helper should support selecting the exact EAS profile.');
+assertIncludes(buildScript, 'parseLauncherArgs', 'Cloud APK helper should support selecting the exact EAS profile.');
 assertIncludes(buildScript, 'ECS_BUILD_COMMIT_SHA', 'Cloud APK helper should stamp the commit SHA into the build env.');
 assertIncludes(buildScript, 'ECS_BUILD_TIME', 'Cloud APK helper should stamp a build time into the build env.');
 assertIncludes(buildScript, 'ECS_BUILD_DIRTY', 'Cloud APK helper should stamp dirty state into the build env.');
-assertIncludes(buildScript, '"--clear-cache"', 'Cloud APK helper should always pass --clear-cache.');
-assertIncludes(buildScript, 'ECS_EAS_NO_VCS', 'Cloud APK helper should make no-VCS mode an explicit opt-in.');
-assertIncludes(buildScript, 'resolveSourceDirtyFlag', 'Cloud APK helper should inspect the source worktree before submission.');
+assertIncludes(buildScript, "'--clear-cache'", 'Cloud APK helper should support --clear-cache.');
+assertIncludes(buildScript, 'resolveEasCliVersion', 'Cloud APK helper should resolve one exact EAS CLI version from eas.json.');
+assertIncludes(buildScript, "'npx.cmd'", 'Cloud APK helper should use the supported Windows npx executable.');
+assertIncludes(buildScript, 'shell: false', 'Cloud APK helper must not invoke EAS through a shell.');
+assertIncludes(buildScript, 'validateReleaseProvenance', 'Cloud APK helper should validate clean local, remote, and PR heads.');
 assertIncludes(buildScript, '--allow-dirty', 'Cloud APK helper should require an explicit override for non-clean development builds.');
 assert.ok(
-  !buildScript.includes('process.env.EAS_NO_VCS || "1"'),
-  'Cloud APK helper must preserve EAS VCS provenance by default.',
+  !buildScript.includes('NODE_OPTIONS') && !buildScript.includes('childProcess.spawn'),
+  'Cloud APK helper must not install EAS or child-process monkey patches.',
 );
+assert.match(easJson.cli.version, /^\d+\.\d+\.\d+$/, 'EAS CLI version should be pinned exactly.');
 assert.strictEqual(
   easJson.build.fieldtest.env.ECS_BUILD_DIRTY,
   'clean',
