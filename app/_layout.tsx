@@ -375,6 +375,8 @@ function AuthGate() {
     operatorInfo,
     accessState,
     offlineMode,
+    freeSessionTransition,
+    markFreeSessionDestinationMounted,
     bootstrapError,
     retryBootstrap,
     signOut,
@@ -445,7 +447,11 @@ function AuthGate() {
   const setupNeedsVehicleRecovery = setupCompletionFlag && !hasConfiguredVehicle;
   const setupComplete = setupCompletionFlag && !setupNeedsVehicleRecovery;
   const hasAuthenticatedUser = !!user;
-  const effectiveOfflineMode = offlineMode || persistedOfflineMode;
+  const committedFreeSession =
+    freeSessionTransition.state === 'state_committed' ||
+    freeSessionTransition.state === 'navigating' ||
+    freeSessionTransition.state === 'destination_mounted';
+  const effectiveOfflineMode = offlineMode || persistedOfflineMode || committedFreeSession;
   const rememberedOfflineAccess =
     effectiveOfflineMode &&
     !hasAuthenticatedUser &&
@@ -475,6 +481,7 @@ function AuthGate() {
   const isResetCompletionScreen =
     normalizedPathname === '/create-access-key' && setupRouteMode !== 'signup';
   const inSetup = normalizedPathname === '/setup';
+
   const accountUx = useMemo(
     () =>
       resolveAccountUx({
@@ -795,6 +802,19 @@ function AuthGate() {
       isAuthRoutePath(normalizedPathname),
     [isResetCompletionScreen, normalizedPathname],
   );
+  useEffect(() => {
+    recordAuthDiagnostic('route_guard_evaluated', {
+      route: normalizedPathname,
+      access_state: committedFreeSession ? freeSessionTransition.state : 'ordinary',
+      metadata: {
+        transitionGeneration: freeSessionTransition.generation,
+        navigationCount: freeSessionTransition.navigationCount,
+      },
+    });
+    if (committedFreeSession && !inAuthScreen && normalizedPathname !== '/') {
+      markFreeSessionDestinationMounted();
+    }
+  }, [committedFreeSession, freeSessionTransition.generation, freeSessionTransition.navigationCount, freeSessionTransition.state, inAuthScreen, markFreeSessionDestinationMounted, normalizedPathname]);
   const inLogin = normalizedPathname === '/login';
   const inProtectedScreen = useMemo(
     () => PROTECTED_SCREENS.some((screen) => normalizedPathname === `/${screen}`),
@@ -1584,6 +1604,15 @@ function AuthGate() {
             }
           }
         }
+        recordAuthDiagnostic('route_guard_redirected', {
+          route: target,
+          result: 'completed',
+          access_state: committedFreeSession ? freeSessionTransition.state : 'ordinary',
+          metadata: {
+            transitionGeneration: freeSessionTransition.generation,
+            navigationCount: freeSessionTransition.navigationCount,
+          },
+        });
         router.replace(toExpoRouterShellTarget(target) as any);
       };
       void run();
@@ -1611,7 +1640,11 @@ function AuthGate() {
       return;
     }
   }, [
+    committedFreeSession,
     effectivePendingRedirect,
+    freeSessionTransition.generation,
+    freeSessionTransition.navigationCount,
+    freeSessionTransition.state,
     redirectTarget,
     router,
     isLoading,

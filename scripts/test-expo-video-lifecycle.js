@@ -59,13 +59,12 @@ assert(
   'LoginHeroBackground should keep the fallback image underneath the video while it loads.',
 );
 assert(
-  loadingTransition.includes('safePlaybackAction') && loadingTransition.includes('clearInterval(cycleTimer)') && loadingTransition.includes('playerOwner.listen'),
-  'LoadingTransitionVideo should guard interval playback calls and clear the interval on unmount.',
+  loadingTransition.includes('safePlaybackAction') && !loadingTransition.includes('setInterval') && loadingTransition.includes('playerOwner.listen'),
+  'LoadingTransitionVideo should rely on loop playback and owned listeners without a replay timer.',
 );
 assert(
-  loadingTransition.indexOf("safePlaybackAction('play');") >= 0 &&
-    loadingTransition.indexOf("safePlaybackAction('play');") < loadingTransition.indexOf('const cycleTimer = setInterval'),
-  'LoadingTransitionVideo should kick playback immediately after VideoView mounts, before the 5 second replay guard.',
+  loadingTransition.indexOf("safePlaybackAction('play');") >= 0,
+  'LoadingTransitionVideo should kick playback immediately after VideoView mounts.',
 );
 assert(
   loadingTransition.includes('const LOADING_FALLBACK') &&

@@ -421,6 +421,7 @@
     "test:vehicle-systems-source-labels": "node ./scripts/test-vehicle-systems-source-labels.js",
     "test:expo-video-lifecycle": "node ./scripts/test-expo-video-lifecycle.js",
     "test:auth-video-transition-lifecycle": "node ./scripts/test-auth-video-transition-lifecycle.js",
+    "test:auth-free-session-transition": "node ./scripts/test-auth-free-session-transition.js",
     "test:remoteness-live-destinations": "node ./scripts/test-remoteness-live-destinations.js",
     "test:full-route-guidance": "node ./scripts/test-full-route-guidance.js",
     "test:route-guidance-copy": "node ./scripts/test-route-guidance-copy.js",

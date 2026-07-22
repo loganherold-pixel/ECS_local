@@ -43,6 +43,7 @@ import { useReducedMotion } from '../lib/ecsAnimations';
 import { ECS, TACTICAL } from '../lib/theme';
 import { EASING, MOTION, PRESS } from '../lib/motion';
 import { useApp } from '../context/AppContext';
+import { recordAuthDiagnostic } from '../lib/auth/authDiagnostics';
 
 const LOGIN_LOGO = require('../assets/images/Expedition Command System Logo.png');
 
@@ -50,8 +51,10 @@ type ScreenMode = 'login' | 'forgot';
 type MessageTone = 'neutral' | 'error' | 'success';
 type FreeEntryTransitionState =
   | 'idle'
-  | 'activating_offline_session'
+  | 'activating'
+  | 'state_committed'
   | 'navigating'
+  | 'destination_mounted'
   | 'failed';
 
 function logAuthDev(...args: unknown[]) {
@@ -97,11 +100,28 @@ export default function LoginScreen() {
     authPhase,
     authNotice,
     consumeAuthNotice,
-    enterOfflineMode,
-    offlineMode,
+    beginFreeSessionTransition,
+    commitFreeSessionTransition,
+    dispatchFreeSessionNavigation,
+    failFreeSessionTransition,
+    freeSessionTransition,
     showToast,
   } = useApp();
   const reducedMotion = useReducedMotion();
+  const freeSessionTransitionRef = useRef(freeSessionTransition);
+  freeSessionTransitionRef.current = freeSessionTransition;
+  useEffect(() => () => {
+    const transition = freeSessionTransitionRef.current;
+    recordAuthDiagnostic('login_route_unmount_started', {
+      route: '/login',
+      access_state: transition.state,
+      metadata: {
+        transitionGeneration: transition.generation,
+        correlationId: transition.correlationId,
+        navigationCount: transition.navigationCount,
+      },
+    });
+  }, []);
   const loginLayout = useMemo(
     () => resolveLoginScreenLayout({
       width,
@@ -133,12 +153,9 @@ export default function LoginScreen() {
   const [statusTone, setStatusTone] = useState<MessageTone>('neutral');
   const [offlineCredentialStatus, setOfflineCredentialStatus] =
     useState<OfflineCredentialStatusSnapshot | null>(null);
-  const [pendingFreeDestination, setPendingFreeDestination] = useState<unknown | null>(null);
   const [freeEntryTransition, setFreeEntryTransition] = useState<FreeEntryTransitionState>('idle');
   const loginCtaRenderedRef = useRef(false);
   const loginSubmitInFlightRef = useRef(false);
-  const freeEntryInFlightRef = useRef(false);
-  const freeEntryNavigationEmittedRef = useRef(false);
 
   const trimmedEmail = email.trim();
   const trimmedResetEmail = resetEmail.trim();
@@ -170,7 +187,7 @@ export default function LoginScreen() {
   }, [loginGuardState]);
   const loginDisabled = loginGuardState.disabled;
   const forgotDisabled = resetLoading || !isOnline || !trimmedResetEmail || !isValidEmail(trimmedResetEmail);
-  const freeEntryBusy = freeEntryTransition === 'activating_offline_session' || freeEntryTransition === 'navigating';
+  const freeEntryBusy = freeEntryTransition !== 'idle' && freeEntryTransition !== 'failed';
   const utilityBusy = loading || resetLoading || exportingLocalData || importingLocalData || freeEntryBusy;
 
   useEffect(() => {
@@ -287,10 +304,9 @@ export default function LoginScreen() {
   }, [router]);
 
   const handleContinueFree = useCallback(() => {
-    if (freeEntryInFlightRef.current) return;
-    freeEntryInFlightRef.current = true;
-    freeEntryNavigationEmittedRef.current = false;
-    setFreeEntryTransition('activating_offline_session');
+    const generation = beginFreeSessionTransition();
+    if (generation === null) return;
+    setFreeEntryTransition('activating');
     setStatusMessage('Preparing your offline workspace…');
     setStatusTone('neutral');
     Keyboard.dismiss();
@@ -320,23 +336,18 @@ export default function LoginScreen() {
         setupComplete,
         needsFreshGuestSetup,
       });
-      setPendingFreeDestination(destination);
-      enterOfflineMode();
+      if (!commitFreeSessionTransition(generation)) throw new Error('Free session commit rejected');
+      setFreeEntryTransition('state_committed');
+      if (!dispatchFreeSessionNavigation(generation)) throw new Error('Free session navigation rejected');
+      setFreeEntryTransition('navigating');
+      router.replace(destination as any);
     } catch {
-      freeEntryInFlightRef.current = false;
+      failFreeSessionTransition(generation);
       setFreeEntryTransition('failed');
       setStatusMessage('ECS could not start the offline workspace. Try again.');
       setStatusTone('error');
     }
-  }, [enterOfflineMode]);
-
-  useEffect(() => {
-    if (!offlineMode || !pendingFreeDestination || freeEntryNavigationEmittedRef.current) return;
-    freeEntryNavigationEmittedRef.current = true;
-    setFreeEntryTransition('navigating');
-    router.replace(pendingFreeDestination as any);
-    setPendingFreeDestination(null);
-  }, [offlineMode, pendingFreeDestination, router]);
+  }, [beginFreeSessionTransition, commitFreeSessionTransition, dispatchFreeSessionNavigation, failFreeSessionTransition, router]);
 
   const handleViewPro = useCallback(() => {
     Keyboard.dismiss();
@@ -1119,13 +1130,13 @@ const LoginCard = memo(function LoginCard({
           accessibilityState={{ disabled: utilityBusy, busy: freeEntryTransition !== 'idle' && freeEntryTransition !== 'failed' }}
           testID="auth-continue-free-button"
         >
-          {freeEntryTransition === 'activating_offline_session' || freeEntryTransition === 'navigating' ? (
+          {freeEntryTransition === 'activating' || freeEntryTransition === 'state_committed' || freeEntryTransition === 'navigating' ? (
             <ActivityIndicator size="small" color={TACTICAL.amber} />
           ) : (
             <Ionicons name="phone-portrait-outline" size={14} color={TACTICAL.amber} />
           )}
           <Text style={styles.secondaryButtonTextPrimary}>
-            {freeEntryTransition === 'activating_offline_session'
+            {freeEntryTransition === 'activating' || freeEntryTransition === 'state_committed'
               ? 'Preparing Offline…'
               : freeEntryTransition === 'navigating'
                 ? 'Opening ECS…'

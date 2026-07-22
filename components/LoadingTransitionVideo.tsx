@@ -9,7 +9,6 @@ import { useOwnedVideoPlayer } from '../lib/auth/useOwnedVideoPlayer';
 
 const LOADING_TRANSITION_VIDEO = require('../assets/auth/loading-transition.mp4');
 const LOADING_FALLBACK = require('../assets/attitude/backgrounds/darker-tactical-canyon.png');
-export const LOADING_VIDEO_CYCLE_MS = 5000;
 const STARTUP_LOADING_VIDEO_ENABLED = !(Platform.OS === 'android' && typeof __DEV__ !== 'undefined' && __DEV__);
 
 export default function LoadingTransitionVideo() {
@@ -27,12 +26,12 @@ export default function LoadingTransitionVideo() {
         />
       ) : null}
       <View pointerEvents="none" style={styles.tint} />
-      {!videoReady || videoFailed ? (
-        <View style={styles.loadingFallback} accessibilityRole="progressbar" accessibilityLabel="Preparing ECS offline workspace">
+      <View style={styles.loadingFallback} accessibilityRole="progressbar" accessibilityLabel="Preparing ECS offline workspace">
           <ActivityIndicator size="small" color={TACTICAL.amber} />
           <Text style={styles.loadingLabel}>Preparing your offline workspace…</Text>
-        </View>
-      ) : null}
+          <Text style={styles.navigationIdentity}>ECS / Free Session</Text>
+          {videoFailed ? <Text style={styles.mediaStatus}>Visual transition unavailable. Workspace startup continues.</Text> : null}
+      </View>
       <View pointerEvents="none" style={styles.legalOverlay}>
         <LegalFooter variant="minimal" />
       </View>
@@ -84,14 +83,8 @@ function LoadingTransitionVideoLayer({
     }
     safePlaybackAction('play');
 
-    const cycleTimer = setInterval(() => {
-      safePlaybackAction('replay');
-      safePlaybackAction('play');
-    }, LOADING_VIDEO_CYCLE_MS);
-
     return () => {
       isMountedRef.current = false;
-      clearInterval(cycleTimer);
     };
   }, [markVideoFailed, playerOwner, safePlaybackAction]);
 
@@ -171,6 +164,17 @@ const styles = StyleSheet.create({
     color: '#F2F5F7',
     fontSize: 14,
     fontWeight: '600',
+  },
+  navigationIdentity: {
+    color: TACTICAL.amber,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  mediaStatus: {
+    color: TACTICAL.textMuted,
+    fontSize: 11,
   },
   legalOverlay: {
     position: 'absolute',

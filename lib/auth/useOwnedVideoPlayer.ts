@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { createVideoPlayer, type VideoPlayer, type VideoSource } from 'expo-video';
+import { recordAuthDiagnostic } from './authDiagnostics';
 
 type RemovableSubscription = { remove: () => void };
+let nextVideoOwnerGeneration = 0;
 
 export type OwnedVideoPlayer = {
   player: VideoPlayer;
@@ -17,9 +19,11 @@ export function createOwnedVideoPlayer(
   configure?: (player: VideoPlayer) => void,
 ): OwnedVideoPlayer {
   const player = createVideoPlayer(source);
+  const ownerGeneration = ++nextVideoOwnerGeneration;
   const subscriptions = new Set<RemovableSubscription>();
   let disposed = false;
   let initializationError: unknown | null = null;
+  recordAuthDiagnostic('video_owner_created', { metadata: { videoOwnerGeneration: ownerGeneration } });
   try {
     configure?.(player);
   } catch (error) {
@@ -31,13 +35,24 @@ export function createOwnedVideoPlayer(
     initializationError,
     active: () => !disposed,
     action(operation) {
-      if (disposed) return false;
+      if (disposed) {
+        recordAuthDiagnostic('stale_video_callback_rejected', { metadata: { videoOwnerGeneration: ownerGeneration } });
+        return false;
+      }
       operation(player);
       return true;
     },
     listen(eventName, listener) {
       if (disposed) return { remove: () => undefined };
-      const nativeSubscription = player.addListener(eventName as any, listener as any);
+      const guardedListener = (...args: any[]) => {
+        if (disposed) {
+          recordAuthDiagnostic('stale_video_callback_rejected', { metadata: { videoOwnerGeneration: ownerGeneration } });
+          return;
+        }
+        listener(...args);
+      };
+      const nativeSubscription = player.addListener(eventName as any, guardedListener as any);
+      recordAuthDiagnostic('video_listener_attached', { metadata: { videoOwnerGeneration: ownerGeneration } });
       let removed = false;
       const subscription = {
         remove() {
@@ -45,6 +60,7 @@ export function createOwnedVideoPlayer(
           removed = true;
           subscriptions.delete(subscription);
           nativeSubscription.remove();
+          recordAuthDiagnostic('video_listener_detached', { metadata: { videoOwnerGeneration: ownerGeneration } });
         },
       };
       subscriptions.add(subscription);
@@ -54,10 +70,15 @@ export function createOwnedVideoPlayer(
       if (disposed) return;
       disposed = true;
       for (const subscription of [...subscriptions]) subscription.remove();
+      recordAuthDiagnostic('video_release_started', { metadata: { videoOwnerGeneration: ownerGeneration } });
       try {
-        player.pause();
-      } finally {
         player.release();
+        recordAuthDiagnostic('video_release_completed', { metadata: { videoOwnerGeneration: ownerGeneration } });
+      } catch {
+        recordAuthDiagnostic('transition_failed', {
+          result: 'failure',
+          metadata: { videoOwnerGeneration: ownerGeneration, phase: 'video_release' },
+        });
       }
     },
   };

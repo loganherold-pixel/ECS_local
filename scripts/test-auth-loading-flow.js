@@ -422,30 +422,22 @@ assertIncludes(
   'videoPlayer.loop = true;',
   'The approved loading video should keep looping while dashboard data is not ready.',
 );
+assert.ok(!videoSource.includes('setInterval('), 'Loop playback should not add a timer that can outlive video ownership.');
 assertIncludes(
   videoSource,
-  'export const LOADING_VIDEO_CYCLE_MS = 5000;',
-  'The approved loading video should use the 5 second cycle duration.',
+  "safePlaybackAction('play');",
+  'The approved loading video should start playback immediately after mount.',
 );
 assertIncludes(
   videoSource,
-  "setInterval(() => {\n      safePlaybackAction('replay');\n      safePlaybackAction('play');\n    }, LOADING_VIDEO_CYCLE_MS)",
-  'The approved loading video should replay safely every 5 seconds while mounted.',
-);
-assertIncludes(
-  videoSource,
-  "safePlaybackAction('play');\n\n    const cycleTimer = setInterval(() => {",
-  'The approved loading video should start playback immediately after mount instead of waiting for the replay interval.',
+  'ECS / Free Session',
+  'The loading route must retain a labeled non-video navigation identity.',
 );
 assertIncludes(
   videoSource,
   'if (!isMountedRef.current) return;',
   'The approved loading video should not call player methods after unmount.',
 );
-assertIncludes(
-  videoSource,
-  'clearInterval(cycleTimer);',
-  'The loading video cycle timer should be cleaned up on unmount.',
-);
+assert.ok(!videoSource.includes('cycleTimer'), 'The loading video should not retain an independently owned cycle timer.');
 
 console.log('Auth loading flow regression checks passed.');

@@ -58,9 +58,15 @@ export default function DeprecatedVehicleSetupRedirect() {
   }, [params.mode, params.vehicleId, router]);
 
   return (
-    <View style={styles.container}>
+    <View
+      style={styles.container}
+      accessible
+      accessibilityRole="summary"
+      accessibilityLabel="ECS Free Session destination. Opening Fleet setup."
+    >
       <ActivityIndicator size="small" color={TACTICAL.amber} />
-      <Text style={styles.title}>Opening Fleet</Text>
+      <Text accessibilityRole="header" style={styles.title}>ECS Free Session</Text>
+      <Text style={styles.state}>Opening Fleet setup…</Text>
       <Text style={styles.copy}>
         The retired vehicle setup framework has moved to the current Fleet command center.
       </Text>
@@ -90,5 +96,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     textAlign: 'center',
+  },
+  state: {
+    color: TACTICAL.amber,
+    fontSize: 12,
+    fontWeight: '700',
   },
 });

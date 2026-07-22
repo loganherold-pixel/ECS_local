@@ -35,6 +35,7 @@ new Function('module', 'exports', 'require', compiled.outputText)(
   (id) => {
     if (id === 'react') return { useEffect: () => undefined, useRef: (value) => ({ current: value }) };
     if (id === 'expo-video') return { createVideoPlayer: () => { playerCount += 1; return mockPlayer; } };
+    if (id === './authDiagnostics') return { recordAuthDiagnostic: () => undefined };
     return require(id);
   },
 );
@@ -52,17 +53,17 @@ owner.dispose();
 subscription.remove();
 assert.deepStrictEqual(
   calls,
-  ['play', 'replay', 'remove-listener', 'pause', 'release'],
-  'Cleanup must remove listeners, pause, and release once in ownership order.',
+  ['play', 'replay', 'remove-listener', 'release'],
+  'Cleanup must remove listeners and release once in ownership order.',
 );
 assert.strictEqual(owner.action((player) => player.play()), false, 'No video method may run after release.');
 
 assert.ok(!heroSource.includes('useVideoPlayer'), 'Login hero must not mix hook-owned release with component cleanup.');
 assert.ok(!loadingSource.includes('useVideoPlayer'), 'Loading transition must not mix hook-owned release with component cleanup.');
-assert.ok(loginSource.includes("type FreeEntryTransitionState =\n  | 'idle'\n  | 'activating_offline_session'\n  | 'navigating'\n  | 'failed'"), 'Free entry must expose a finite transition state machine.');
-assert.ok(loginSource.includes('freeEntryInFlightRef.current = true'), 'First free-entry press must synchronously lock duplicate submission.');
-assert.ok(loginSource.includes('freeEntryNavigationEmittedRef.current'), 'Free entry must guard navigation emission.');
-assert.ok(loginSource.includes('setPendingFreeDestination(destination);\n      enterOfflineMode();'), 'Loaded and loading media paths must stage the destination before session mutation.');
+assert.ok(loginSource.includes("| 'state_committed'") && loginSource.includes("| 'destination_mounted'"), 'Free entry must expose the authoritative finite transition state machine.');
+assert.ok(loginSource.includes('beginFreeSessionTransition()'), 'First free-entry press must synchronously claim transition ownership.');
+assert.ok(loginSource.includes('dispatchFreeSessionNavigation(generation)'), 'Free entry must guard navigation emission.');
+assert.ok(loginSource.includes('commitFreeSessionTransition(generation)'), 'Loaded and loading media paths must commit state before navigation.');
 assert.ok(loginSource.includes("setFreeEntryTransition('failed')"), 'Offline activation failures must reach a retryable state.');
 assert.ok(loginSource.includes('Retry Free Entry'), 'Activation failure must remain visibly retryable.');
 assert.ok(loginSource.includes('accessibilityLabel="Continue with Free"'), 'Free entry must have an accessible label.');
@@ -72,6 +73,6 @@ assert.ok(loadingSource.includes('Preparing your offline workspace'), 'The hando
 assert.ok(heroSource.includes('playerOwner.listen') && loadingSource.includes('playerOwner.listen'), 'Late status callbacks must be owned and detached before release.');
 assert.ok(heroSource.includes('AppState.addEventListener'), 'Login media must retain foreground/background handling.');
 assert.ok(loginSource.includes("const handleLogin = useCallback(async"), 'Existing signed-in login behavior must remain present.');
-assert.ok(loginSource.includes('enterOfflineMode();'), 'Network-disabled and ordinary guest entry must retain local offline activation.');
+assert.ok(loginSource.includes('commitFreeSessionTransition(generation)'), 'Network-disabled and ordinary guest entry must retain local offline activation.');
 
 console.log('Auth video transition lifecycle checks passed (16 contract scenarios).');
