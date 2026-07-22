@@ -11,7 +11,23 @@ export type ExplorePerformanceEventName =
   | 'explore_route_card_press_received'
   | 'explore_trip_builder_navigation_dispatched'
   | 'explore_search_cancelled'
-  | 'explore_stale_result_rejected';
+  | 'explore_stale_result_rejected'
+  | 'fixture_records_created'
+  | 'provider_records_normalized'
+  | 'access_filter_complete'
+  | 'moderation_filter_complete'
+  | 'validation_filter_complete'
+  | 'QA_search_region_resolved'
+  | 'radius_filter_complete'
+  | 'viewport_filter_complete'
+  | 'category_filter_complete'
+  | 'refinement_filter_complete'
+  | 'duplicate_filter_complete'
+  | 'ranking_complete'
+  | 'result_cap_complete'
+  | 'availability_classification_complete'
+  | 'visible_card_projection_complete'
+  | 'list_commit_complete';
 
 export type ExplorePerformanceRecord = {
   event: ExplorePerformanceEventName;
@@ -20,6 +36,11 @@ export type ExplorePerformanceRecord = {
   resultCount?: number;
   searchFingerprint?: string;
   cacheHit?: boolean;
+  inputCount?: number;
+  outputCount?: number;
+  qaRegionId?: string;
+  radiusCategory?: string;
+  exclusionReasonCounts?: Record<string, number>;
 };
 
 type Clock = () => number;

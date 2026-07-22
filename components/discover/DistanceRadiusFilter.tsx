@@ -32,12 +32,8 @@ interface DistanceRadiusFilterProps {
   onChangeRadius: (radius: DistanceRadius | null) => void;
   /** Whether user has a real GPS fix (affects label) */
   hasGPSFix: boolean;
-  /** Total opportunities before filtering */
-  totalCount: number;
-  /** Filtered count after radius */
-  filteredCount: number;
-  /** Filtered count after radius plus selected refinement */
-  refinedCount: number;
+  /** Final card-projection count; this is the only public match-count authority. */
+  visibleCount: number;
   selectedRefinement: ExploreRefinementFilter | null;
   refinementCounts: Record<ExploreRefinementFilter, number>;
   onChangeRefinement: (refinement: ExploreRefinementFilter | null) => void;
@@ -49,9 +45,7 @@ export default function DistanceRadiusFilter({
   selectedRadius,
   onChangeRadius,
   hasGPSFix,
-  totalCount,
-  filteredCount,
-  refinedCount,
+  visibleCount,
   selectedRefinement,
   refinementCounts,
   onChangeRefinement,
@@ -64,17 +58,9 @@ export default function DistanceRadiusFilter({
     <ECSSliderField
       label="Filters"
       helper={
-        selectedRefinement
-          ? `Showing ${refinedCount} of ${filteredCount} in-range trails after refinement`
-          : filteredCount < totalCount
-            ? selectedRadius == null
-              ? `Showing ${filteredCount} of ${totalCount} trails across the current range`
-              : `Showing ${filteredCount} of ${totalCount} trails within ${selectedRadius} mi`
-            : hasGPSFix
-              ? 'Using your live location for radius matching.'
-              : 'Using approximate location until GPS improves.'
+        `${visibleCount} visible route${visibleCount === 1 ? '' : 's'} after range, readiness, and refinement filters.`
       }
-      valueLabel={selectedRefinement ? `${refinedCount} MATCHES` : selectedRadius == null ? 'ALL RANGE' : `${selectedRadius} MI`}
+      valueLabel={`${visibleCount} MATCH${visibleCount === 1 ? '' : 'ES'}`}
       style={s.container}
       contentStyle={s.filterContentSurface}
     >
@@ -98,7 +84,7 @@ export default function DistanceRadiusFilter({
           {hasGPSFix && (
             <ECSBadge label="GPS" tone="live" compact />
           )}
-          <ECSBadge label={`${selectedRefinement ? refinedCount : filteredCount}/${totalCount}`} tone="selected" compact />
+          <ECSBadge label={`${visibleCount} VISIBLE`} tone="selected" compact />
         </View>
       </View>
 

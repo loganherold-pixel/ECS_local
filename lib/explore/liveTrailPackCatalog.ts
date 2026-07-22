@@ -51,6 +51,9 @@ export type LiveTrailPackCatalogSearchCriteria = {
   contractVersion?: string | null;
   qaMode?: string | null;
   qaRegionId?: string | null;
+  qaFixtureVersion?: string | null;
+  category?: string | null;
+  refinement?: string | null;
   limit?: number;
 };
 
@@ -389,6 +392,7 @@ export function normalizeLiveTrailPackRecord(value: unknown): ECSTrailPack | nul
   const routeGeometry = normalizeGeometry(record.route_geometry ?? record.routeGeometry);
   const centerCoordinate =
     normalizeCoordinate(record.center_coordinate ?? record.centerCoordinate) ??
+    normalizeCoordinate(record.trailhead_coordinate ?? record.trailheadCoordinate ?? record.trailhead) ??
     (() => {
       const latitude = readNumber(record, 'center_latitude', 'centerLatitude', 'latitude', 'lat');
       const longitude = readNumber(record, 'center_longitude', 'centerLongitude', 'longitude', 'lng', 'lon');
@@ -510,6 +514,9 @@ export function buildRouteCatalogSearchBody(
       : {}),
     ...(cleanText(criteria.qaMode) ? { qaMode: criteria.qaMode } : {}),
     ...(cleanText(criteria.qaRegionId) ? { qaRegionId: criteria.qaRegionId } : {}),
+    ...(cleanText(criteria.qaFixtureVersion) ? { qaFixtureVersion: criteria.qaFixtureVersion } : {}),
+    ...(cleanText(criteria.category) ? { category: criteria.category } : {}),
+    ...(cleanText(criteria.refinement) ? { refinement: criteria.refinement } : {}),
   };
 }
 

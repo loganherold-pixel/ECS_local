@@ -76,8 +76,9 @@ function resolveRouteDiscoveryQa(profile, env = process.env) {
   return {
     enabled,
     label: enabled ? 'ROUTE DISCOVERY QA — SYNTHETIC NON-PRODUCTION' : null,
-    transportId: enabled ? 'route-discovery-qa-v1' : null,
-    regionId: enabled ? 'qa_fixture_region' : null,
+    transportId: enabled ? 'route-discovery-qa-v2' : null,
+    regionId: enabled ? 'qa_synthetic_basin_v2' : null,
+    fixtureVersion: enabled ? 'route-discovery-qa-v2' : null,
     remoteActivation: false,
   };
 }

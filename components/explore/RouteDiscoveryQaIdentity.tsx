@@ -10,12 +10,13 @@ export default function RouteDiscoveryQaIdentity() {
     <View
       style={styles.banner}
       accessibilityRole="summary"
-      accessibilityLabel={`Internal QA build. Local synthetic fixtures. Network-disabled Supabase mode. Profile ${fingerprint.profile}. Commit ${fingerprint.commitShortSha}.`}
+      accessibilityLabel={`Route Discovery QA. Local synthetic fixtures. Supabase disabled. Profile ${fingerprint.profile}. Commit ${fingerprint.commitShortSha}.`}
       testID="route-discovery-qa-identity"
+      pointerEvents="none"
     >
       <Text style={styles.title}>ROUTE DISCOVERY QA</Text>
       <View style={styles.row}>
-        <Text style={styles.badge}>LOCAL FIXTURES</Text>
+        <Text style={styles.badge}>LOCAL SYNTHETIC FIXTURES</Text>
         <Text style={styles.badge}>SUPABASE DISABLED</Text>
       </View>
       <Text style={styles.meta}>PROFILE {fingerprint.profile} · COMMIT {fingerprint.commitShortSha}</Text>

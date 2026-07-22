@@ -19,6 +19,7 @@ import AdaptiveBackground from '../components/login/AdaptiveBackground';
 import AuthBrandLockup from '../components/login/AuthBrandLockup';
 import ShellBodyBackground from '../components/ShellBodyBackground';
 import LoadingTransitionVideo from '../components/LoadingTransitionVideo';
+import RouteDiscoveryQaIdentity from '../components/explore/RouteDiscoveryQaIdentity';
 
 import { AppProvider, useApp } from '../context/AppContext';
 import { ThemeProvider, useTheme } from '../context/ThemeContext';
@@ -2274,7 +2275,10 @@ export default function RootLayout() {
     <View style={styles.rootStartupFrame}>
       <AppProvider>
         <ThemeProvider>
-          <AuthGate />
+          <View style={styles.rootStartupFrame}>
+            <RouteDiscoveryQaIdentity />
+            <AuthGate />
+          </View>
         </ThemeProvider>
       </AppProvider>
     </View>

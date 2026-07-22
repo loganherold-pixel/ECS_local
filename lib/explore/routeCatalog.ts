@@ -831,6 +831,7 @@ export function normalizeRouteCatalogRecord(value: unknown): RouteCatalogRecord 
   const routeGeometry = normalizeGeometry(record.route_geometry ?? record.routeGeometry ?? record.geometry);
   const centerCoordinate =
     normalizeCoordinate(record.center_coordinate ?? record.centerCoordinate) ??
+    normalizeCoordinate(record.trailhead_coordinate ?? record.trailheadCoordinate ?? record.trailhead) ??
     (() => {
       const latitude = readNumber(record, 'center_latitude', 'centerLatitude', 'latitude', 'lat');
       const longitude = readNumber(record, 'center_longitude', 'centerLongitude', 'longitude', 'lng', 'lon');

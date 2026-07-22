@@ -11,14 +11,17 @@ The `route-discovery-qa` EAS profile is an internal-only Android APK profile for
 - The QA profile removes Supabase URL/key variables before Expo configuration and Metro transformation, never calls `createClient`, and reports non-QA cloud features as unavailable.
 - The transport cannot be enabled by user settings, navigation, deep links, server responses, or remote configuration.
 - No Supabase service-role key, production record, private coordinate, device identity, or provider credential is present.
-- The synthetic region is a deterministic lattice near `0, -140`; it is not derived from device or user data.
-- The QA metadata label is `ROUTE DISCOVERY QA — SYNTHETIC NON-PRODUCTION`.
+- The v2 synthetic region is a deterministic land grid centered at `38.5, -115.5`; it is not derived from device or user data and does not represent a real trail catalog.
+- The QA metadata label is `ROUTE DISCOVERY QA — SYNTHETIC NON-PRODUCTION — LOCAL SYNTHETIC FIXTURES` and is mounted above authentication so it remains visible from login through Explore and Trip Builder.
+- Persisted production search filters do not hydrate into this profile, and QA filter changes are not written into the production filter snapshot.
 
 The QA and field-test artifacts retain the same Android application ID. Install them sequentially and record the APK hash, embedded-JS hash, profile, commit, and build fingerprint before each run. Do not invent a second public application identity.
 
 ## Deterministic scenarios
 
-The QA transport provides more than 51 qualifying summaries plus duplicate, pending-review, non-recommendable, restricted-access, and invalid-geometry records. It also supports deterministic delayed-A, provider-failure, and malformed-contract paths. Production normalization and validation select at most 20 unique public recommendations and reject continuation metadata.
+The QA transport provides at least 26 qualifying synthetic summaries inside 100 miles and at least four more outside 100 miles but inside 500 miles. It also includes duplicate-source, pending-review, non-recommendable, restricted-access, missing/swapped-center, missing-geometry, and out-of-region records. Production normalization and validation select the authoritative top 20 unique public recommendations and reject continuation metadata. The radius badge and empty state use the final visible-card projection, so the displayed count cannot diverge from the rendered QA card list.
+
+The transport emits bounded privacy-safe stage diagnostics for fixture creation, provider normalization, access/review/recommendation/verification gates, QA region resolution, radius and viewport filtering, category and refinement filtering, deduplication, ranking, result capping, availability classification, visible-card projection, and list commit. Events contain counts, region identifiers, radius categories, fingerprints, and exclusion-reason counts, but no coordinates or credentials.
 
 Automated acceptance additionally drives controlled deferred transports directly through the production coordinator to prove active-request sharing, fingerprint isolation, stale success/failure ordering, last-good cache preservation, access-partition isolation, suspension/unmount invalidation, one foreground revalidation, malformed-envelope rejection, cap/deduplication, and summary-first navigation ordering.
 
@@ -27,6 +30,7 @@ Automated acceptance additionally drives controlled deferred transports directly
 ```powershell
 npm run test:explore-client-orchestration-acceptance
 npm run test:route-discovery-qa-profile
+npm run test:explore-route-discovery-qa-physical-prerequisites
 npm run android:route-discovery-qa
 ```
 

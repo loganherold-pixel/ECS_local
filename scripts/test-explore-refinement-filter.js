@@ -122,7 +122,8 @@ assert.ok(
     discoverSource.includes('visibleTrailPacks.map((trailPack) => trailPackToExpeditionOpportunity(trailPack))') &&
     discoverSource.includes('const exploreWizardHiddenGemRoutes = useMemo') &&
     discoverSource.includes('visibleHiddenGemRoutes') &&
-    discoverSource.includes('ecsRouteIdeas: visibleAIRoutes') &&
+    discoverSource.includes('ecsRouteIdeas: routeDiscoveryQaRuntime.enabled ? [] : visibleAIRoutes') &&
+    discoverSource.includes('hiddenGemRoutes: routeDiscoveryQaRuntime.enabled ? [] : exploreWizardHiddenGemRoutes') &&
     discoverSource.includes('filteredExploreWizardSavedBuiltRoutes') &&
     discoverSource.includes('filteredExploreWizardImportedStitchedRoutes'),
   'Explore TripBuilder guidance candidates should use the same refined visible route pools instead of broader unfiltered lists.',

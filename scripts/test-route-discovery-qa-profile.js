@@ -11,21 +11,21 @@ const {
 } = require(path.join(root, 'lib/explore/routeDiscoveryQaNetworkIsolation.js'));
 
 assert.deepStrictEqual(appConfig.resolveRouteDiscoveryQa('production', {}), {
-  enabled: false, label: null, transportId: null, regionId: null, remoteActivation: false,
+  enabled: false, label: null, transportId: null, regionId: null, fixtureVersion: null, remoteActivation: false,
 });
 assert.deepStrictEqual(appConfig.resolveRouteDiscoveryQa('fieldtest', {}), {
-  enabled: false, label: null, transportId: null, regionId: null, remoteActivation: false,
+  enabled: false, label: null, transportId: null, regionId: null, fixtureVersion: null, remoteActivation: false,
 });
 assert.throws(
   () => appConfig.resolveRouteDiscoveryQa('production', { EXPO_PUBLIC_ECS_ROUTE_DISCOVERY_QA_TRANSPORT: 'true' }),
   /requires the route-discovery-qa build profile/,
 );
-assert.strictEqual(
-  appConfig.resolveRouteDiscoveryQa('route-discovery-qa', {
+const qaConfig = appConfig.resolveRouteDiscoveryQa('route-discovery-qa', {
     EXPO_PUBLIC_ECS_ROUTE_DISCOVERY_QA_TRANSPORT: 'true',
-  }).enabled,
-  true,
-);
+  });
+assert.strictEqual(qaConfig.enabled, true);
+assert.strictEqual(qaConfig.regionId, 'qa_synthetic_basin_v2');
+assert.strictEqual(qaConfig.fixtureVersion, 'route-discovery-qa-v2');
 
 const qa = eas.build['route-discovery-qa'];
 assert.strictEqual(qa.distribution, 'internal');
@@ -61,5 +61,14 @@ assert.throws(
   }),
   /restricted to the route-discovery-qa build profile/,
 );
+
+const fieldtestEnv = {
+  EXPO_PUBLIC_ECS_BUILD_PROFILE: 'fieldtest',
+  EXPO_PUBLIC_SUPABASE_URL: 'https://fieldtest.supabase.invalid',
+  EXPO_PUBLIC_SUPABASE_ANON_KEY: 'fieldtest-public-key-sentinel',
+};
+assert.strictEqual(applyRouteDiscoveryQaNetworkIsolation(fieldtestEnv), false);
+assert.strictEqual(fieldtestEnv.EXPO_PUBLIC_SUPABASE_URL, 'https://fieldtest.supabase.invalid');
+assert.strictEqual(fieldtestEnv.EXPO_PUBLIC_SUPABASE_ANON_KEY, 'fieldtest-public-key-sentinel');
 
 console.log('Route-discovery QA build-profile isolation checks passed.');
