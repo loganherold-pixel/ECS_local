@@ -60,6 +60,11 @@ assertIncludes(buildScript, 'ECS_BUILD_COMMIT_SHA', 'Cloud APK helper should sta
 assertIncludes(buildScript, 'ECS_BUILD_TIME', 'Cloud APK helper should stamp a build time into the build env.');
 assertIncludes(buildScript, 'ECS_BUILD_DIRTY', 'Cloud APK helper should stamp dirty state into the build env.');
 assertIncludes(buildScript, '"--clear-cache"', 'Cloud APK helper should always pass --clear-cache.');
+assertIncludes(buildScript, 'ECS_EAS_NO_VCS', 'Cloud APK helper should make no-VCS mode an explicit opt-in.');
+assert.ok(
+  !buildScript.includes('process.env.EAS_NO_VCS || "1"'),
+  'Cloud APK helper must preserve EAS VCS provenance by default.',
+);
 
 for (const ignoredPath of [
   'apps/web/.next/',

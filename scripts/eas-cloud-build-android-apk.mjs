@@ -59,7 +59,11 @@ const env = {
 };
 
 if (process.platform === "win32") {
-  env.EAS_NO_VCS = process.env.EAS_NO_VCS || "1";
+  if (process.argv.includes("--no-vcs") || process.env.ECS_EAS_NO_VCS === "1") {
+    env.EAS_NO_VCS = "1";
+  } else {
+    delete env.EAS_NO_VCS;
+  }
   const requireShim = `--require ${shimPath}`;
   env.NODE_OPTIONS = env.NODE_OPTIONS
     ? `${env.NODE_OPTIONS} ${requireShim}`
