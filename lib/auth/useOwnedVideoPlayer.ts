@@ -14,6 +14,14 @@ export type OwnedVideoPlayer = {
   dispose: () => void;
 };
 
+export function isReleasedVideoPlayerError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return (
+    message.includes('UsingReleasedSharedObjectException') ||
+    message.includes('Cannot use shared object that was already released')
+  );
+}
+
 export function createOwnedVideoPlayer(
   source: VideoSource,
   configure?: (player: VideoPlayer) => void,
@@ -71,15 +79,8 @@ export function createOwnedVideoPlayer(
       disposed = true;
       for (const subscription of [...subscriptions]) subscription.remove();
       recordAuthDiagnostic('video_release_started', { metadata: { videoOwnerGeneration: ownerGeneration } });
-      try {
-        player.release();
-        recordAuthDiagnostic('video_release_completed', { metadata: { videoOwnerGeneration: ownerGeneration } });
-      } catch {
-        recordAuthDiagnostic('transition_failed', {
-          result: 'failure',
-          metadata: { videoOwnerGeneration: ownerGeneration, phase: 'video_release' },
-        });
-      }
+      player.release();
+      recordAuthDiagnostic('video_release_completed', { metadata: { videoOwnerGeneration: ownerGeneration } });
     },
   };
 

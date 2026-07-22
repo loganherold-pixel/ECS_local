@@ -5,7 +5,10 @@ import { VideoView } from 'expo-video';
 
 import LegalFooter from './legal/LegalFooter';
 import { TACTICAL } from '../lib/theme';
-import { useOwnedVideoPlayer } from '../lib/auth/useOwnedVideoPlayer';
+import {
+  isReleasedVideoPlayerError,
+  useOwnedVideoPlayer,
+} from '../lib/auth/useOwnedVideoPlayer';
 
 const LOADING_TRANSITION_VIDEO = require('../assets/auth/loading-transition.mp4');
 const LOADING_FALLBACK = require('../assets/attitude/backgrounds/darker-tactical-canyon.png');
@@ -14,6 +17,12 @@ const STARTUP_LOADING_VIDEO_ENABLED = !(Platform.OS === 'android' && typeof __DE
 export default function LoadingTransitionVideo() {
   const [videoFailed, setVideoFailed] = useState(!STARTUP_LOADING_VIDEO_ENABLED);
   const [videoReady, setVideoReady] = useState(false);
+  const handleVideoReady = useCallback(() => {
+    setVideoReady((current) => current || true);
+  }, []);
+  const handleVideoFailed = useCallback(() => {
+    setVideoFailed((current) => current || true);
+  }, []);
 
   return (
     <View style={styles.screen}>
@@ -21,15 +30,18 @@ export default function LoadingTransitionVideo() {
       <Image source={LOADING_FALLBACK} resizeMode="cover" style={styles.fallbackImage} />
       {STARTUP_LOADING_VIDEO_ENABLED ? (
         <LoadingTransitionVideoLayer
-          onReady={() => setVideoReady((current) => current || true)}
-          onFailed={() => setVideoFailed((current) => current || true)}
+          onReady={handleVideoReady}
+          onFailed={handleVideoFailed}
         />
       ) : null}
       <View pointerEvents="none" style={styles.tint} />
       <View style={styles.loadingFallback} accessibilityRole="progressbar" accessibilityLabel="Preparing ECS offline workspace">
           <ActivityIndicator size="small" color={TACTICAL.amber} />
           <Text style={styles.loadingLabel}>Preparing your offline workspace…</Text>
-          <Text style={styles.navigationIdentity}>ECS / Free Session</Text>
+          <Text accessibilityRole="header" style={styles.navigationIdentity}>ECS / Free Session</Text>
+          <Text style={styles.mediaStatus}>
+            {videoReady ? 'Destination route initializing.' : 'Destination shell ready. Initializing route.'}
+          </Text>
           {videoFailed ? <Text style={styles.mediaStatus}>Visual transition unavailable. Workspace startup continues.</Text> : null}
       </View>
       <View pointerEvents="none" style={styles.legalOverlay}>
@@ -47,13 +59,22 @@ function LoadingTransitionVideoLayer({
   onFailed: () => void;
 }) {
   const isMountedRef = useRef(true);
+  const readySignalledRef = useRef(false);
+  const failureSignalledRef = useRef(false);
   const [videoFailed, setVideoFailed] = useState(false);
   const [videoReady, setVideoReady] = useState(false);
   const markVideoFailed = useCallback(() => {
-    if (!isMountedRef.current) return;
+    if (!isMountedRef.current || failureSignalledRef.current) return;
+    failureSignalledRef.current = true;
     setVideoFailed(true);
     onFailed();
   }, [onFailed]);
+  const markVideoReady = useCallback(() => {
+    if (!isMountedRef.current || readySignalledRef.current) return;
+    readySignalledRef.current = true;
+    setVideoReady(true);
+    onReady();
+  }, [onReady]);
   const playerOwner = useOwnedVideoPlayer(LOADING_TRANSITION_VIDEO, (videoPlayer) => {
     videoPlayer.loop = true;
     videoPlayer.muted = true;
@@ -66,7 +87,8 @@ function LoadingTransitionVideoLayer({
       if (!isMountedRef.current || !playerOwner.active()) return;
       try {
         playerOwner.action((ownedPlayer) => ownedPlayer[action]());
-      } catch {
+      } catch (error) {
+        if (isReleasedVideoPlayerError(error)) throw error;
         markVideoFailed();
       }
     },
@@ -92,8 +114,7 @@ function LoadingTransitionVideoLayer({
     const subscription = playerOwner.listen('statusChange', ({ status, error }: any) => {
       if (!isMountedRef.current) return;
       if (status === 'readyToPlay') {
-        setVideoReady((current) => current || true);
-        onReady();
+        markVideoReady();
         safePlaybackAction('play');
         return;
       }
@@ -105,7 +126,7 @@ function LoadingTransitionVideoLayer({
     return () => {
       subscription.remove();
     };
-  }, [markVideoFailed, onReady, playerOwner, safePlaybackAction]);
+  }, [markVideoFailed, markVideoReady, playerOwner, safePlaybackAction]);
 
   return (
     <>
@@ -120,8 +141,7 @@ function LoadingTransitionVideoLayer({
           playsInline
           onFirstFrameRender={() => {
             if (isMountedRef.current) {
-              setVideoReady((current) => current || true);
-              onReady();
+              markVideoReady();
               safePlaybackAction('play');
             }
           }}

@@ -54,6 +54,7 @@ export type AuthDiagnosticEventName =
   | 'free_session_duplicate_press_rejected'
   | 'free_session_activation_started'
   | 'free_session_state_committed'
+  | 'free_session_intentional_sign_in_reset'
   | 'auth_hydration_started'
   | 'auth_hydration_completed'
   | 'auth_hydration_ignored_for_authoritative_free_session'

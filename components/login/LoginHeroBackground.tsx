@@ -4,7 +4,10 @@ import { VideoView } from 'expo-video';
 
 import { useReducedMotion } from '../../lib/ecsAnimations';
 import { ecsLog } from '../../lib/ecsLogger';
-import { useOwnedVideoPlayer } from '../../lib/auth/useOwnedVideoPlayer';
+import {
+  isReleasedVideoPlayerError,
+  useOwnedVideoPlayer,
+} from '../../lib/auth/useOwnedVideoPlayer';
 
 const LOGIN_VIDEO = require('../../assets/login/intro-login-video.mp4');
 const LOGIN_FALLBACK = require('../../assets/attitude/backgrounds/darker-tactical-canyon.png');
@@ -63,6 +66,7 @@ function LoginHeroVideoLayer({ reducedMotion }: { reducedMotion: boolean }) {
       try {
         playerOwner.action((ownedPlayer) => ownedPlayer[action]());
       } catch (error) {
+        if (isReleasedVideoPlayerError(error)) throw error;
         markVideoFailed(error);
       }
     },

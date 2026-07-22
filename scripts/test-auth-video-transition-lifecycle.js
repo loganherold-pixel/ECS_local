@@ -62,7 +62,7 @@ assert.ok(!heroSource.includes('useVideoPlayer'), 'Login hero must not mix hook-
 assert.ok(!loadingSource.includes('useVideoPlayer'), 'Loading transition must not mix hook-owned release with component cleanup.');
 assert.ok(loginSource.includes("| 'state_committed'") && loginSource.includes("| 'destination_mounted'"), 'Free entry must expose the authoritative finite transition state machine.');
 assert.ok(loginSource.includes('beginFreeSessionTransition()'), 'First free-entry press must synchronously claim transition ownership.');
-assert.ok(loginSource.includes('dispatchFreeSessionNavigation(generation)'), 'Free entry must guard navigation emission.');
+assert.ok(loginSource.includes('dispatchFreeSessionNavigation(generation, destinationPath)'), 'Free entry must guard navigation emission.');
 assert.ok(loginSource.includes('commitFreeSessionTransition(generation)'), 'Loaded and loading media paths must commit state before navigation.');
 assert.ok(loginSource.includes("setFreeEntryTransition('failed')"), 'Offline activation failures must reach a retryable state.');
 assert.ok(loginSource.includes('Retry Free Entry'), 'Activation failure must remain visibly retryable.');

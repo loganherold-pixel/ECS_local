@@ -66,6 +66,7 @@ import { resolveAuthLayoutMetrics } from '../lib/auth/authResponsive';
 import { AUTH_SURFACE } from '../lib/auth/authSurface';
 import { AUTH_VISUAL_SPEC } from '../lib/auth/authVisualSpec';
 import { resolveDistributionEntryState } from '../lib/auth/distributionEntryResolver';
+import { createRouteReplacementGuard } from '../lib/auth/routeReplacementGuard';
 import {
   consumeAuthTiming,
   markAuthTimingStart,
@@ -412,6 +413,7 @@ function AuthGate() {
   const routeGuardFallbackRef = useRef<string | null>(null);
   const destinationResolutionRef = useRef<string | null>(null);
   const postAuthLoadingNavigationRef = useRef<string | null>(null);
+  const routeReplacementGuardRef = useRef(createRouteReplacementGuard());
   const legacyFleetSetupRedirectRef = useRef<string | null>(null);
   const degradedMessageRef = useRef<string | null>(null);
 
@@ -452,6 +454,9 @@ function AuthGate() {
     freeSessionTransition.state === 'state_committed' ||
     freeSessionTransition.state === 'navigating' ||
     freeSessionTransition.state === 'destination_mounted';
+  const freeSessionNavigationTarget = committedFreeSession
+    ? freeSessionTransition.navigationTarget
+    : null;
   const effectiveOfflineMode = offlineMode || persistedOfflineMode || committedFreeSession;
   const rememberedOfflineAccess =
     effectiveOfflineMode &&
@@ -812,10 +817,25 @@ function AuthGate() {
         navigationCount: freeSessionTransition.navigationCount,
       },
     });
-    if (committedFreeSession && !inAuthScreen && normalizedPathname !== '/') {
-      markFreeSessionDestinationMounted();
+    if (
+      committedFreeSession &&
+      freeSessionNavigationTarget &&
+      normalizedPathname === freeSessionNavigationTarget
+    ) {
+      markFreeSessionDestinationMounted(
+        normalizedPathname,
+        freeSessionTransition.generation,
+      );
     }
-  }, [committedFreeSession, freeSessionTransition.generation, freeSessionTransition.navigationCount, freeSessionTransition.state, inAuthScreen, markFreeSessionDestinationMounted, normalizedPathname]);
+  }, [
+    committedFreeSession,
+    freeSessionNavigationTarget,
+    freeSessionTransition.generation,
+    freeSessionTransition.navigationCount,
+    freeSessionTransition.state,
+    markFreeSessionDestinationMounted,
+    normalizedPathname,
+  ]);
   const inLogin = normalizedPathname === '/login';
   const inProtectedScreen = useMemo(
     () => PROTECTED_SCREENS.some((screen) => normalizedPathname === `/${screen}`),
@@ -824,7 +844,7 @@ function AuthGate() {
   const accessCheckPending = entitlementResolving && inAuthScreen;
   const shouldShowAccessGate = false;
   const suppressRedirect = false;
-  const restorableShellRoute = getStoredShellRoute();
+  const restorableShellRoute = committedFreeSession ? null : getStoredShellRoute();
   const entryResolution = useMemo(
     () =>
       resolveDistributionEntryState({
@@ -1021,6 +1041,14 @@ function AuthGate() {
     return normalizedPathname !== normalizedRedirectTarget;
   }, [normalizedPathname, normalizedRedirectTarget, redirectTarget]);
   const effectivePendingRedirect = pendingRedirect && !suppressRedirect;
+  const freeSessionNavigationOwned =
+    committedFreeSession &&
+    freeSessionTransition.navigationCount === 1 &&
+    !!freeSessionNavigationTarget &&
+    normalizedPathname !== freeSessionNavigationTarget;
+  useEffect(() => {
+    routeReplacementGuardRef.current.settle(normalizedPathname);
+  }, [normalizedPathname]);
   const dashboardRoutePending =
     normalizedPathname === '/dashboard' && !dashboardShellHydrated;
   const shouldHideCommandDock =
@@ -1155,9 +1183,16 @@ function AuthGate() {
 
   useEffect(() => {
     if (!postAuthRedirectHoldingScreenActive || !postAuthLoadingTarget) return undefined;
+    if (freeSessionNavigationOwned) return undefined;
 
     const fallbackTimer = setTimeout(() => {
       if (!postAuthRedirectHoldingScreenActive || !postAuthLoadingTarget) return;
+
+      const claim = routeReplacementGuardRef.current.claim(
+        normalizedPathname,
+        postAuthLoadingTarget,
+      );
+      if (!claim) return;
 
       markStartupPhase('post_auth_handoff_fallback_route', {
         currentPath: normalizedPathname,
@@ -1165,7 +1200,12 @@ function AuthGate() {
         dashboardReady,
         minimumLoadingElapsed,
       });
-      router.replace(toExpoRouterShellTarget(postAuthLoadingTarget) as any);
+      try {
+        router.replace(toExpoRouterShellTarget(postAuthLoadingTarget) as any);
+      } catch (error) {
+        routeReplacementGuardRef.current.release(claim);
+        throw error;
+      }
     }, POST_AUTH_HANDOFF_ROUTE_TIMEOUT_MS);
 
     return () => {
@@ -1173,6 +1213,7 @@ function AuthGate() {
     };
   }, [
     dashboardReady,
+    freeSessionNavigationOwned,
     minimumLoadingElapsed,
     normalizedPathname,
     postAuthLoadingTarget,
@@ -1577,10 +1618,17 @@ function AuthGate() {
 
   useEffect(() => {
     if (isLoading || suppressRedirect) return;
+    if (freeSessionNavigationOwned) return;
 
     const replaceWithRedirectTarget = () => {
       const target = redirectTarget;
       if (!target) return;
+      const canonicalTarget = normalizeRoutePath(target);
+      const claim = routeReplacementGuardRef.current.claim(
+        normalizedPathname,
+        canonicalTarget,
+      );
+      if (!claim) return;
 
       const run = async () => {
         if (legacyFleetSetupRoute && target === '/fleet') {
@@ -1614,7 +1662,12 @@ function AuthGate() {
             navigationCount: freeSessionTransition.navigationCount,
           },
         });
-        router.replace(toExpoRouterShellTarget(target) as any);
+        try {
+          router.replace(toExpoRouterShellTarget(target) as any);
+        } catch (error) {
+          routeReplacementGuardRef.current.release(claim);
+          throw error;
+        }
       };
       void run();
     };
@@ -1643,6 +1696,7 @@ function AuthGate() {
   }, [
     committedFreeSession,
     effectivePendingRedirect,
+    freeSessionNavigationOwned,
     freeSessionTransition.generation,
     freeSessionTransition.navigationCount,
     freeSessionTransition.state,
@@ -1740,12 +1794,9 @@ function AuthGate() {
     );
   }
 
-  if (
+  const showLoadingTransitionShell =
     (postAuthRedirectHoldingScreenActive && normalizedPathname === '/') ||
-    authScreenLoadingHandoffActive
-  ) {
-    return <LoadingTransitionVideo />;
-  }
+    authScreenLoadingHandoffActive;
 
   if (shouldShowAccessGate) {
     return (
@@ -1959,29 +2010,17 @@ function AuthGate() {
         </View>
       )}
 
-      {inPreAuthTree ? (
-        <Stack screenOptions={stackScreenOptions}>
-          <Stack.Screen name="index" />
-          <Stack.Screen name="login" />
-          <Stack.Screen name="initialize" />
-          <Stack.Screen name="create-access-key" />
-          <Stack.Screen name="auth-info" />
-          <Stack.Screen name="pro" />
-          <Stack.Screen name="join-expedition" />
-          <Stack.Screen name="expedition-channel/join/[code]" />
-          <Stack.Screen
-            name="setup"
-            options={{
-              animation: 'fade',
-              animationDuration: MOTION.screenTransition,
-            }}
-          />
-        </Stack>
-      ) : (
-        <ViewerSettingsProvider>
-          <WizardStateProvider>
-            <Stack screenOptions={stackScreenOptions}>
+      <ViewerSettingsProvider>
+        <WizardStateProvider>
+          <Stack screenOptions={stackScreenOptions}>
               <Stack.Screen name="index" />
+              <Stack.Screen name="login" />
+              <Stack.Screen name="initialize" />
+              <Stack.Screen name="create-access-key" />
+              <Stack.Screen name="auth-info" />
+              <Stack.Screen name="pro" />
+              <Stack.Screen name="join-expedition" />
+              <Stack.Screen name="expedition-channel/join/[code]" />
               <Stack.Screen
                 name="setup"
                 options={{
@@ -2102,15 +2141,24 @@ function AuthGate() {
                   animationDuration: MOTION.screenTransition,
                 }}
               />
-            </Stack>
+          </Stack>
 
-            {showCommandDock ? (
-              <OfflineSyncStatusChip bottomOffset={shellBodyBottomInset + 10} />
-            ) : null}
-            {showCommandDock ? <CommandDock /> : null}
-          </WizardStateProvider>
-        </ViewerSettingsProvider>
-      )}
+          {showCommandDock ? (
+            <OfflineSyncStatusChip bottomOffset={shellBodyBottomInset + 10} />
+          ) : null}
+          {showCommandDock ? <CommandDock /> : null}
+        </WizardStateProvider>
+      </ViewerSettingsProvider>
+
+      {showLoadingTransitionShell ? (
+        <View
+          style={styles.loadingTransitionOverlay}
+          accessibilityViewIsModal
+          testID="auth-loading-transition-overlay"
+        >
+          <LoadingTransitionVideo />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -2288,6 +2336,11 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   rootStartupFrame: {
     flex: 1,
+    backgroundColor: ECS.bgPrimary,
+  },
+  loadingTransitionOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 100,
     backgroundColor: ECS.bgPrimary,
   },
   bootstrapBanner: {

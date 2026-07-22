@@ -327,6 +327,7 @@ export default function LoginScreen() {
         hasConfiguredVehicle && setupComplete
           ? '/dashboard'
           : { pathname: '/setup', params: { mode: 'guest-entry' } };
+      const destinationPath = hasConfiguredVehicle && setupComplete ? '/dashboard' : '/setup';
       logAuthDev('[Auth] Free entry route decision', {
         destination,
         hasConfiguredVehicle,
@@ -338,7 +339,9 @@ export default function LoginScreen() {
       });
       if (!commitFreeSessionTransition(generation)) throw new Error('Free session commit rejected');
       setFreeEntryTransition('state_committed');
-      if (!dispatchFreeSessionNavigation(generation)) throw new Error('Free session navigation rejected');
+      if (!dispatchFreeSessionNavigation(generation, destinationPath)) {
+        throw new Error('Free session navigation rejected');
+      }
       setFreeEntryTransition('navigating');
       router.replace(destination as any);
     } catch {

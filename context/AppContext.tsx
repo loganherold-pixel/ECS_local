@@ -123,6 +123,7 @@ import {
 } from '../lib/auth/authDiagnostics';
 import {
   createFreeSessionTransitionCoordinator,
+  equalFreeSessionTransitionSnapshot,
   type FreeSessionTransitionSnapshot,
 } from '../lib/auth/freeSessionTransition';
 import {
@@ -491,8 +492,8 @@ interface AppContextValue {
   enterOfflineMode: () => void;
   beginFreeSessionTransition: () => number | null;
   commitFreeSessionTransition: (generation: number) => boolean;
-  dispatchFreeSessionNavigation: (generation: number) => boolean;
-  markFreeSessionDestinationMounted: () => boolean;
+  dispatchFreeSessionNavigation: (generation: number, target: string) => boolean;
+  markFreeSessionDestinationMounted: (route: string, generation?: number) => boolean;
   failFreeSessionTransition: (generation: number) => boolean;
   exitOfflineMode: () => void;
   showToast: (msg: string) => void;
@@ -654,7 +655,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [isOnline, setIsOnline] = useState(false);
   const [connectivityStatus, setConnectivityStatus] = useState<ConnectivityStatus>('offline');
   const [offlineMode, setOfflineMode] = useState(getPersistedOfflineMode());
-  const [, refreshFreeSessionTransition] = useState(0);
+  const [freeSessionTransition, setFreeSessionTransition] = useState<FreeSessionTransitionSnapshot>({
+    state: 'idle',
+    generation: 0,
+    correlationId: null,
+    navigationCount: 0,
+    navigationTarget: null,
+  });
   const freeSessionCoordinatorRef = useRef<ReturnType<typeof createFreeSessionTransitionCoordinator> | null>(null);
   if (!freeSessionCoordinatorRef.current) {
     freeSessionCoordinatorRef.current = createFreeSessionTransitionCoordinator({
@@ -670,7 +677,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
             navigationCount: snapshot.navigationCount,
           },
         });
-        refreshFreeSessionTransition((value) => value + 1);
+        setFreeSessionTransition((current) =>
+          equalFreeSessionTransitionSnapshot(current, snapshot) ? current : snapshot
+        );
       },
     });
   }
@@ -899,16 +908,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const beginFreeSessionTransition = useCallback(() => freeSessionCoordinator.begin(), [freeSessionCoordinator]);
   const commitFreeSessionTransition = useCallback((generation: number) => {
     if (!freeSessionCoordinator.commit(generation)) return false;
-    setOfflineMode(true);
+    setOfflineMode((current) => current || true);
     setPersistedOfflineMode(true);
     return true;
   }, [freeSessionCoordinator]);
   const dispatchFreeSessionNavigation = useCallback(
-    (generation: number) => freeSessionCoordinator.requestNavigation(generation),
+    (generation: number, target: string) => freeSessionCoordinator.requestNavigation(generation, target),
     [freeSessionCoordinator],
   );
   const markFreeSessionDestinationMounted = useCallback(
-    () => freeSessionCoordinator.markDestinationMounted(),
+    (route: string, generation?: number) => freeSessionCoordinator.markDestinationMounted(route, generation),
     [freeSessionCoordinator],
   );
   const failFreeSessionTransition = useCallback(
@@ -1544,9 +1553,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
-      if (freeSessionCoordinator.isAuthoritative() && event !== 'SIGNED_IN') {
+      if (freeSessionCoordinator.isAuthoritative()) {
         freeSessionCoordinator.shouldIgnoreHydration(0);
-        setAuthLoading(false);
+        setAuthLoading((current) => current ? false : current);
         return;
       }
       const currentUser = session?.user || null;
@@ -2514,7 +2523,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     isOnline,
     connectivityStatus,
     offlineMode,
-    freeSessionTransition: freeSessionCoordinator.snapshot(),
+    freeSessionTransition,
     queueSize,
     syncStatus,
     dirtyCount,
@@ -2573,7 +2582,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ecsProProduct,
     enterOfflineMode,
     failFreeSessionTransition,
-    freeSessionCoordinator,
+    freeSessionTransition,
     exitOfflineMode,
     fuelWaterLogs,
     isOnline,

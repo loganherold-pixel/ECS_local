@@ -144,7 +144,8 @@ export function buildAuthProductionReadinessResult(options = {}) {
         distributionEntryResolver.includes('rememberedOfflineAccess') &&
         distributionEntryResolver.includes('guestOfflineAccess') &&
         layout.includes('resolveDistributionEntryState') &&
-        layout.includes('const restorableShellRoute = getStoredShellRoute();') &&
+        (layout.includes('const restorableShellRoute = getStoredShellRoute();') ||
+          layout.includes('const restorableShellRoute = committedFreeSession ? null : getStoredShellRoute();')) &&
         layout.includes('toRestorableShellRoute'),
       [relPath(root, paths.distributionEntryResolver), relPath(root, paths.layout)],
       ['Keep startup route selection deterministic and explicit for signed-out, setup, authenticated, guest-offline, and remembered-offline states.'],
