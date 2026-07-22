@@ -61,9 +61,21 @@ assertIncludes(buildScript, 'ECS_BUILD_TIME', 'Cloud APK helper should stamp a b
 assertIncludes(buildScript, 'ECS_BUILD_DIRTY', 'Cloud APK helper should stamp dirty state into the build env.');
 assertIncludes(buildScript, '"--clear-cache"', 'Cloud APK helper should always pass --clear-cache.');
 assertIncludes(buildScript, 'ECS_EAS_NO_VCS', 'Cloud APK helper should make no-VCS mode an explicit opt-in.');
+assertIncludes(buildScript, 'resolveSourceDirtyFlag', 'Cloud APK helper should inspect the source worktree before submission.');
+assertIncludes(buildScript, '--allow-dirty', 'Cloud APK helper should require an explicit override for non-clean development builds.');
 assert.ok(
   !buildScript.includes('process.env.EAS_NO_VCS || "1"'),
   'Cloud APK helper must preserve EAS VCS provenance by default.',
+);
+assert.strictEqual(
+  easJson.build.fieldtest.env.ECS_BUILD_DIRTY,
+  'clean',
+  'Field-test remote config should preserve the clean state already enforced before upload.',
+);
+assert.strictEqual(
+  easJson.build['route-discovery-qa'].env.ECS_BUILD_DIRTY,
+  'clean',
+  'Route-discovery QA remote config should preserve the clean state already enforced before upload.',
 );
 
 for (const ignoredPath of [

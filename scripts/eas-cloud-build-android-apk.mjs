@@ -28,12 +28,18 @@ function readGitValue(command) {
   }
 }
 
-function resolveDirtyFlag() {
-  if (process.env.ECS_BUILD_DIRTY) return process.env.ECS_BUILD_DIRTY;
+function resolveSourceDirtyFlag() {
+  if (readGitValue("git rev-parse --is-inside-work-tree") !== "true") return "unknown";
   return readGitValue("git status --porcelain").length > 0 ? "dirty" : "clean";
 }
 
 const buildProfile = resolveProfileArg(process.argv.slice(2));
+const sourceDirtyFlag = resolveSourceDirtyFlag();
+
+if (sourceDirtyFlag !== "clean" && !process.argv.includes("--allow-dirty")) {
+  console.error(`Refusing ${buildProfile} build from ${sourceDirtyFlag} source. Commit or clean the worktree first.`);
+  process.exit(1);
+}
 
 const args = [
   "build",
@@ -55,7 +61,7 @@ const env = {
     readGitValue("git rev-parse HEAD") ||
     "unknown",
   ECS_BUILD_TIME: process.env.ECS_BUILD_TIME || new Date().toISOString(),
-  ECS_BUILD_DIRTY: resolveDirtyFlag(),
+  ECS_BUILD_DIRTY: sourceDirtyFlag,
 };
 
 if (process.platform === "win32") {
