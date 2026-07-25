@@ -38,7 +38,7 @@
 
 
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Animated, Easing, Image, ImageBackground, AppState, ScrollView, type GestureResponderEvent } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, Animated, Easing, Image, ImageBackground, AppState, ScrollView, ActivityIndicator, type GestureResponderEvent } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 
 import { SafeIcon as Ionicons } from '../SafeIcon';
@@ -214,6 +214,12 @@ import {
   type TerrainRiskReferenceEvent,
 } from '../../lib/terrainRiskReferenceEvents';
 import { useTerrainRiskDashboardRuntime } from '../../lib/useTerrainRiskDashboardRuntime';
+import {
+  selectCompactTerrainIntelligence,
+  type CompactTerrainIntelligenceSnapshot,
+  type TerrainIntelligencePosture,
+} from '../../lib/terrainIntelligencePresentation';
+import { incrementTerrainMotionDiagnostic } from '../../lib/terrainIntelligenceMotion';
 
 // Phase 5: Expedition Risk Engine Widget
 import { ExpeditionRiskCompact, ExpeditionRiskCard, ExpeditionRiskDetailView } from './ExpeditionRiskWidget';
@@ -383,6 +389,7 @@ const ROUTE_PROGRESS_PLACEHOLDER = require('../../assets/dashboard/route-progres
 const TERRAIN_RISK_BACKGROUND = require('../../assets/dashboard/terrain-risk-background.png');
 
 const RouteProgressMiniMap = React.lazy(() => import('./RouteProgressMiniMap'));
+const TerrainIntelligenceCommand = React.lazy(() => import('./TerrainIntelligenceCommand'));
 
 function areAttitudeVehicleContextsEqual(
   left?: WidgetData['activeVehicleContext'],
@@ -523,6 +530,9 @@ export interface WidgetRenderOptions {
   screenHeight?: number | null;
   /** Reports deterministic terrain reference events to the dashboard intelligence lane. */
   onTerrainRiskReferenceEvent?: (event: TerrainRiskReferenceEvent | null) => void;
+  onTerrainShowOnMap?: (
+    target: import('./TerrainIntelligenceCommand').TerrainInspectionTarget,
+  ) => void;
 }
 
 function useDashboardActiveVehicleContext(): ReturnType<typeof getActiveVehicleContext> {
@@ -2413,6 +2423,7 @@ type CommandTerrainRiskVisualData = {
   active: boolean;
   route: TerrainRiskRoute | null;
   presentation: TerrainRiskDashboardPresentation;
+  terrainIntelligence: import('../../lib/terrainIntelligencePresentation').TerrainIntelligenceSnapshot;
   completedDistanceMiles: number | null;
   weatherSnapshot: ECSWeatherSnapshot | null;
   onRetryElevation: (() => void) | null;
@@ -6545,6 +6556,7 @@ const AttitudeCommandWidget = React.memo(function AttitudeCommandWidget({ data, 
       : environmentalTerrainSnapshot.status === 'stale'
         ? 'stale'
         : 'unavailable',
+    activeVehicleContext,
   });
   const terrainRiskRoute = terrainRiskRuntime.route;
   const terrainRiskPresentation = terrainRiskRuntime.presentation;
@@ -13835,6 +13847,7 @@ function StandaloneTerrainRiskRuntimeWidget({
   options?: WidgetRenderOptions;
   detailMode?: boolean;
 }) {
+  const activeVehicleContext = useDashboardActiveVehicleContext();
   const routeProgress = useRouteProgressCommandSnapshot(options);
   const activeRoute = routeStore.getActive();
   const environmentalTerrainSnapshot = resolveElevationTerrainSnapshot({
@@ -13855,6 +13868,8 @@ function StandaloneTerrainRiskRuntimeWidget({
       : environmentalTerrainSnapshot.status === 'stale'
         ? 'stale'
         : 'unavailable',
+    activeVehicleContext,
+    profileDensity: detailMode ? 'expanded' : 'compact',
   });
   const terrainRiskVisual: CommandTerrainRiskVisualData = {
     ...terrainRiskRuntime,
@@ -13873,12 +13888,21 @@ function StandaloneTerrainRiskRuntimeWidget({
             : standaloneTerrainRiskS.card,
       ]}
     >
-      <AttitudeCommandTerrainRiskPreview
-        terrainRisk={terrainRiskVisual}
-        expanded={detailMode}
-        detailMode={detailMode}
-        onTerrainRiskReferenceEvent={options?.onTerrainRiskReferenceEvent}
-      />
+      {detailMode ? (
+        <React.Suspense fallback={<ActivityIndicator size="small" color={TACTICAL.amber} />}>
+          <TerrainIntelligenceCommand
+            snapshot={terrainRiskRuntime.terrainIntelligence}
+            routeProgress={routeProgress}
+            onClose={options?.onCloseDetail}
+            onShowOnMap={options?.onTerrainShowOnMap}
+          />
+        </React.Suspense>
+      ) : (
+        <QuickTerrainWidget
+          snapshot={selectCompactTerrainIntelligence(terrainRiskRuntime.terrainIntelligence)}
+          totalDistanceMiles={terrainRiskRuntime.route?.totalDistanceMiles ?? null}
+        />
+      )}
     </View>
   );
 }
@@ -13902,6 +13926,172 @@ const standaloneTerrainRiskS = StyleSheet.create({
   },
 });
 
+const QUICK_TERRAIN_POSTURE_COLORS: Record<TerrainIntelligencePosture, string> = {
+  low: ECS.success,
+  moderate: ECS.warning,
+  high: TACTICAL.danger,
+  critical: TACTICAL.danger,
+  unknown: TACTICAL.textMuted,
+};
+
+function formatQuickTerrainMetric(value: number | null, suffix: string): string {
+  return value == null || !Number.isFinite(value) ? '--' : `${Math.round(value).toLocaleString()}${suffix}`;
+}
+
+function getQuickTerrainEventLabel(snapshot: CompactTerrainIntelligenceSnapshot): string {
+  if (snapshot.compactProfile.length < 2) return 'NO PROFILE DATA';
+  const event = snapshot.nextTerrainEvent;
+  if (!event) return 'NO MATERIAL EVENT';
+  const kinds = event.hazardKinds ?? [];
+  const label = kinds.includes('steep_grade')
+    ? 'STEEP GRADE'
+    : kinds.includes('rapid_elevation_change')
+      ? 'RAPID ELEVATION CHANGE'
+      : kinds.includes('washout_watch')
+        ? 'WASHOUT WATCH'
+        : kinds.includes('tipover_watch')
+          ? 'TIPOVER WATCH'
+          : kinds.includes('high_elevation')
+            ? 'HIGH ELEVATION'
+            : null;
+  return label ? `${label} • ${formatDistance(event.distanceMiles, 'mi').toUpperCase()}` : 'NO MATERIAL EVENT';
+}
+
+function getQuickTerrainStateCopy(snapshot: CompactTerrainIntelligenceSnapshot): string | null {
+  switch (snapshot.state) {
+    case 'idle': return 'NO ACTIVE ROUTE';
+    case 'loading': return 'LOADING ANALYSIS';
+    case 'partial': return 'PARTIAL ELEVATION PROFILE';
+    case 'stale': return 'STALE CACHED PROFILE';
+    case 'error': return 'TERRAIN ANALYSIS ERROR';
+    case 'unavailable': return 'ELEVATION UNAVAILABLE';
+    default: return null;
+  }
+}
+
+const QuickTerrainWidget = React.memo(function QuickTerrainWidget({
+  snapshot,
+  totalDistanceMiles,
+}: {
+  snapshot: CompactTerrainIntelligenceSnapshot;
+  totalDistanceMiles: number | null;
+}) {
+  incrementTerrainMotionDiagnostic('compactWidgetRenders');
+  const postureColor = QUICK_TERRAIN_POSTURE_COLORS[snapshot.posture];
+  const stateCopy = getQuickTerrainStateCopy(snapshot);
+  const hasProfile = snapshot.compactProfile.length >= 2 && totalDistanceMiles != null;
+
+  return (
+    <View
+      style={quickTerrainS.container}
+      accessibilityLabel={[
+        `Terrain posture ${snapshot.posture}`,
+        stateCopy,
+        `Source ${snapshot.sourceState}`,
+        getQuickTerrainEventLabel(snapshot),
+      ].filter(Boolean).join('. ')}
+      testID="dashboard-quick-terrain-content"
+    >
+      <View style={quickTerrainS.statusRow}>
+        <View style={quickTerrainS.postureGroup}>
+          <View style={[quickTerrainS.postureRail, { backgroundColor: postureColor }]} />
+          <Text style={[quickTerrainS.posture, { color: postureColor }]} numberOfLines={1}>
+            {snapshot.posture.toUpperCase()}
+          </Text>
+        </View>
+        <View style={quickTerrainS.sourceBadge}>
+          <Text style={quickTerrainS.sourceText} numberOfLines={1}>
+            {snapshot.sourceState.toUpperCase()}
+          </Text>
+        </View>
+      </View>
+
+      {hasProfile ? (
+        <View style={quickTerrainS.profile} testID="dashboard-quick-terrain-profile">
+          <TerrainRiskSideProfile
+            profile={snapshot.compactProfile}
+            totalDistanceMiles={totalDistanceMiles}
+            unit="mi"
+            completedDistanceMiles={snapshot.currentProgressDistanceMiles}
+            transparentBackground
+          />
+        </View>
+      ) : (
+        <View style={quickTerrainS.statePanel}>
+          {snapshot.state === 'loading' ? <ActivityIndicator size="small" color={TACTICAL.amber} /> : null}
+          <Text style={quickTerrainS.stateText} numberOfLines={2}>
+            {stateCopy ?? 'NO PROFILE DATA'}
+          </Text>
+        </View>
+      )}
+
+      <View style={quickTerrainS.metrics}>
+        <View style={quickTerrainS.metric}>
+          <Text style={quickTerrainS.metricLabel}>ELEV</Text>
+          <Text style={quickTerrainS.metricValue} numberOfLines={1}>
+            {formatQuickTerrainMetric(snapshot.currentElevation.value, ' FT')}
+          </Text>
+        </View>
+        <View style={quickTerrainS.metric}>
+          <Text style={quickTerrainS.metricLabel}>GRADE AHEAD</Text>
+          <Text style={quickTerrainS.metricValue} numberOfLines={1}>
+            {formatQuickTerrainMetric(snapshot.gradeAhead.value, '%')}
+          </Text>
+        </View>
+        <View style={quickTerrainS.metric}>
+          <Text style={quickTerrainS.metricLabel}>NEXT</Text>
+          <Text style={quickTerrainS.metricValue} numberOfLines={1}>
+            {snapshot.nextTerrainEvent ? formatDistance(snapshot.nextTerrainEvent.distanceMiles, 'mi').toUpperCase() : '--'}
+          </Text>
+        </View>
+      </View>
+      <Text style={quickTerrainS.event} numberOfLines={1} ellipsizeMode="tail">
+        {getQuickTerrainEventLabel(snapshot)}
+      </Text>
+    </View>
+  );
+});
+
+const quickTerrainS = StyleSheet.create({
+  container: { flex: 1, minWidth: 0, justifyContent: 'space-between', gap: 4 },
+  statusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minWidth: 0 },
+  postureGroup: { flexDirection: 'row', alignItems: 'center', minWidth: 0, flexShrink: 1 },
+  postureRail: { width: 3, height: 14, borderRadius: 2, marginRight: 6 },
+  posture: { fontSize: 12, lineHeight: 14, fontWeight: '900', letterSpacing: 1.2 },
+  sourceBadge: {
+    borderWidth: 1,
+    borderColor: TACTICAL.border,
+    borderRadius: 3,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    marginLeft: 5,
+    maxWidth: '46%',
+  },
+  sourceText: { color: TACTICAL.textMuted, fontSize: 7, fontWeight: '800', letterSpacing: 0.7 },
+  profile: { flex: 1, minHeight: 58, maxHeight: 92, overflow: 'hidden' },
+  statePanel: {
+    flex: 1,
+    minHeight: 58,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 7,
+  },
+  stateText: { color: TACTICAL.textMuted, fontSize: 9, fontWeight: '800', letterSpacing: 0.8, textAlign: 'center' },
+  metrics: { flexDirection: 'row', alignItems: 'flex-start', gap: 5 },
+  metric: { flex: 1, minWidth: 0 },
+  metricLabel: { color: TACTICAL.textMuted, fontSize: 6.5, fontWeight: '800', letterSpacing: 0.45 },
+  metricValue: { color: TACTICAL.text, fontSize: 9, lineHeight: 12, fontWeight: '800' },
+  event: {
+    color: TACTICAL.amber,
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+    minWidth: 0,
+  },
+});
+
 function AttitudeCommandTerrainRiskPreview({
   terrainRisk,
   expanded = false,
@@ -13914,30 +14104,33 @@ function AttitudeCommandTerrainRiskPreview({
   onTerrainRiskReferenceEvent?: (event: TerrainRiskReferenceEvent | null) => void;
 }) {
   const presentation = terrainRisk.presentation;
-  const route = presentation.profile.length >= 2 ? terrainRisk.route : null;
+  const profile = expanded
+    ? terrainRisk.terrainIntelligence.expandedProfile
+    : terrainRisk.terrainIntelligence.compactProfile;
+  const route = profile.length >= 2 ? terrainRisk.route : null;
   const [selectedReferenceEvent, setSelectedReferenceEvent] = useState<TerrainRiskReferenceEvent | null>(null);
   const referenceEvents = useMemo(
     () => route
       ? buildTerrainRiskReferenceEvents({
-          profile: route.profile,
+          profile,
           totalDistanceMiles: route.totalDistanceMiles,
           completedDistanceMiles: presentation.currentProgressDistanceMiles,
           weatherSnapshot: terrainRisk.weatherSnapshot,
         })
       : [],
-    [presentation.currentProgressDistanceMiles, route, terrainRisk.weatherSnapshot],
+    [presentation.currentProgressDistanceMiles, profile, route, terrainRisk.weatherSnapshot],
   );
   const markerReferenceEvents = useMemo(
     () => route
       ? buildTerrainRiskReferenceEvents({
-          profile: route.profile,
+          profile,
           totalDistanceMiles: route.totalDistanceMiles,
           completedDistanceMiles: presentation.currentProgressDistanceMiles,
           weatherSnapshot: terrainRisk.weatherSnapshot,
           includePassed: true,
         })
       : [],
-    [presentation.currentProgressDistanceMiles, route, terrainRisk.weatherSnapshot],
+    [presentation.currentProgressDistanceMiles, profile, route, terrainRisk.weatherSnapshot],
   );
   const upcomingReferenceEvent = useMemo(
     () => selectUpcomingTerrainRiskBannerEvent(referenceEvents, { proximityMiles: 1 }),
@@ -13945,9 +14138,9 @@ function AttitudeCommandTerrainRiskPreview({
   );
   const selectedReferenceAnchor = useMemo(
     () => route
-      ? getTerrainRiskReferenceAnchor(route.profile, route.totalDistanceMiles, selectedReferenceEvent)
+      ? getTerrainRiskReferenceAnchor(profile, route.totalDistanceMiles, selectedReferenceEvent)
       : null,
-    [route, selectedReferenceEvent],
+    [profile, route, selectedReferenceEvent],
   );
   const referenceBriefPlacement = resolveTerrainRiskReferenceBriefPlacement(selectedReferenceAnchor);
   const compact = !expanded;
@@ -13981,7 +14174,7 @@ function AttitudeCommandTerrainRiskPreview({
         <>
           <View style={[attitudeCommandS.terrainRiskChartFrame, attitudeCommandS.terrainRiskChartFrameActive]}>
             <TerrainRiskSideProfile
-              profile={presentation.profile}
+              profile={profile}
               totalDistanceMiles={route.totalDistanceMiles}
               unit="mi"
               completedDistanceMiles={presentation.currentProgressDistanceMiles}

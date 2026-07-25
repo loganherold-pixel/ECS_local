@@ -9723,6 +9723,26 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
             return;
           }
 
+          if (flow?.intent === 'quick_action' && flow.context?.kind === 'terrain_inspection') {
+            const rawCoordinate = flow.context.coordinate;
+            const coordinate =
+              rawCoordinate && typeof rawCoordinate === 'object' &&
+              Number.isFinite(Number((rawCoordinate as Record<string, unknown>).lat)) &&
+              Number.isFinite(Number((rawCoordinate as Record<string, unknown>).lng))
+                ? {
+                    lat: Number((rawCoordinate as Record<string, unknown>).lat),
+                    lng: Number((rawCoordinate as Record<string, unknown>).lng),
+                  }
+                : null;
+            if (coordinate) {
+              fitMapToCoordinatePreview(coordinate, 72, 'terrain_inspection_focus');
+              showToast(flow.message ?? 'TERRAIN SEGMENT SHOWN ON MAP');
+            } else {
+              showToast('TERRAIN SEGMENT LOCATION UNAVAILABLE');
+            }
+            return;
+          }
+
           const payload = await loadNavigationHandoffPayload();
           if (cancelled || !payload) return;
 
@@ -9760,6 +9780,7 @@ const [isOnline, setIsOnline] = useState(() => navigateConnectivity.status === '
       };
     }, [
       applyExploreNavigationPayload,
+      fitMapToCoordinatePreview,
       isRecoveryAssistNavigationPayload,
       navigationEnginesRestoreSettled,
       presentDispatchContextHandoff,

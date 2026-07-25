@@ -89,7 +89,9 @@ export type TerrainRiskRouteContext = {
 export const MILES_TO_KILOMETERS = 1.609344;
 const METERS_TO_FEET = 3.28084;
 const EARTH_RADIUS_MI = 3958.8;
-const MAX_PROFILE_POINTS = 42;
+// Retain enough canonical route detail for the expanded Terrain Intelligence
+// surface. Compact and expanded presentation budgets are applied downstream.
+const MAX_PROFILE_POINTS = 180;
 
 type RouteProfileDraftPoint = {
   distanceMiles: number;

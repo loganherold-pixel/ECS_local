@@ -119,6 +119,7 @@ interface WidgetGridProps {
   layoutMode: boolean;
   onEmptySlotPress: (slotIndex: number) => void;
   onWidgetPress: (slot: WidgetSlot) => void;
+  onWidgetLongPress?: (slot: WidgetSlot) => void;
   onRemoveWidget: (slotIndex: number) => void;
   onSwapSlots: (from: number, to: number) => void;
   onResizeWidget?: (slotIndex: number, newSize: WidgetSize) => void;
@@ -1688,7 +1689,7 @@ function DragGhost({
 // ── Main Grid ──────────────────────────────────────────
 export default function WidgetGrid({
   slots, profile, gridLayout, layoutMode,
-  onEmptySlotPress, onWidgetPress,
+  onEmptySlotPress, onWidgetPress, onWidgetLongPress,
   onRemoveWidget, onSwapSlots, onResizeWidget, onRestoreDefaults,
   widgetData, dashboardMode, isCompact,
   rollDeg, pitchDeg, sensorStatus,
@@ -1710,6 +1711,7 @@ export default function WidgetGrid({
   onTerrainRiskReferenceEvent,
 }: WidgetGridProps) {
 
+  const longPressConsumedSlotRef = useRef<number | null>(null);
   const reducedMotion = useReducedMotion();
   const config = GRID_LAYOUT_CONFIG[gridLayout];
   const compact = gridLayout === '2x3' && !isHighwayPrecisionMode(dashboardMode, gridLayout);
@@ -2396,12 +2398,21 @@ export default function WidgetGrid({
                     <TouchableOpacity
                       style={{ flex: 1 }}
                       onPress={() => {
+                        if (longPressConsumedSlotRef.current === p.slotIndex) {
+                          longPressConsumedSlotRef.current = null;
+                          return;
+                        }
                         if (shouldOpenCommandBrief) {
                           onOpenCommandBrief?.();
                           return;
                         }
                         if (shouldOpenWidgetDetail) onWidgetPress(slot);
                       }}
+                      onLongPress={() => {
+                        longPressConsumedSlotRef.current = p.slotIndex;
+                        onWidgetLongPress?.(slot);
+                      }}
+                      delayLongPress={420}
                       activeOpacity={1}
                       disabled={isDragging}
                     >

@@ -45,12 +45,12 @@ function notIncludes(source, fragment, message) {
   assert.ok(!source.includes(fragment), message);
 }
 
-// The default Dashboard mounts Attitude Command, so its render key must follow the
-// GPS and weather inputs consumed by the operational weather hook inside that widget.
+// Attitude Command remains selectable, while the default Dashboard now mounts the
+// compact Attitude Monitor plus Quick Terrain and Vehicle Systems.
 includes(
   sources.registry,
-  "{ widgetId: 'attitude-command', widgetSize: '2x2' }",
-  'The regression must exercise the widget mounted by the default Dashboard layout.',
+  "{ widgetId: 'attitude-monitor', widgetSize: '2x1' }",
+  'The regression must reflect the current default Dashboard layout.',
 );
 includes(
   sources.widget,
