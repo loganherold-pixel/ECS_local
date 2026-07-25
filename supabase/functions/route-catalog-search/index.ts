@@ -35,10 +35,13 @@ function readNumber(value: unknown): number | null {
   return Number.isFinite(number) ? number : null;
 }
 
+const ROUTE_SEARCH_RESULT_LIMIT = 20;
+const ROUTE_SEARCH_INTERNAL_CANDIDATE_LIMIT = 500;
+
 function cleanLimit(value: unknown): number {
-  const limit = readNumber(value);
-  if (!limit) return 200;
-  return Math.max(1, Math.min(500, Math.round(limit)));
+  const limit = typeof value === 'number' ? value : Number.NaN;
+  if (!Number.isFinite(limit) || limit <= 0) return ROUTE_SEARCH_RESULT_LIMIT;
+  return Math.min(ROUTE_SEARCH_RESULT_LIMIT, Math.max(1, Math.floor(limit)));
 }
 
 function readBoolean(value: unknown, fallback: boolean): boolean {
@@ -232,11 +235,25 @@ function withSearchDistanceMiles(
 }
 
 function candidateLimit(limit: number, hasRadiusCriteria: boolean): number {
-  if (!hasRadiusCriteria) return limit;
+  if (!hasRadiusCriteria) return ROUTE_SEARCH_INTERNAL_CANDIDATE_LIMIT;
   return Math.min(
     ROUTE_CATALOG_RADIUS_CANDIDATE_MAX,
     Math.max(ROUTE_CATALOG_RADIUS_CANDIDATE_MIN, limit * ROUTE_CATALOG_RADIUS_CANDIDATE_FANOUT),
   );
+}
+
+function routeIdentity(record: Record<string, unknown>): string {
+  return cleanText(record.public_id || record.id).toLowerCase();
+}
+
+function dedupeRankedRecords(records: Record<string, unknown>[]): Record<string, unknown>[] {
+  const seen = new Set<string>();
+  return records.filter((record) => {
+    const identity = routeIdentity(record);
+    if (!identity || seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
 }
 
 function confidenceScore(record: Record<string, unknown>): number {
@@ -274,7 +291,9 @@ function filterRecordsWithinSearchRadius(
       const distanceDelta = (readNumber(a.search_distance_miles) ?? Number.MAX_SAFE_INTEGER) -
         (readNumber(b.search_distance_miles) ?? Number.MAX_SAFE_INTEGER);
       if (distanceDelta !== 0) return distanceDelta;
-      return updatedAtTime(b) - updatedAtTime(a);
+      const updatedDelta = updatedAtTime(b) - updatedAtTime(a);
+      if (updatedDelta !== 0) return updatedDelta;
+      return routeIdentity(a).localeCompare(routeIdentity(b));
     });
 
   return {
@@ -576,6 +595,7 @@ serve(async (req) => {
       .eq('recommendation_status', 'recommendable')
       .order('confidence_score', { ascending: false })
       .order('updated_at', { ascending: false })
+      .order('id', { ascending: true })
       .limit(queryLimit);
 
     if (hasRadiusCriteria) {
@@ -612,16 +632,20 @@ serve(async (req) => {
     if (error) throw new Error('Unable to search verified route catalog.');
     const candidates = Array.isArray(data) ? data as Record<string, unknown>[] : [];
     const radiusFiltered = filterRecordsWithinSearchRadius(candidates, { latitude, longitude, radiusMiles });
-    let limitedRecords: Record<string, unknown>[];
+    let rankedRecords: Record<string, unknown>[];
     let sourceMatchedCount: number | null = null;
     if (sourceAdapter) {
       const sourcedRadiusRecords = await attachSourceRecords(admin, radiusFiltered.records);
       const sourceMatchedRecords = filterRecordsBySourceAdapter(sourcedRadiusRecords, sourceAdapter);
       sourceMatchedCount = sourceMatchedRecords.length;
-      limitedRecords = sourceMatchedRecords.slice(0, limit);
+      rankedRecords = dedupeRankedRecords(sourceMatchedRecords);
     } else {
-      limitedRecords = await attachSourceRecords(admin, radiusFiltered.records.slice(0, limit));
+      rankedRecords = dedupeRankedRecords(radiusFiltered.records);
     }
+    const additionalMatchesExist = rankedRecords.length > limit;
+    const limitedRecords = sourceAdapter
+      ? rankedRecords.slice(0, limit)
+      : await attachSourceRecords(admin, rankedRecords.slice(0, limit));
     const curationCoverage = await countRouteCatalogCurationCandidates(admin, {
       latitude,
       longitude,
@@ -666,6 +690,10 @@ serve(async (req) => {
         sourceMatchedCount,
         curationCandidateCount: curationCoverage.curationCandidateCount,
         anySourceBackedCandidateCount,
+        resultLimit: limit,
+        additionalMatchesExist,
+        nextPage: null,
+        nextCursor: null,
         geometryMode: includeGeometry ? 'full' : includePreviewGeometry ? 'preview_simplified' : 'omitted',
         previewMaxPoints: includePreviewGeometry && !includeGeometry ? PREVIEW_MAX_POINTS : null,
         criteria: {

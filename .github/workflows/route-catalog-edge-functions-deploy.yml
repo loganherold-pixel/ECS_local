@@ -2,17 +2,6 @@ name: Route Catalog Edge Functions Deploy
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'supabase/functions/route-catalog-search/**'
-      - 'supabase/functions/route-catalog-detail/**'
-      - 'supabase/functions/route-submission-intake/**'
-      - 'supabase/functions/route-catalog-summary/**'
-      - 'supabase/functions/route-catalog-sync-*/**'
-      - 'supabase/functions/_shared/routeCatalog*.ts'
-      - 'supabase/config.toml'
-      - 'scripts/route-catalog-sync-inventory.js'
-      - '.github/workflows/route-catalog-edge-functions-deploy.yml'
 
 permissions:
   contents: read

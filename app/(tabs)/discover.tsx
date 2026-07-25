@@ -25,6 +25,7 @@ import {
   useWindowDimensions,
   Image,
   Alert,
+  AppState,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -65,6 +66,13 @@ import {
 import { useThrottledGPS } from '../../lib/useThrottledGPS';
 import { haversineDistanceMiles } from '../../lib/useGPSLocation';
 import { offlineDiscoveryBridge } from '../../lib/offlineDiscoveryBridge';
+import { getRouteDiscoveryQaRuntime } from '../../lib/explore/routeDiscoveryQaRuntime';
+import {
+  getRouteDiscoveryQaDefaultRadiusMiles,
+  getRouteDiscoveryQaRegion,
+  resolveRouteDiscoveryQaExploreFilterState,
+} from '../../lib/explore/routeDiscoveryQaRuntimeContract';
+import { selectVisibleExploreRouteProjection } from '../../lib/explore/exploreVisibleRouteProjection';
 import {
   type CompatibilityResult,
   type VehicleProfile,
@@ -146,7 +154,20 @@ import {
   fetchRouteCatalogTrailPackDetail,
   liveTrailPackCatalogStore,
   refreshLiveTrailPackCatalog,
+  resumeLiveTrailPackCatalog,
+  suspendLiveTrailPackCatalog,
 } from '../../lib/explore/liveTrailPackCatalog';
+import {
+  capUniqueRankedRoutes,
+  ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE,
+  ECS_ROUTE_SEARCH_RESULT_LIMIT,
+} from '../../lib/explore/routeSearchResultPolicy';
+import {
+  isInternalExploreDiagnosticsEnabled,
+  recordExplorePerformanceEvent,
+} from '../../lib/explore/explorePerformance';
+import { dispatchSummaryFirstTripBuilderNavigation } from '../../lib/explore/routeSummaryNavigation';
+import { runAfterShellInteractions } from '../../lib/shellInteractionScheduler';
 import {
   ROUTE_CATALOG_COVERAGE_AREAS,
   ROUTE_CATALOG_PRESET_SEARCH_AREAS,
@@ -665,7 +686,16 @@ function DiscoverScreenInner() {
 
   // ── Loading state ─────────────────────────────────────────
   const [isLoading, setIsLoading] = useState(true);
-  const initialExploreFilterStateRef = useRef(getExploreFilterStateSnapshot());
+  const routeDiscoveryQaRuntime = useMemo(() => getRouteDiscoveryQaRuntime(), []);
+  const routeDiscoveryQaRegion = getRouteDiscoveryQaRegion(routeDiscoveryQaRuntime);
+  const routeDiscoveryQaDefaultRadiusMiles =
+    getRouteDiscoveryQaDefaultRadiusMiles(routeDiscoveryQaRuntime);
+  const initialExploreFilterStateRef = useRef(
+    resolveRouteDiscoveryQaExploreFilterState(
+      getExploreFilterStateSnapshot(),
+      routeDiscoveryQaDefaultRadiusMiles,
+    ),
+  );
 
   // ── Distance radius filter state ──────────────────────────
   const [distanceRadius, setDistanceRadius] = useState<DistanceRadius | null>(
@@ -690,7 +720,13 @@ function DiscoverScreenInner() {
   const [discoverRouteSourceFailureReason, setDiscoverRouteSourceFailureReason] = useState<string | null>(null);
   const gps = useThrottledGPS({ enabled: isFocused, highAccuracy: false });
   const tripBuilderHandoffUserLocation = useMemo(
-    () => hasGPSFix
+    () => routeDiscoveryQaRegion
+      ? {
+          latitude: routeDiscoveryQaRegion.latitude,
+          longitude: routeDiscoveryQaRegion.longitude,
+          source: 'route_discovery_qa_synthetic_region',
+        }
+      : hasGPSFix
       ? {
           latitude: userLat,
           longitude: userLng,
@@ -699,7 +735,7 @@ function DiscoverScreenInner() {
           source: 'explore_live_gps',
         }
       : null,
-    [gps.position?.accuracyM, gps.position?.altitudeFt, hasGPSFix, userLat, userLng],
+    [gps.position?.accuracyM, gps.position?.altitudeFt, hasGPSFix, routeDiscoveryQaRegion, userLat, userLng],
   );
 
   const [hiddenGemPageIndex, setHiddenGemPageIndex] = useState(0);
@@ -707,6 +743,17 @@ function DiscoverScreenInner() {
   const [aiRouteIdeaPageIndex, setAiRouteIdeaPageIndex] = useState(0);
   const [favoritesPageIndex, setFavoritesPageIndex] = useState(0);
   const [activeExplorerCategoryPanel, setActiveExplorerCategoryPanel] = useState<ExplorerCategoryPanelKey | null>(null);
+  const pendingExploreControlAckRef = useRef(false);
+
+  useEffect(() => {
+    recordExplorePerformanceEvent('explore_screen_focus');
+  }, []);
+
+  useEffect(() => {
+    if (!pendingExploreControlAckRef.current) return;
+    pendingExploreControlAckRef.current = false;
+    recordExplorePerformanceEvent('explore_control_visual_acknowledged');
+  }, [activeExplorerCategoryPanel, distanceRadius, exploreRefinement]);
   const [hasLoadedExplorer, setHasLoadedExplorer] = useState(false);
   const [exploreFilterHydrated, setExploreFilterHydrated] = useState(false);
   const [hiddenGemCycleNotice, setHiddenGemCycleNotice] = useState<string | null>(null);
@@ -756,8 +803,12 @@ function DiscoverScreenInner() {
     let cancelled = false;
     void loadExploreFilterStateSnapshot().then((snapshot) => {
       if (cancelled) return;
-      setDistanceRadius(snapshot.radiusMiles);
-      setExploreRefinement(snapshot.refinement);
+      const resolvedSnapshot = resolveRouteDiscoveryQaExploreFilterState(
+        snapshot,
+        routeDiscoveryQaDefaultRadiusMiles,
+      );
+      setDistanceRadius(resolvedSnapshot.radiusMiles);
+      setExploreRefinement(resolvedSnapshot.refinement);
       setActiveExplorerCategoryPanel(null);
       setExploreFilterHydrated(true);
     });
@@ -765,7 +816,10 @@ function DiscoverScreenInner() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [
+    routeDiscoveryQaRuntime.enabled,
+    routeDiscoveryQaDefaultRadiusMiles,
+  ]);
 
   // ── Phase 13: Exploration Progress state ───────────────────
   const [completedIds, setCompletedIds] = useState<Set<string>>(
@@ -796,10 +850,19 @@ function DiscoverScreenInner() {
   }, []);
 
   useEffect(() => {
+    void resumeLiveTrailPackCatalog();
     const unsubscribe = liveTrailPackCatalogStore.subscribe(() => {
       setLiveTrailPackCatalogSnapshot(liveTrailPackCatalogStore.getSnapshot());
     });
-    return unsubscribe;
+    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') void resumeLiveTrailPackCatalog();
+      else suspendLiveTrailPackCatalog();
+    });
+    return () => {
+      appStateSubscription.remove();
+      unsubscribe();
+      suspendLiveTrailPackCatalog();
+    };
   }, []);
 
   const refreshRigContext = useCallback(() => {
@@ -1015,6 +1078,7 @@ function DiscoverScreenInner() {
   );
   const routeCatalogEffectiveSearchArea = useMemo(
     () => {
+      if (routeDiscoveryQaRegion) return routeDiscoveryQaRegion;
       if (routeCatalogSelectedSearchArea) return routeCatalogSelectedSearchArea;
       if (!hasGPSFix) return null;
       return {
@@ -1026,7 +1090,7 @@ function DiscoverScreenInner() {
         source: 'live_gps' as const,
       };
     },
-    [hasGPSFix, routeCatalogSelectedSearchArea, userLat, userLng],
+    [hasGPSFix, routeCatalogSelectedSearchArea, routeDiscoveryQaRegion, userLat, userLng],
   );
   const routeCatalogHasSearchArea = !!routeCatalogEffectiveSearchArea;
   const routeCatalogCurationCoverageNotice = useMemo(() => {
@@ -1063,6 +1127,16 @@ function DiscoverScreenInner() {
         availableFuelRangeMiles: vehicleProfile?.fuel_range_miles,
         availableWaterCapacityGallons: vehicleProfile?.water_capacity_gal,
         locationSource: routeCatalogEffectiveSearchArea ? routeCatalogEffectiveSearchArea.source : 'search_area_required',
+        ...(routeDiscoveryQaRuntime.enabled && routeDiscoveryQaRegion
+          ? {
+              qaMode: routeDiscoveryQaRuntime.mode,
+              qaRegionId: routeDiscoveryQaRegion.regionId,
+              qaFixtureVersion: routeDiscoveryQaRuntime.fixtureVersion,
+              category: 'trail_packs',
+              refinement: exploreRefinement ?? 'all',
+              accessPartition: routeDiscoveryQaRuntime.accessPartition,
+            }
+          : {}),
         ...routeCatalogRefinementCriteria,
       };
     },
@@ -1070,6 +1144,9 @@ function DiscoverScreenInner() {
       activeDistanceRadius,
       routeCatalogEffectiveSearchArea,
       routeCatalogRefinementCriteria,
+      routeDiscoveryQaRegion,
+      routeDiscoveryQaRuntime,
+      exploreRefinement,
       vehicleProfile?.fuel_range_miles,
       vehicleProfile?.water_capacity_gal,
       vehicleProfile?.vehicleType,
@@ -1200,12 +1277,16 @@ function DiscoverScreenInner() {
       }),
     );
   }, [exploreRefinement, publicDiscoverableTrailPackRoutes]);
-  const publicRefinedTrailPacks = useMemo(
+  const publicRefinedTrailPackCandidates = useMemo(
     () =>
       exploreRefinement == null
         ? publicDiscoverableTrailPacks
         : publicDiscoverableTrailPacks.filter((trailPack) => publicRefinedTrailPackIds.has(trailPack.id)),
     [exploreRefinement, publicDiscoverableTrailPacks, publicRefinedTrailPackIds],
+  );
+  const publicRefinedTrailPacks = useMemo(
+    () => capUniqueRankedRoutes(publicRefinedTrailPackCandidates, (trailPack) => trailPack.id),
+    [publicRefinedTrailPackCandidates],
   );
 
   const activeTabMeta = UNIFIED_TRAIL_FILTER_META;
@@ -1418,6 +1499,7 @@ function DiscoverScreenInner() {
 
   const handleSelectOpportunity = useCallback((op: ExpeditionOpportunity) => {
     hapticMicro();
+    recordExplorePerformanceEvent('explore_route_card_press_received');
     if (!guardPublicSuggestedTrailheadHandoff(op, 'analysis_preview')) return;
     stageExploreReadinessPreview(op);
     stageTripBuilderItineraryHandoff(op);
@@ -1432,18 +1514,23 @@ function DiscoverScreenInner() {
 
   const handleRadiusChange = useCallback((radius: DistanceRadius | null) => {
     hapticMicro();
+    recordExplorePerformanceEvent('explore_radius_tap_received');
+    recordExplorePerformanceEvent('explore_control_tap_received');
+    pendingExploreControlAckRef.current = true;
     setDistanceRadius(radius);
     setHiddenGemPageIndex(0);
     setTrailPackPageIndex(0);
     setAiRouteIdeaPageIndex(0);
     setFavoritesPageIndex(0);
     setHiddenGemCycleNotice(null);
-    // Clear AI cache when radius changes
-    aiRouteStore.clearAll();
+    runAfterShellInteractions(() => aiRouteStore.clearAll());
   }, []);
 
   const handleExploreRefinementChange = useCallback((refinement: ExploreRefinementFilter | null) => {
     hapticMicro();
+    recordExplorePerformanceEvent('explore_refinement_tap_received');
+    recordExplorePerformanceEvent('explore_control_tap_received');
+    pendingExploreControlAckRef.current = true;
     setExploreRefinement(refinement);
     setHiddenGemPageIndex(0);
     setTrailPackPageIndex(0);
@@ -1602,23 +1689,29 @@ function DiscoverScreenInner() {
   );
 
   const handleBuildTripFromRoute = useCallback(
-    async (route: ExpeditionOpportunity) => {
+    (route: ExpeditionOpportunity) => {
       hapticMicro();
       if (!guardPublicSuggestedTrailheadHandoff(route, 'trip_builder')) return;
-      const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route);
-      stageExploreReadinessPreview(routeForHandoff);
-      stageTripBuilderItineraryHandoff(routeForHandoff);
-      setAnalysisVisible(false);
-      setSelectedOpportunity(null);
-      setAiPreviewVisible(false);
-      setAiPreviewRoute(null);
-      setTrailPackPreview(null);
-      router.push({
-        pathname: '/explore-trip-builder',
-        params: { routeId: routeForHandoff.id },
-      } as any);
+      dispatchSummaryFirstTripBuilderNavigation({
+        route,
+        stageReadiness: stageExploreReadinessPreview,
+        stageItinerary: stageTripBuilderItineraryHandoff,
+        clearTransientUi: () => {
+          setAnalysisVisible(false);
+          setSelectedOpportunity(null);
+          setAiPreviewVisible(false);
+          setAiPreviewRoute(null);
+          setTrailPackPreview(null);
+        },
+        navigate: (selectedRoute) => {
+          router.push({
+            pathname: '/explore-trip-builder',
+            params: { routeId: selectedRoute.id },
+          } as any);
+        },
+      });
     },
-    [guardPublicSuggestedTrailheadHandoff, hydrateRouteCatalogOpportunityForHandoff, router, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff],
+    [guardPublicSuggestedTrailheadHandoff, router, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff],
   );
 
   const handlePrepareOfflineFromRoute = useCallback(
@@ -1717,6 +1810,7 @@ function DiscoverScreenInner() {
 
   const handlePreviewTrailPack = useCallback((trailPack: ECSTrailPackDiscoveryItem) => {
     hapticMicro();
+    recordExplorePerformanceEvent('explore_route_card_press_received');
     const requestId = trailPackPreviewRequestRef.current + 1;
     trailPackPreviewRequestRef.current = requestId;
     setTrailPackPreview(trailPack);
@@ -2509,6 +2603,7 @@ function DiscoverScreenInner() {
 
   useEffect(() => {
     if (!exploreFilterHydrated) return;
+    if (routeDiscoveryQaRuntime.enabled) return;
     void saveExploreFilterStateSnapshot({
       radiusMiles: distanceRadius,
       refinement: exploreRefinement,
@@ -2529,6 +2624,7 @@ function DiscoverScreenInner() {
     exploreMapHandoffBuild.segments.length,
     exploreMapHandoffBuild.skippedMissingGeometryCount,
     exploreRefinement,
+    routeDiscoveryQaRuntime.enabled,
   ]);
 
   useEffect(() => {
@@ -2564,17 +2660,19 @@ function DiscoverScreenInner() {
       : `Filtered routes - ${distanceRadiusFooterLabel}`;
 
     await clearNavigationHandoffPayload();
-    await saveExploreFilterStateSnapshot({
-      radiusMiles: distanceRadius,
-      refinement: exploreRefinement,
-      activeCategoryPanel: activeExplorerCategoryPanel,
-      resultSetSummary: {
-        displayedRouteCount: exploreMapHandoffBuild.segments.length,
-        candidateCount: exploreMapHandoffBuild.candidateCount,
-        skippedMissingGeometryCount: exploreMapHandoffBuild.skippedMissingGeometryCount,
-        cappedCount: exploreMapHandoffBuild.cappedCount,
-      },
-    });
+    if (!routeDiscoveryQaRuntime.enabled) {
+      await saveExploreFilterStateSnapshot({
+        radiusMiles: distanceRadius,
+        refinement: exploreRefinement,
+        activeCategoryPanel: activeExplorerCategoryPanel,
+        resultSetSummary: {
+          displayedRouteCount: exploreMapHandoffBuild.segments.length,
+          candidateCount: exploreMapHandoffBuild.candidateCount,
+          skippedMissingGeometryCount: exploreMapHandoffBuild.skippedMissingGeometryCount,
+          cappedCount: exploreMapHandoffBuild.cappedCount,
+        },
+      });
+    }
     await saveExploreRoutesMapHandoff({
       label,
       radiusMiles: activeDistanceRadius,
@@ -2614,6 +2712,7 @@ function DiscoverScreenInner() {
     exploreMapHandoffCategories,
     exploreRefinement,
     router,
+    routeDiscoveryQaRuntime.enabled,
     selectedExploreRefinementLabel,
   ]);
 
@@ -2669,7 +2768,7 @@ function DiscoverScreenInner() {
   }, [aiRouteIdeaPageIndex, publicRefinedAIRoutes]);
   const visibleAIRoutes = aiRouteIdeaPage.items;
   const trailPackPage = useMemo(() => {
-    const pageSize = TRAIL_PACK_PAGE_SIZE;
+    const pageSize = ECS_ROUTE_SEARCH_RESULT_LIMIT;
     const eligibleCount = publicRefinedTrailPacks.length;
     const totalPages = Math.max(1, Math.ceil(eligibleCount / pageSize));
     const normalizedPageIndex = eligibleCount === 0
@@ -2688,6 +2787,14 @@ function DiscoverScreenInner() {
     };
   }, [publicRefinedTrailPacks, trailPackPageIndex]);
   const visibleTrailPacks = trailPackPage.items;
+  useEffect(() => {
+    if (visibleTrailPacks.length === 0) return;
+    recordExplorePerformanceEvent('explore_first_route_list_commit', {
+      resultCount: visibleTrailPacks.length,
+      cacheHit: liveTrailPackCatalogSnapshot.cacheHit,
+      searchFingerprint: liveTrailPackCatalogSnapshot.searchFingerprint ?? undefined,
+    });
+  }, [liveTrailPackCatalogSnapshot.cacheHit, liveTrailPackCatalogSnapshot.searchFingerprint, visibleTrailPacks]);
   const hiddenGemPageCount = hiddenGemPage.totalPages;
   const trailPackPageCount = trailPackPage.totalPages;
   const aiRouteIdeaPageCount = aiRouteIdeaPage.totalPages;
@@ -2812,10 +2919,6 @@ function DiscoverScreenInner() {
 
   const totalRouteCount = refinedCanonicalRoutes.length + refinedAIRoutes.length;
   const hasDiscoveryOverrides = distanceRadius !== DEFAULT_DISTANCE_RADIUS || exploreRefinement != null;
-  const showRefinementEmptyState =
-    exploreRefinement != null &&
-    radiusFilteredOpportunities.length > 0 &&
-    refinedCanonicalRoutes.length === 0;
   const favoriteTrails = favoritesSnapshot.favorites;
   const favoritePlans = favoritesSnapshot.plans;
   const filteredExploreRouteIds = useMemo(() => {
@@ -2938,13 +3041,12 @@ function DiscoverScreenInner() {
     () =>
       normalizeExploreWizardRouteCandidates({
         trailPacks: exploreWizardTrailPackRoutes,
-        hiddenGemRoutes: exploreWizardHiddenGemRoutes,
-        ecsRouteIdeas: visibleAIRoutes,
-        favoriteRoutes: [
-          ...exploreWizardFavoriteRoutes,
-          ...filteredExploreWizardSavedBuiltRoutes,
-        ],
-        savedRouteAssets: filteredExploreWizardImportedStitchedRoutes,
+        hiddenGemRoutes: routeDiscoveryQaRuntime.enabled ? [] : exploreWizardHiddenGemRoutes,
+        ecsRouteIdeas: routeDiscoveryQaRuntime.enabled ? [] : visibleAIRoutes,
+        favoriteRoutes: routeDiscoveryQaRuntime.enabled
+          ? []
+          : [...exploreWizardFavoriteRoutes, ...filteredExploreWizardSavedBuiltRoutes],
+        savedRouteAssets: routeDiscoveryQaRuntime.enabled ? [] : filteredExploreWizardImportedStitchedRoutes,
       }),
     [
       exploreWizardFavoriteRoutes,
@@ -2952,6 +3054,7 @@ function DiscoverScreenInner() {
       filteredExploreWizardImportedStitchedRoutes,
       filteredExploreWizardSavedBuiltRoutes,
       exploreWizardTrailPackRoutes,
+      routeDiscoveryQaRuntime.enabled,
       visibleAIRoutes,
     ],
   );
@@ -2969,13 +3072,44 @@ function DiscoverScreenInner() {
     });
     return counts;
   }, [exploreWizardCandidateSet.candidates]);
-  const visibleExploreWizardCandidates = useMemo(
-    () =>
+  const visibleExploreWizardProjection = useMemo(
+    () => selectVisibleExploreRouteProjection(
       exploreWizardSourceFilter === 'all'
         ? exploreWizardCandidateSet.candidates
         : exploreWizardCandidateSet.candidates.filter((candidate) => candidate.sourceKind === exploreWizardSourceFilter),
+    ),
     [exploreWizardCandidateSet.candidates, exploreWizardSourceFilter],
   );
+  const visibleExploreWizardCandidates = visibleExploreWizardProjection.items;
+  const visibleRouteCount = visibleExploreWizardProjection.count;
+  const showRefinementEmptyState = exploreRefinement != null && visibleRouteCount === 0;
+  useEffect(() => {
+    if (!routeDiscoveryQaRuntime.enabled && !isInternalExploreDiagnosticsEnabled()) return;
+    const qaDiagnosticContext = routeDiscoveryQaRegion
+      ? { qaRegionId: routeDiscoveryQaRegion.regionId }
+      : {};
+    recordExplorePerformanceEvent('availability_classification_complete', {
+      inputCount: visibleTrailPacks.length,
+      outputCount: exploreWizardCandidateSet.candidates.length,
+      resultCount: exploreWizardCandidateSet.candidates.length,
+      ...qaDiagnosticContext,
+      searchFingerprint: liveTrailPackCatalogSnapshot.searchFingerprint ?? undefined,
+    });
+    recordExplorePerformanceEvent('visible_card_projection_complete', {
+      inputCount: exploreWizardCandidateSet.candidates.length,
+      outputCount: visibleRouteCount,
+      resultCount: visibleRouteCount,
+      ...qaDiagnosticContext,
+      searchFingerprint: liveTrailPackCatalogSnapshot.searchFingerprint ?? undefined,
+    });
+    recordExplorePerformanceEvent('list_commit_complete', {
+      inputCount: visibleRouteCount,
+      outputCount: visibleRouteCount,
+      resultCount: visibleRouteCount,
+      ...qaDiagnosticContext,
+      searchFingerprint: liveTrailPackCatalogSnapshot.searchFingerprint ?? undefined,
+    });
+  }, [exploreWizardCandidateSet.candidates.length, liveTrailPackCatalogSnapshot.searchFingerprint, routeDiscoveryQaRegion, routeDiscoveryQaRuntime.enabled, visibleRouteCount, visibleTrailPacks.length]);
   const favoriteTrailMap = useMemo(() => {
     const map = new Map<string, FavoriteTrailRecord>();
     favoriteTrails.forEach((favorite) => {
@@ -3152,7 +3286,7 @@ function DiscoverScreenInner() {
   const showTrailPackSectionLoading =
     showSectionLoading ||
     liveTrailPackCatalogSnapshot.status === 'idle' ||
-    liveTrailPackCatalogSnapshot.status === 'loading';
+    (liveTrailPackCatalogSnapshot.status === 'loading' && publicRefinedTrailPacks.length === 0);
   const favoriteTrailListScrollable = favoriteTrails.length > FAVORITES_VISIBLE_LIMIT;
   const favoritePlanListScrollable = favoritePlans.length > FAVORITES_VISIBLE_LIMIT;
   const activeFavoritePanelItems = favoritesView === 'trails' ? filteredFavoriteTrails : filteredFavoritePlans;
@@ -3621,6 +3755,9 @@ function DiscoverScreenInner() {
 
   const handleOpenExplorerCategoryPanel = useCallback((category: ExplorerCategoryPanelKey) => {
     hapticMicro();
+    recordExplorePerformanceEvent('explore_category_tap_received');
+    recordExplorePerformanceEvent('explore_control_tap_received');
+    pendingExploreControlAckRef.current = true;
     setActiveExplorerCategoryPanel(category);
   }, []);
 
@@ -3773,6 +3910,18 @@ function DiscoverScreenInner() {
                 <Text style={s.inlineSectionNoticeText}>
                   Showing verified routes within {activeDistanceRadius} mi of {routeCatalogEffectiveSearchArea.shortLabel}.
                 </Text>
+              </View>
+            ) : null}
+            {liveTrailPackCatalogSnapshot.isRevalidating && visibleTrailPacks.length > 0 ? (
+              <View style={s.inlineSectionNotice} testID="explore-route-search-refreshing-notice">
+                <ActivityIndicator size="small" color={TACTICAL.info} />
+                <Text style={s.inlineSectionNoticeText}>Refreshing verified routes…</Text>
+              </View>
+            ) : null}
+            {liveTrailPackCatalogSnapshot.searchMeta?.additionalMatchesExist ? (
+              <View style={s.inlineSectionNotice} testID="explore-route-search-result-cap-notice">
+                <Ionicons name="filter-outline" size={12} color={TACTICAL.info} />
+                <Text style={s.inlineSectionNoticeText}>{ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE}</Text>
               </View>
             ) : null}
             {visibleTrailPacks.some((trailPack) => trailPack.reviewStatus !== 'approved') ? (
@@ -3970,7 +4119,6 @@ function DiscoverScreenInner() {
     <TopoBackground>
       <View style={[s.safeContainer, { paddingBottom: dockClearance }]}>
         <Header title="Explore" />
-
         <View style={s.explorerBody}>
         <ScrollView style={s.scrollArea} contentContainerStyle={[s.scrollContent, contentFrameStyle]} showsVerticalScrollIndicator={false}>
 
@@ -3995,9 +4143,7 @@ function DiscoverScreenInner() {
                 selectedRadius={distanceRadius}
                 onChangeRadius={handleRadiusChange}
                 hasGPSFix={hasGPSFix}
-                totalCount={opportunities.length}
-                filteredCount={radiusFilteredOpportunities.length}
-                refinedCount={refinedCanonicalRoutes.length}
+                visibleCount={visibleRouteCount}
                 selectedRefinement={exploreRefinement}
                 refinementCounts={exploreRefinementCounts}
                 onChangeRefinement={handleExploreRefinementChange}
@@ -4044,7 +4190,7 @@ function DiscoverScreenInner() {
             </>
           )}
 
-          {!showInitialLoading && !showSectionLoading && radiusFilteredOpportunities.length === 0 && (
+          {!showInitialLoading && !showSectionLoading && visibleRouteCount === 0 && !showRefinementEmptyState && (
             <ECSResultsEmptyState
               style={s.emptyRadius}
               title={ECS_STATE_COPY.explore.noRoutesInRadius.title}
@@ -4217,7 +4363,7 @@ function DiscoverScreenInner() {
             </View>
           )}
 
-          {(!showInitialLoading && !showRefinementEmptyState && (radiusFilteredOpportunities.length > 0 || showSectionLoading)) && (
+          {(!showInitialLoading && !showRefinementEmptyState && (visibleRouteCount > 0 || showSectionLoading)) && (
             <View style={s.exploreWizardRouteSurface}>
               <View style={s.exploreWizardFilterRow}>
                 {EXPLORE_WIZARD_SOURCE_FILTERS.map((filter) => {

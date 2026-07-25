@@ -90,7 +90,9 @@ export const SUSPENSION_OPTIONS: { label: string; value: number; isLeveled?: boo
 
 // ── Persistence ─────────────────────────────────────────
 const LS_KEY = 'ecs_tires_lift';
-const tiresLiftPersistence = createPersistedKeyValueCache('ecs_tires_lift_store');
+const tiresLiftPersistence = createPersistedKeyValueCache('ecs_tires_lift_store', {
+  partitionByBuildProfile: true,
+});
 
 function getAllConfigs(): Record<string, TiresLiftConfig> {
   const raw = tiresLiftPersistence.get(LS_KEY);

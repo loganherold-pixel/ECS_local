@@ -1,0 +1,22 @@
+name: Explore Android acceptance artifacts
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  artifact_a:
+    name: Build Artifact A — fieldtest
+    type: build
+    params:
+      platform: android
+      profile: fieldtest
+      message: Explore acceptance Artifact A
+
+  artifact_b:
+    name: Build Artifact B — route-discovery-qa
+    needs: [artifact_a]
+    type: build
+    params:
+      platform: android
+      profile: route-discovery-qa
+      message: Explore acceptance Artifact B

@@ -241,7 +241,7 @@ These are plausible cleanup targets, but they need one more evidence pass or a u
 | Area | Evidence So Far | Next Check |
 | --- | --- | --- |
 | Standalone `scripts/` regression harnesses | Strict scan after cleanup found 70 scripts without package-script ownership or direct repo text references. They are regression-style test harnesses, not obvious generated artifacts. | Keep unless a domain owner explicitly retires the covered behavior. |
-| Windows EAS and EcoFlow dev helpers | `scripts/run-eas-fieldtest-windows.mjs` and `scripts/start-ecoflow-ble-dev.ps1` are not package-script owned, but they are clearly tied to ECS field-test and hardware workflows. | Keep unless those workflows are intentionally retired or replaced by documented package scripts. |
+| EcoFlow dev helper | `scripts/start-ecoflow-ble-dev.ps1` is not package-script owned, but it is clearly tied to the ECS hardware workflow. | Keep unless that hardware workflow is intentionally retired or replaced. The unsupported Windows EAS cache-rewriter was replaced by the package-owned supported runner documented in `docs/explore-android-eas-build-workflow.md`. |
 
 Representative retained standalone regression harnesses:
 
@@ -283,7 +283,6 @@ Stop source deletion here unless a domain owner explicitly retires a remaining f
 
 ```text
 scripts/*.js regression harnesses
-scripts/run-eas-fieldtest-windows.mjs
 scripts/start-ecoflow-ble-dev.ps1
 ```
 

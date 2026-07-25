@@ -6,6 +6,11 @@ import {
   getDocumentDirectory,
 } from './fsCompat';
 import { ecsLog } from './ecsLogger';
+import {
+  partitionPersistenceFileKey,
+  partitionPersistenceStorageKey,
+  resolveBuildProfileStoragePartition,
+} from './buildProfileStoragePartition';
 
 interface PersistedKeyValueCache {
   get: (key: string) => string | null;
@@ -16,6 +21,10 @@ interface PersistedKeyValueCache {
   waitForHydration: () => Promise<void>;
   isHydrated: () => boolean;
 }
+
+type PersistedKeyValueCacheOptions = {
+  partitionByBuildProfile?: boolean;
+};
 
 function createResolvedPromise() {
   return Promise.resolve();
@@ -38,8 +47,17 @@ function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValueCache {
-  const existing = singletonCaches.get(fileKey);
+export function createPersistedKeyValueCache(
+  fileKey: string,
+  options: PersistedKeyValueCacheOptions = {},
+): PersistedKeyValueCache {
+  const storagePartition = options.partitionByBuildProfile
+    ? resolveBuildProfileStoragePartition()
+    : resolveBuildProfileStoragePartition({});
+  const effectiveFileKey = partitionPersistenceFileKey(fileKey, storagePartition);
+  const toPhysicalStorageKey = (key: string) =>
+    partitionPersistenceStorageKey(key, storagePartition);
+  const existing = singletonCaches.get(effectiveFileKey);
   if (existing) {
     return existing;
   }
@@ -113,16 +131,16 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
     const normalizedDir = await resolveDocumentDirectoryWithRetry();
 
     if (normalizedDir) {
-      candidates.push(`${normalizedDir}${fileKey}.json`);
+      candidates.push(`${normalizedDir}${effectiveFileKey}.json`);
     }
 
     if (Platform.OS === 'android') {
-      candidates.push(`${ANDROID_NATIVE_FALLBACK_DIR}${fileKey}.json`);
-      candidates.push(`${ANDROID_NATIVE_FALLBACK_DIR.replace(/^file:\/\//, '')}${fileKey}.json`);
+      candidates.push(`${ANDROID_NATIVE_FALLBACK_DIR}${effectiveFileKey}.json`);
+      candidates.push(`${ANDROID_NATIVE_FALLBACK_DIR.replace(/^file:\/\//, '')}${effectiveFileKey}.json`);
     }
 
     if (candidates.length === 0) {
-      candidates.push(`${fileKey}.json`);
+      candidates.push(`${effectiveFileKey}.json`);
     }
 
     return Array.from(new Set(candidates));
@@ -134,7 +152,7 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
     }
 
     const candidates = await getNativePathCandidates();
-    resolvedNativePath = candidates[0] ?? `${fileKey}.json`;
+    resolvedNativePath = candidates[0] ?? `${effectiveFileKey}.json`;
     return resolvedNativePath;
   }
 
@@ -225,7 +243,7 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
         try {
           if (typeof localStorage !== 'undefined') {
             knownKeys.add(key);
-            return localStorage.getItem(key);
+            return localStorage.getItem(toPhysicalStorageKey(key));
           }
         } catch {}
         return null;
@@ -240,7 +258,7 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
         try {
           if (typeof localStorage !== 'undefined') {
             knownKeys.add(key);
-            localStorage.setItem(key, value);
+            localStorage.setItem(toPhysicalStorageKey(key), value);
           }
         } catch {}
         return;
@@ -257,7 +275,7 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
         try {
           if (typeof localStorage !== 'undefined') {
             knownKeys.delete(key);
-            localStorage.removeItem(key);
+            localStorage.removeItem(toPhysicalStorageKey(key));
           }
         } catch {}
         return;
@@ -275,7 +293,9 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
       if (isWeb) {
         try {
           if (typeof localStorage !== 'undefined') {
-            Array.from(knownKeys).forEach((key) => localStorage.removeItem(key));
+            Array.from(knownKeys).forEach((key) =>
+              localStorage.removeItem(toPhysicalStorageKey(key))
+            );
           }
         } catch {}
         return;
@@ -311,6 +331,6 @@ export function createPersistedKeyValueCache(fileKey: string): PersistedKeyValue
     },
   };
 
-  singletonCaches.set(fileKey, instance);
+  singletonCaches.set(effectiveFileKey, instance);
   return instance;
 }

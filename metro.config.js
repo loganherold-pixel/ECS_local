@@ -1,5 +1,8 @@
 const path = require('path');
 const appConfig = require('./app.json');
+const { applyRouteDiscoveryQaNetworkIsolation } = require('./lib/explore/routeDiscoveryQaNetworkIsolation');
+
+applyRouteDiscoveryQaNetworkIsolation(process.env);
 
 if (process.platform === 'win32') {
   const spawnAsyncPath = require.resolve('@expo/spawn-async');
@@ -119,6 +122,46 @@ config.resolver.assetExts = Array.from(
 config.resolver.extraNodeModules = {
   ...config.resolver.extraNodeModules,
   '@supabase/node-fetch': path.resolve(__dirname, 'shims', 'node-fetch.js'),
+};
+
+const defaultResolveRequest = config.resolver.resolveRequest;
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  const routeDiscoveryQaEnabled =
+    process.env.EXPO_PUBLIC_ECS_BUILD_PROFILE === 'route-discovery-qa' &&
+    process.env.EXPO_PUBLIC_ECS_ROUTE_DISCOVERY_QA_TRANSPORT === 'true';
+  if (!routeDiscoveryQaEnabled && moduleName === './routeDiscoveryQaTransport') {
+    return {
+      type: 'sourceFile',
+      filePath: path.resolve(__dirname, 'lib/explore/routeDiscoveryQaTransport.disabled.ts'),
+    };
+  }
+  if (!routeDiscoveryQaEnabled && moduleName.endsWith('routeDiscoveryQaRuntime')) {
+    return {
+      type: 'sourceFile',
+      filePath: path.resolve(__dirname, 'lib/explore/routeDiscoveryQaRuntime.disabled.ts'),
+    };
+  }
+  if (!routeDiscoveryQaEnabled && moduleName.endsWith('RouteDiscoveryQaIdentity')) {
+    return {
+      type: 'sourceFile',
+      filePath: path.resolve(__dirname, 'components/explore/RouteDiscoveryQaIdentity.disabled.tsx'),
+    };
+  }
+  if (!routeDiscoveryQaEnabled && moduleName.endsWith('routeDiscoveryQaVehicleBootstrap')) {
+    return {
+      type: 'sourceFile',
+      filePath: path.resolve(__dirname, 'lib/explore/routeDiscoveryQaVehicleBootstrap.disabled.ts'),
+    };
+  }
+  if (!routeDiscoveryQaEnabled && moduleName.endsWith('RouteDiscoveryQaVehicleBootstrapGate')) {
+    return {
+      type: 'sourceFile',
+      filePath: path.resolve(__dirname, 'components/explore/RouteDiscoveryQaVehicleBootstrapGate.disabled.tsx'),
+    };
+  }
+  return defaultResolveRequest
+    ? defaultResolveRequest(context, moduleName, platform)
+    : context.resolveRequest(context, moduleName, platform);
 };
 
 module.exports = config;

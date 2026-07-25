@@ -251,7 +251,9 @@ export const VEHICLE_SPEC_PRESETS: Record<string, VehicleSpecPreset[]> = {
 
 // ── Persistence ─────────────────────────────────────────
 const LS_KEY = 'ecs_vehicle_specs';
-const vehicleSpecPersistence = createPersistedKeyValueCache('ecs_vehicle_specs_store');
+const vehicleSpecPersistence = createPersistedKeyValueCache('ecs_vehicle_specs_store', {
+  partitionByBuildProfile: true,
+});
 
 function getAllSpecs(): Record<string, VehicleSpec> {
   const raw = vehicleSpecPersistence.get(LS_KEY);

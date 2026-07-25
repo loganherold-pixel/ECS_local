@@ -36,21 +36,7 @@ assert.deepStrictEqual(
 
 assert(workflow.includes('name: Route Catalog Edge Functions Deploy'), 'Workflow should use the expected display name');
 assert(workflow.includes('workflow_dispatch:'), 'Workflow should support manual deployment');
-assert(workflow.includes('push:'), 'Workflow should run on relevant pushed function/config changes');
-assert(workflow.includes('paths:'), 'Workflow should be path scoped');
-
-for (const requiredPath of [
-  'supabase/functions/route-catalog-search/**',
-  'supabase/functions/route-catalog-detail/**',
-  'supabase/functions/route-submission-intake/**',
-  'supabase/functions/route-catalog-summary/**',
-  'supabase/functions/route-catalog-sync-*/**',
-  'supabase/functions/_shared/routeCatalog*.ts',
-  'supabase/config.toml',
-  'scripts/route-catalog-sync-inventory.js',
-]) {
-  assert(workflow.includes(requiredPath), `Workflow should watch ${requiredPath}`);
-}
+assert(!workflow.includes('  push:'), 'Broad route deployment must remain manual-only');
 
 for (const required of [
   'actions/checkout@v4',

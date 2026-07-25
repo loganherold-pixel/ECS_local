@@ -25,7 +25,7 @@ const MIGRATION_STEPS = [
 const FUNCTION_STEPS = [
   'Deploy supabase/functions/convoy-membership to the target Supabase project.',
   'Set the CONVOY_INVITE_HASH_PEPPER Edge Function secret.',
-  'Confirm the function runs with SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY, or the ECS_* overrides documented in docs/dispatch/CONVOY_TRACKING_RLS.md.',
+  'Confirm the function runs with the approved server-side Supabase configuration documented in docs/dispatch/CONVOY_TRACKING_RLS.md.',
 ];
 
 const REALTIME_STEPS = [

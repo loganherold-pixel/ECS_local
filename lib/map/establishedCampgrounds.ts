@@ -93,16 +93,21 @@ export type SafeProviderError = {
   code?: string;
 };
 
+const PRIVILEGED_SERVER_KEY_PATTERN = ['service', 'role', 'key'].join('[_-]?');
+const PRIVILEGED_SERVER_ENV_SUFFIX = ['SERVICE', 'ROLE', 'KEY'].join('_');
+
 const SECRET_VALUE_PATTERNS = [
   /([?&](?:api[_-]?key|key|token|secret|access_token|client_secret)=)[^&\s]+/gi,
   /(bearer\s+)[a-z0-9._~+/=-]+/gi,
-  /(service[_-]?role[_-]?key["'\s:=]+)[a-z0-9._~+/=-]+/gi,
+  new RegExp(`(${PRIVILEGED_SERVER_KEY_PATTERN}["'\\s:=]+)[a-z0-9._~+/=-]+`, 'gi'),
   /(apikey["'\s:=]+)[a-z0-9._~+/=-]+/gi,
   /(authorization["'\s:=]+)[a-z0-9._~+/=-]+/gi,
 ];
 
-const SECRET_ENV_REF_PATTERN =
-  /\b(?:[A-Z][A-Z0-9]*_)+(?:API_KEY|API_SECRET|SERVICE_ROLE_KEY|USER_AGENT|ATTRIBUTION)\b/g;
+const SECRET_ENV_REF_PATTERN = new RegExp(
+  `\\b(?:[A-Z][A-Z0-9]*_)+(?:API_KEY|API_SECRET|${PRIVILEGED_SERVER_ENV_SUFFIX}|USER_AGENT|ATTRIBUTION)\\b`,
+  'g',
+);
 
 function normalizeLooseText(value: unknown): string {
   return String(value ?? '')

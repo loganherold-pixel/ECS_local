@@ -122,6 +122,11 @@ import {
   recordAuthDiagnostic,
 } from '../lib/auth/authDiagnostics';
 import {
+  createFreeSessionTransitionCoordinator,
+  equalFreeSessionTransitionSnapshot,
+  type FreeSessionTransitionSnapshot,
+} from '../lib/auth/freeSessionTransition';
+import {
   hashAuthIdentifier,
   maskAuthEmail,
   redactAuthUserId,
@@ -445,6 +450,7 @@ interface AppContextValue {
   isOnline: boolean;
   connectivityStatus: ConnectivityStatus;
   offlineMode: boolean;
+  freeSessionTransition: FreeSessionTransitionSnapshot;
   queueSize: number;
 
   // Sync
@@ -484,6 +490,11 @@ interface AppContextValue {
   purchaseEcsProMonthly: () => Promise<{ success: boolean; cancelled?: boolean; pending?: boolean; error?: string }>;
   restoreEcsProAccess: () => Promise<{ success: boolean; error?: string }>;
   enterOfflineMode: () => void;
+  beginFreeSessionTransition: () => number | null;
+  commitFreeSessionTransition: (generation: number) => boolean;
+  dispatchFreeSessionNavigation: (generation: number, target: string) => boolean;
+  markFreeSessionDestinationMounted: (route: string, generation?: number) => boolean;
+  failFreeSessionTransition: (generation: number) => boolean;
   exitOfflineMode: () => void;
   showToast: (msg: string) => void;
   consumeAuthNotice: () => string | null;
@@ -644,6 +655,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [isOnline, setIsOnline] = useState(false);
   const [connectivityStatus, setConnectivityStatus] = useState<ConnectivityStatus>('offline');
   const [offlineMode, setOfflineMode] = useState(getPersistedOfflineMode());
+  const [freeSessionTransition, setFreeSessionTransition] = useState<FreeSessionTransitionSnapshot>({
+    state: 'idle',
+    generation: 0,
+    correlationId: null,
+    navigationCount: 0,
+    navigationTarget: null,
+  });
+  const freeSessionCoordinatorRef = useRef<ReturnType<typeof createFreeSessionTransitionCoordinator> | null>(null);
+  if (!freeSessionCoordinatorRef.current) {
+    freeSessionCoordinatorRef.current = createFreeSessionTransitionCoordinator({
+      correlationId: (generation) => `free-${generation}-${Date.now().toString(36)}`,
+      onEvent: (name, snapshot) => {
+        recordAuthDiagnostic(name, {
+          result: name === 'transition_failed' ? 'failure' : 'completed',
+          access_state: snapshot.state,
+          metadata: {
+            profile: process.env.EXPO_PUBLIC_ECS_BUILD_PROFILE ?? 'unknown',
+            transitionGeneration: snapshot.generation,
+            correlationId: snapshot.correlationId,
+            navigationCount: snapshot.navigationCount,
+          },
+        });
+        setFreeSessionTransition((current) =>
+          equalFreeSessionTransitionSnapshot(current, snapshot) ? current : snapshot
+        );
+      },
+    });
+  }
+  const freeSessionCoordinator = freeSessionCoordinatorRef.current;
   const [queueSize, setQueueSize] = useState(offlineQueue.size);
 
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("offline");
@@ -852,11 +892,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setUserSettings(null);
     setDirtyCount(0);
 
-    if (options?.clearOfflineMode !== false) {
+    if (options?.clearOfflineMode !== false && !freeSessionCoordinator.isAuthoritative()) {
       setOfflineMode(false);
       setPersistedOfflineMode(false);
     }
-  }, []);
+  }, [freeSessionCoordinator]);
 
   // ── Offline mode actions ────────────────────────────────────
   const enterOfflineMode = useCallback(() => {
@@ -865,20 +905,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setPersistedOfflineMode(true);
   }, [offlineMode]);
 
+  const beginFreeSessionTransition = useCallback(() => freeSessionCoordinator.begin(), [freeSessionCoordinator]);
+  const commitFreeSessionTransition = useCallback((generation: number) => {
+    if (!freeSessionCoordinator.commit(generation)) return false;
+    setOfflineMode((current) => current || true);
+    setPersistedOfflineMode(true);
+    return true;
+  }, [freeSessionCoordinator]);
+  const dispatchFreeSessionNavigation = useCallback(
+    (generation: number, target: string) => freeSessionCoordinator.requestNavigation(generation, target),
+    [freeSessionCoordinator],
+  );
+  const markFreeSessionDestinationMounted = useCallback(
+    (route: string, generation?: number) => freeSessionCoordinator.markDestinationMounted(route, generation),
+    [freeSessionCoordinator],
+  );
+  const failFreeSessionTransition = useCallback(
+    (generation: number) => freeSessionCoordinator.fail(generation),
+    [freeSessionCoordinator],
+  );
+
   const exitOfflineMode = useCallback(() => {
+    freeSessionCoordinator.resetForIntentionalSignIn();
     if (!offlineMode) return;
     setOfflineMode(false);
     setPersistedOfflineMode(false);
-  }, [offlineMode]);
+  }, [freeSessionCoordinator, offlineMode]);
 
   // ── Initialize IndexedDB + migrate from localStorage + hydrate dashboard ────
   useEffect(() => {
     let cancelled = false;
+    const hydrationGeneration = freeSessionCoordinator.snapshot().generation;
 
     void ensureStartupHydration().then((result) => {
       if (cancelled) return;
 
-      setOfflineMode(prev => (prev === result.persistedOfflineMode ? prev : result.persistedOfflineMode));
+      if (!freeSessionCoordinator.shouldIgnoreHydration(hydrationGeneration)) {
+        setOfflineMode(prev => (prev === result.persistedOfflineMode ? prev : result.persistedOfflineMode));
+      }
       setDbReady(prev => (prev === result.storageReady ? prev : result.storageReady));
       setStartupStateHydrated(true);
 
@@ -892,7 +956,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [freeSessionCoordinator]);
 
 
   // ── Connectivity monitoring ─────────────────────────────────
@@ -1296,11 +1360,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setAuthLoading(false);
       } else {
       // Step 1: Check existing Supabase session
+      const providerHydrationGeneration = freeSessionCoordinator.snapshot().generation;
+      recordAuthDiagnostic('auth_hydration_started', {
+        result: 'started',
+        metadata: { transitionGeneration: providerHydrationGeneration },
+      });
       withAuthRequestTimeout(
         'startup_session_restore',
         supabase.auth.getSession(),
         STARTUP_PROVIDER_SESSION_TIMEOUT_MS,
       ).then(({ data: { session } }) => {
+        if (freeSessionCoordinator.shouldIgnoreHydration(providerHydrationGeneration)) {
+          setAuthLoading(false);
+          return;
+        }
+        recordAuthDiagnostic('auth_hydration_completed', {
+          result: 'completed',
+          access_state: session?.user ? 'authenticated' : 'signed_out',
+          metadata: { transitionGeneration: providerHydrationGeneration },
+        });
         const currentUser = session?.user || null;
 
       if (currentUser) {
@@ -1392,6 +1470,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
       }).catch((err) => {
+        if (freeSessionCoordinator.shouldIgnoreHydration(providerHydrationGeneration)) {
+          setAuthLoading(false);
+          return;
+        }
         // Session check itself failed — check offline fallback
         console.warn('[Auth] Session check failed:', sanitizeAuthLogPayload(err));
 
@@ -1471,6 +1553,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
+      if (freeSessionCoordinator.isAuthoritative()) {
+        freeSessionCoordinator.shouldIgnoreHydration(0);
+        setAuthLoading((current) => current ? false : current);
+        return;
+      }
       const currentUser = session?.user || null;
       const runtimeSessionValidity = sessionStore.checkSessionValidity();
       const hasTransientRuntimeSession =
@@ -1556,7 +1643,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
 
     return () => subscription.unsubscribe();
-  }, [clearAuthenticatedRuntimeState, startupStateHydrated]);
+  }, [clearAuthenticatedRuntimeState, freeSessionCoordinator, startupStateHydrated]);
 
 
   // ── Set active trip ─────────────────────────────────────────
@@ -1876,6 +1963,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     keepSignedIn: boolean = true,
     source: AuthLoginSource = 'unknown',
   ): Promise<SignInResult> => {
+    freeSessionCoordinator.resetForIntentionalSignIn();
     if (signInAttemptRef.current) {
       return signInAttemptRef.current;
     }
@@ -2144,7 +2232,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     signInAttemptRef.current = attempt;
     return attempt;
-  }, [clearAuthenticatedRuntimeState]);
+  }, [clearAuthenticatedRuntimeState, freeSessionCoordinator]);
 
 
 
@@ -2435,6 +2523,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     isOnline,
     connectivityStatus,
     offlineMode,
+    freeSessionTransition,
     queueSize,
     syncStatus,
     dirtyCount,
@@ -2466,12 +2555,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     purchaseEcsProMonthly,
     restoreEcsProAccess,
     enterOfflineMode,
+    beginFreeSessionTransition,
+    commitFreeSessionTransition,
+    dispatchFreeSessionNavigation,
+    markFreeSessionDestinationMounted,
+    failFreeSessionTransition,
     exitOfflineMode,
     showToast,
     consumeAuthNotice,
   }), [
     accessState,
     activeTrip,
+    beginFreeSessionTransition,
     authLoading,
     authNotice,
     authPhase,
@@ -2480,10 +2575,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     bootstrapError,
     connectivityStatus,
     consumeAuthNotice,
+    commitFreeSessionTransition,
     dbReady,
     dirtyCount,
+    dispatchFreeSessionNavigation,
     ecsProProduct,
     enterOfflineMode,
+    failFreeSessionTransition,
+    freeSessionTransition,
     exitOfflineMode,
     fuelWaterLogs,
     isOnline,
@@ -2493,6 +2592,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loadItems,
     loadMapSlots,
     loading,
+    markFreeSessionDestinationMounted,
     offlineMode,
     operatorInfo,
     purchaseEcsProMonthly,

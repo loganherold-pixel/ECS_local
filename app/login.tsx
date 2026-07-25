@@ -43,11 +43,19 @@ import { useReducedMotion } from '../lib/ecsAnimations';
 import { ECS, TACTICAL } from '../lib/theme';
 import { EASING, MOTION, PRESS } from '../lib/motion';
 import { useApp } from '../context/AppContext';
+import { recordAuthDiagnostic } from '../lib/auth/authDiagnostics';
 
 const LOGIN_LOGO = require('../assets/images/Expedition Command System Logo.png');
 
 type ScreenMode = 'login' | 'forgot';
 type MessageTone = 'neutral' | 'error' | 'success';
+type FreeEntryTransitionState =
+  | 'idle'
+  | 'activating'
+  | 'state_committed'
+  | 'navigating'
+  | 'destination_mounted'
+  | 'failed';
 
 function logAuthDev(...args: unknown[]) {
   if (typeof __DEV__ !== 'undefined' && __DEV__) {
@@ -92,11 +100,28 @@ export default function LoginScreen() {
     authPhase,
     authNotice,
     consumeAuthNotice,
-    enterOfflineMode,
-    offlineMode,
+    beginFreeSessionTransition,
+    commitFreeSessionTransition,
+    dispatchFreeSessionNavigation,
+    failFreeSessionTransition,
+    freeSessionTransition,
     showToast,
   } = useApp();
   const reducedMotion = useReducedMotion();
+  const freeSessionTransitionRef = useRef(freeSessionTransition);
+  freeSessionTransitionRef.current = freeSessionTransition;
+  useEffect(() => () => {
+    const transition = freeSessionTransitionRef.current;
+    recordAuthDiagnostic('login_route_unmount_started', {
+      route: '/login',
+      access_state: transition.state,
+      metadata: {
+        transitionGeneration: transition.generation,
+        correlationId: transition.correlationId,
+        navigationCount: transition.navigationCount,
+      },
+    });
+  }, []);
   const loginLayout = useMemo(
     () => resolveLoginScreenLayout({
       width,
@@ -128,7 +153,7 @@ export default function LoginScreen() {
   const [statusTone, setStatusTone] = useState<MessageTone>('neutral');
   const [offlineCredentialStatus, setOfflineCredentialStatus] =
     useState<OfflineCredentialStatusSnapshot | null>(null);
-  const [pendingFreeDestination, setPendingFreeDestination] = useState<unknown | null>(null);
+  const [freeEntryTransition, setFreeEntryTransition] = useState<FreeEntryTransitionState>('idle');
   const loginCtaRenderedRef = useRef(false);
   const loginSubmitInFlightRef = useRef(false);
 
@@ -162,7 +187,8 @@ export default function LoginScreen() {
   }, [loginGuardState]);
   const loginDisabled = loginGuardState.disabled;
   const forgotDisabled = resetLoading || !isOnline || !trimmedResetEmail || !isValidEmail(trimmedResetEmail);
-  const utilityBusy = loading || resetLoading || exportingLocalData || importingLocalData;
+  const freeEntryBusy = freeEntryTransition !== 'idle' && freeEntryTransition !== 'failed';
+  const utilityBusy = loading || resetLoading || exportingLocalData || importingLocalData || freeEntryBusy;
 
   useEffect(() => {
     const notice = consumeAuthNotice();
@@ -278,44 +304,53 @@ export default function LoginScreen() {
   }, [router]);
 
   const handleContinueFree = useCallback(() => {
+    const generation = beginFreeSessionTransition();
+    if (generation === null) return;
+    setFreeEntryTransition('activating');
+    setStatusMessage('Preparing your offline workspace…');
+    setStatusTone('neutral');
     Keyboard.dismiss();
     setShowPassword(false);
     setPassword('');
-    clearStatus();
-    const { hasConfiguredVehicle, localVehicleCount, activeVehicleId, setupVehicleId } =
-      resolveConfiguredVehiclePresence();
-    const setupComplete = setupStore.isComplete();
-    const needsFreshGuestSetup = !hasConfiguredVehicle;
+    try {
+      const { hasConfiguredVehicle, localVehicleCount, activeVehicleId, setupVehicleId } =
+        resolveConfiguredVehiclePresence();
+      const setupComplete = setupStore.isComplete();
+      const needsFreshGuestSetup = !hasConfiguredVehicle;
 
-    if (needsFreshGuestSetup) {
-      setupStore.reset();
-      vehicleSetupStore.clearActiveVehicleId();
+      if (needsFreshGuestSetup) {
+        setupStore.reset();
+        vehicleSetupStore.clearActiveVehicleId();
+      }
+
+      const destination =
+        hasConfiguredVehicle && setupComplete
+          ? '/dashboard'
+          : { pathname: '/setup', params: { mode: 'guest-entry' } };
+      const destinationPath = hasConfiguredVehicle && setupComplete ? '/dashboard' : '/setup';
+      logAuthDev('[Auth] Free entry route decision', {
+        destination,
+        hasConfiguredVehicle,
+        localVehicleCount,
+        activeVehicleId,
+        setupVehicleId,
+        setupComplete,
+        needsFreshGuestSetup,
+      });
+      if (!commitFreeSessionTransition(generation)) throw new Error('Free session commit rejected');
+      setFreeEntryTransition('state_committed');
+      if (!dispatchFreeSessionNavigation(generation, destinationPath)) {
+        throw new Error('Free session navigation rejected');
+      }
+      setFreeEntryTransition('navigating');
+      router.replace(destination as any);
+    } catch {
+      failFreeSessionTransition(generation);
+      setFreeEntryTransition('failed');
+      setStatusMessage('ECS could not start the offline workspace. Try again.');
+      setStatusTone('error');
     }
-
-    const destination =
-      hasConfiguredVehicle && setupComplete
-        ? '/dashboard'
-        : { pathname: '/setup', params: { mode: 'guest-entry' } };
-    logAuthDev('[Auth] Free entry route decision', {
-      destination,
-      hasConfiguredVehicle,
-      localVehicleCount,
-      activeVehicleId,
-      setupVehicleId,
-      setupComplete,
-      needsFreshGuestSetup,
-    });
-    enterOfflineMode();
-    if (needsFreshGuestSetup) {
-      setPendingFreeDestination(destination);
-    }
-  }, [clearStatus, enterOfflineMode]);
-
-  useEffect(() => {
-    if (!offlineMode || !pendingFreeDestination) return;
-    router.replace(pendingFreeDestination as any);
-    setPendingFreeDestination(null);
-  }, [offlineMode, pendingFreeDestination, router]);
+  }, [beginFreeSessionTransition, commitFreeSessionTransition, dispatchFreeSessionNavigation, failFreeSessionTransition, router]);
 
   const handleViewPro = useCallback(() => {
     Keyboard.dismiss();
@@ -559,6 +594,7 @@ export default function LoginScreen() {
                     keepSignedIn={keepSignedIn}
                     loading={loading}
                     utilityBusy={utilityBusy}
+                    freeEntryTransition={freeEntryTransition}
                     loginDisabled={loginDisabled}
                     renderMessage={renderMessage}
                     hasMessage={!!renderMessage}
@@ -876,6 +912,7 @@ type LoginCardProps = {
   keepSignedIn: boolean;
   loading: boolean;
   utilityBusy: boolean;
+  freeEntryTransition: FreeEntryTransitionState;
   loginDisabled: boolean;
   renderMessage: React.ReactNode;
   hasMessage: boolean;
@@ -913,6 +950,7 @@ const LoginCard = memo(function LoginCard({
   keepSignedIn,
   loading,
   utilityBusy,
+  freeEntryTransition,
   loginDisabled,
   renderMessage,
   hasMessage,
@@ -1085,9 +1123,30 @@ const LoginCard = memo(function LoginCard({
       </View>
 
       <View style={[styles.actionRow, compactLayout ? styles.actionRowCompactLandscape : null]}>
-        <Pressable style={({ pressed }) => [styles.secondaryButton, compactLayout ? styles.secondaryButtonCompactLandscape : null, utilityBusy ? styles.disabledUtility : null, pressed && !utilityBusy ? styles.utilityPressed : null]} disabled={utilityBusy} onPress={onContinueFree}>
-          <Ionicons name="phone-portrait-outline" size={14} color={TACTICAL.amber} />
-          <Text style={styles.secondaryButtonTextPrimary}>Continue with Free</Text>
+        <Pressable
+          style={({ pressed }) => [styles.secondaryButton, compactLayout ? styles.secondaryButtonCompactLandscape : null, utilityBusy ? styles.disabledUtility : null, pressed && !utilityBusy ? styles.utilityPressed : null]}
+          disabled={utilityBusy}
+          onPress={onContinueFree}
+          accessibilityRole="button"
+          accessibilityLabel="Continue with Free"
+          accessibilityHint="Open ECS with local offline features"
+          accessibilityState={{ disabled: utilityBusy, busy: freeEntryTransition !== 'idle' && freeEntryTransition !== 'failed' }}
+          testID="auth-continue-free-button"
+        >
+          {freeEntryTransition === 'activating' || freeEntryTransition === 'state_committed' || freeEntryTransition === 'navigating' ? (
+            <ActivityIndicator size="small" color={TACTICAL.amber} />
+          ) : (
+            <Ionicons name="phone-portrait-outline" size={14} color={TACTICAL.amber} />
+          )}
+          <Text style={styles.secondaryButtonTextPrimary}>
+            {freeEntryTransition === 'activating' || freeEntryTransition === 'state_committed'
+              ? 'Preparing Offline…'
+              : freeEntryTransition === 'navigating'
+                ? 'Opening ECS…'
+                : freeEntryTransition === 'failed'
+                  ? 'Retry Free Entry'
+                  : 'Continue with Free'}
+          </Text>
         </Pressable>
         <Pressable style={({ pressed }) => [styles.secondaryButton, compactLayout ? styles.secondaryButtonCompactLandscape : null, pressed ? styles.utilityPressed : null]} onPress={onViewPro}>
           <Ionicons name="diamond-outline" size={14} color="rgba(236,239,242,0.9)" />

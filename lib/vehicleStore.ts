@@ -19,8 +19,8 @@
  * This eliminates stale-state bugs where Fleet renders before the latest
  * saved vehicle/container state is available.
  */
-import { Platform } from 'react-native';
 import { supabase, isDeployedEdgeFunction, isSupabaseConfigured } from './supabase';
+import { resolveBuildProfileStoragePartition } from './buildProfileStoragePartition';
 import { consumablesStore } from './consumablesStore';
 import { createPersistedKeyValueCache } from './keyValuePersistence';
 import { tiresLiftStore } from './tiresLiftStore';
@@ -32,6 +32,7 @@ import type { Vehicle } from './types';
 const TAG = '[VehicleStore]';
 const LS_KEY = 'ecs_local_vehicles';
 const SYNC_FLAG_KEY = 'ecs_vehicles_synced';
+const storagePartition = resolveBuildProfileStoragePartition();
 
 function logVehicleStoreDebug(message: string, details?: Record<string, unknown>): void {
   ecsLog.dev('CONFIG', message, details, {
@@ -76,28 +77,19 @@ const BUILDER_STATE_KEY = 'ecs_exp_builder_state';
 
 // ── localStorage helpers ─────────────────────────────────
 
-const localVehicleCache = createPersistedKeyValueCache('ecs_vehicle_store');
+const localVehicleCache = createPersistedKeyValueCache('ecs_vehicle_store', {
+  partitionByBuildProfile: true,
+});
 
 function lsGet(key: string): string | null {
-  if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-    return localStorage.getItem(key);
-  }
   return localVehicleCache.get(key);
 }
 
 function lsSet(key: string, value: string): void {
-  if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-    localStorage.setItem(key, value);
-  }
   localVehicleCache.set(key, value);
 }
 
 function lsRemove(key: string): void {
-  try {
-    if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
-      localStorage.removeItem(key);
-    }
-  } catch {}
   localVehicleCache.delete(key);
 }
 
@@ -457,6 +449,24 @@ export const vehicleStore = {
    * about vehicle count without starting an async fetch.
    */
   getLocalSnapshot: (): Vehicle[] => getLocalVehicles(),
+
+  replaceIsolatedLocalSnapshot: async (
+    incomingVehicles: Vehicle[],
+  ): Promise<{ changed: boolean; vehicleCount: number }> => {
+    if (!storagePartition.isolated) {
+      throw new Error('Isolated local vehicle replacement is unavailable in production storage.');
+    }
+    await ensureVehicleStorageHydrated();
+    const normalized = incomingVehicles.map(normalizeVehicleRecord);
+    const current = getLocalVehicles();
+    const changed = JSON.stringify(current) !== JSON.stringify(normalized);
+    if (changed) {
+      saveLocalVehicles(normalized);
+      await flushVehicleStorage();
+      notifyChange('update', normalized[0]?.id ?? null);
+    }
+    return { changed, vehicleCount: normalized.length };
+  },
 
   importLocalSnapshot: async (incomingVehicles: Vehicle[]): Promise<{ imported: number; skipped: number }> => {
     await ensureVehicleStorageHydrated();
@@ -983,6 +993,7 @@ export const vehicleStore = {
    * Guard: userId must be a real UUID, not the 'local' sentinel.
    */
   syncToCloud: async (userId: string): Promise<{ synced: number; errors: number }> => {
+    if (!storagePartition.cloudVehicleSyncAllowed) return { synced: 0, errors: 0 };
     await ensureVehicleStorageHydrated();
 
     if (!isSupabaseConfigured) return { synced: 0, errors: 0 };
@@ -1211,6 +1222,7 @@ export const vehicleStore = {
    * Sync pending vehicle configurations to cloud
    */
   syncPendingConfigs: async (userId: string): Promise<number> => {
+    if (!storagePartition.cloudVehicleSyncAllowed) return 0;
     await ensureVehicleStorageHydrated();
     if (!isSupabaseConfigured || !isDeployedEdgeFunction('setup-vehicle-zones')) return 0;
 

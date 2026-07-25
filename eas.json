@@ -1,6 +1,6 @@
 {
   "cli": {
-    "version": ">= 18.5.0",
+    "version": "21.0.3",
     "appVersionSource": "remote"
   },
   "build": {
@@ -31,10 +31,33 @@
       },
       "env": {
         "EXPO_NO_TELEMETRY": "1",
+        "ECS_BUILD_DIRTY": "clean",
         "EXPO_PUBLIC_ECS_FIELD_TEST_BUILD": "true",
         "EXPO_PUBLIC_ECS_BUILD_PROFILE": "fieldtest",
+        "EXPO_PUBLIC_ECS_INTERNAL_DIAGNOSTICS": "true",
         "EXPO_PUBLIC_ECS_DISPERSED_CAMPING_LAYER": "true",
         "EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER": "true"
+      }
+    },
+    "route-discovery-qa": {
+      "distribution": "internal",
+      "environment": "preview",
+      "channel": "route-discovery-qa",
+      "autoIncrement": true,
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_NO_TELEMETRY": "1",
+        "ECS_BUILD_DIRTY": "clean",
+        "EXPO_PUBLIC_APP_ENV": "internal-qa",
+        "EXPO_PUBLIC_ECS_BUILD_PROFILE": "route-discovery-qa",
+        "EXPO_PUBLIC_ECS_INTERNAL_DIAGNOSTICS": "true",
+        "EXPO_PUBLIC_ECS_ROUTE_DISCOVERY_QA_TRANSPORT": "true",
+        "EXPO_PUBLIC_ECS_SUPABASE_NETWORK_DISABLED": "true",
+        "EXPO_PUBLIC_ECS_FIELD_TEST_BUILD": "false",
+        "EXPO_PUBLIC_ECS_DISPERSED_CAMPING_LAYER": "false",
+        "EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER": "false"
       }
     },
     "campops-preview": {

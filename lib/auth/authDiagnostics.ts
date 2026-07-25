@@ -49,7 +49,30 @@ export type AuthDiagnosticEventName =
   | 'auth_authenticated_destination_resolved'
   | 'auth_authenticated_destination_fallback'
   | 'auth_degraded_state_presented'
-  | 'auth_first_authenticated_frame_visible';
+  | 'auth_first_authenticated_frame_visible'
+  | 'free_session_press_received'
+  | 'free_session_duplicate_press_rejected'
+  | 'free_session_activation_started'
+  | 'free_session_state_committed'
+  | 'free_session_intentional_sign_in_reset'
+  | 'auth_hydration_started'
+  | 'auth_hydration_completed'
+  | 'auth_hydration_ignored_for_authoritative_free_session'
+  | 'navigation_requested'
+  | 'navigation_dispatched'
+  | 'route_guard_evaluated'
+  | 'route_guard_redirected'
+  | 'login_route_unmount_started'
+  | 'destination_route_mount_started'
+  | 'destination_shell_visible'
+  | 'destination_accessibility_ready'
+  | 'video_owner_created'
+  | 'video_listener_attached'
+  | 'video_listener_detached'
+  | 'video_release_started'
+  | 'video_release_completed'
+  | 'stale_video_callback_rejected'
+  | 'transition_failed';
 
 export interface AuthDiagnosticPayload {
   route?: string | null;
