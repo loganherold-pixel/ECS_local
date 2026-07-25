@@ -603,6 +603,8 @@ import {
   getActiveVehicleContextWithFallback,
   subscribeActiveVehicleState,
 } from '../../lib/activeVehicleContext';
+import { selectVehicleRouteConstraintEnvelope } from '../../lib/vehicleRouteConstraintEnvelopeSelector';
+import { VehicleRouteConstraintEnvelope } from '../../components/navigate/VehicleRouteConstraintEnvelope';
 import { consumablesStore } from '../../lib/consumablesStore';
 import { loadoutItemStore, loadoutStore } from '../../lib/loadoutStore';
 import { tiresLiftStore } from '../../lib/tiresLiftStore';
@@ -11888,6 +11890,14 @@ const activeSegmentProfile = useMemo<SegmentRiskProfile | null>(() => {
     const result = bailoutStore.computeRemoteness(activeSegmentProfile.segments, activeBailouts);
     return { ...activeSegmentProfile, segments: result.segments };
   }, [activeSegmentProfile, activeBailouts]);
+  const vehicleRouteConstraintEnvelope = useMemo(
+    () => selectVehicleRouteConstraintEnvelope({
+      routeIntelligence,
+      vehicleContext: navigateVehicleContext,
+      routeRiskSegments: enrichedProfile?.segments ?? null,
+    }),
+    [enrichedProfile?.segments, navigateVehicleContext, routeIntelligence],
+  );
 
   const activeExitPlan = useMemo<ExitPlan | null>(() => {
     if (!enrichedProfile || activeBailouts.length === 0) return null;
@@ -27661,6 +27671,10 @@ const stableMapSurface = useMemo(() => {
             onSelectItem={handleRouteConfidenceTimelineItemPress}
             formatMeasure={formatNavMeters}
           />
+        ) : null}
+
+        {vehicleRouteConstraintEnvelope ? (
+          <VehicleRouteConstraintEnvelope envelope={vehicleRouteConstraintEnvelope} />
         ) : null}
 
         <View style={styles.intelSectionCard}>

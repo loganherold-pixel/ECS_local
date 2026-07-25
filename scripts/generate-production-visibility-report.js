@@ -95,6 +95,19 @@ function buildProductionReport(options = {}) {
       passed: ['dispatch_team_position_sharing', 'dispatch_external_integrations', 'ai_assist', 'campops_telemetry', 'community_publishing']
         .every((featureId) => report.features.find((feature) => feature.featureId === featureId)?.visible === false),
     },
+    {
+      id: 'terrain_intelligence_command_restricted_without_native_evidence',
+      passed: (() => {
+        const feature = report.features.find((row) => row.featureId === 'terrain_intelligence_command');
+        return feature?.visible === false &&
+          feature?.productionApproved === false &&
+          feature?.verification?.implementationStatus === 'complete' &&
+          feature?.verification?.automatedChecks === 'passed' &&
+          feature?.verification?.rolloutStatus === 'restricted' &&
+          feature?.verification?.nativeEvidenceStatus === 'missing' &&
+          feature?.verification?.productionApproval === 'not_granted';
+      })(),
+    },
   ];
   return {
     ...report,

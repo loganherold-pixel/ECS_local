@@ -1182,8 +1182,11 @@ assert.ok(
     expeditionTabSource.includes('Your completed journeys will appear here.') &&
     !expeditionTabSource.includes('<ExpeditionSummaryCard') &&
     !expeditionTabSource.includes('<ExpeditionDebriefModal') &&
-    expeditionTabSource.includes('routeGeometry={trip.routeGeometry}'),
-  'Expedition Hub must use completed trip records, expose the requested hub copy, avoid summary/debrief UI, and pass route geometry only from selected trip detail.',
+    expeditionTabSource.includes('buildExpeditionRecapRoutePresentation({') &&
+    expeditionTabSource.includes('routeGeometry: trip.routeGeometry') &&
+    expeditionTabSource.includes('plannedRouteGeometry: trip.plannedRouteGeometry') &&
+    expeditionTabSource.includes('routeGeometry={recapRoutePresentation.geometry}'),
+  'Expedition Hub must use completed trip records, expose the requested hub copy, avoid summary/debrief UI, and resolve selected-trip geometry through the truthful recap presentation model.',
 );
 for (const label of [
   'Overview',
@@ -1210,7 +1213,7 @@ for (const snippet of [
   'ExpeditionNotableMomentsTimeline',
   'BadgeUnlockSummary',
   'BadgeGrid',
-  'BadgeMilestoneList',
+  'ExpeditionBadgeCatalogView',
   'PersonalRecordsPreview',
   'ExpeditionReportsView',
   'refreshExpeditionInsights',

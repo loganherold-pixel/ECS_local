@@ -220,6 +220,10 @@ import {
   type TerrainIntelligencePosture,
 } from '../../lib/terrainIntelligencePresentation';
 import { incrementTerrainMotionDiagnostic } from '../../lib/terrainIntelligenceMotion';
+import {
+  createRuntimeFeatureVisibilityContext,
+  resolveECSFeatureVisibility,
+} from '../../lib/features/featureVisibilityRegistry';
 
 // Phase 5: Expedition Risk Engine Widget
 import { ExpeditionRiskCompact, ExpeditionRiskCard, ExpeditionRiskDetailView } from './ExpeditionRiskWidget';
@@ -13875,6 +13879,12 @@ function StandaloneTerrainRiskRuntimeWidget({
     ...terrainRiskRuntime,
     weatherSnapshot: snapshot,
   };
+  const terrainCommandDecision = detailMode
+    ? resolveECSFeatureVisibility(
+        'terrain_intelligence_command',
+        createRuntimeFeatureVisibilityContext(),
+      )
+    : null;
 
   return (
     <View
@@ -13889,20 +13899,62 @@ function StandaloneTerrainRiskRuntimeWidget({
       ]}
     >
       {detailMode ? (
-        <React.Suspense fallback={<ActivityIndicator size="small" color={TACTICAL.amber} />}>
-          <TerrainIntelligenceCommand
-            snapshot={terrainRiskRuntime.terrainIntelligence}
-            routeProgress={routeProgress}
-            onClose={options?.onCloseDetail}
-            onShowOnMap={options?.onTerrainShowOnMap}
+        terrainCommandDecision?.visible ? (
+          <React.Suspense fallback={<ActivityIndicator size="small" color={TACTICAL.amber} />}>
+            <TerrainIntelligenceCommand
+              snapshot={terrainRiskRuntime.terrainIntelligence}
+              routeProgress={routeProgress}
+              onClose={options?.onCloseDetail}
+              onShowOnMap={options?.onTerrainShowOnMap}
+            />
+          </React.Suspense>
+        ) : (
+          <TerrainIntelligenceCommandUnavailable
+            snapshot={selectCompactTerrainIntelligence(terrainRiskRuntime.terrainIntelligence)}
+            totalDistanceMiles={terrainRiskRuntime.route?.totalDistanceMiles ?? null}
+            reason={terrainCommandDecision?.unavailableCopy ??
+              'Interactive Terrain Intelligence is not available in this release.'}
           />
-        </React.Suspense>
+        )
       ) : (
         <QuickTerrainWidget
           snapshot={selectCompactTerrainIntelligence(terrainRiskRuntime.terrainIntelligence)}
           totalDistanceMiles={terrainRiskRuntime.route?.totalDistanceMiles ?? null}
         />
       )}
+    </View>
+  );
+}
+
+function TerrainIntelligenceCommandUnavailable({
+  snapshot,
+  totalDistanceMiles,
+  reason,
+}: {
+  snapshot: CompactTerrainIntelligenceSnapshot;
+  totalDistanceMiles: number | null;
+  reason: string;
+}) {
+  return (
+    <View
+      style={standaloneTerrainRiskS.unavailableDetail}
+      testID="terrain-intelligence-command-rollout-unavailable"
+      accessibilityRole="summary"
+      accessibilityLabel={`${reason} Quick Terrain remains available.`}
+    >
+      <View style={standaloneTerrainRiskS.unavailableHeader}>
+        <Ionicons name="lock-closed-outline" size={18} color={TACTICAL.amber} />
+        <View style={standaloneTerrainRiskS.unavailableCopy}>
+          <Text style={standaloneTerrainRiskS.unavailableTitle}>TERRAIN RISK</Text>
+          <Text style={standaloneTerrainRiskS.unavailableMessage}>{reason}</Text>
+          <Text style={standaloneTerrainRiskS.unavailableMeta}>
+            QUICK TERRAIN REMAINS AVAILABLE • INTERACTIVE HUD RESTRICTED
+          </Text>
+        </View>
+      </View>
+      <View style={standaloneTerrainRiskS.unavailableCompact}>
+        <QuickTerrainWidget snapshot={snapshot} totalDistanceMiles={totalDistanceMiles} />
+      </View>
     </View>
   );
 }
@@ -13923,6 +13975,47 @@ const standaloneTerrainRiskS = StyleSheet.create({
   },
   detail: {
     minHeight: 360,
+  },
+  unavailableDetail: {
+    flex: 1,
+    gap: 14,
+    padding: 8,
+  },
+  unavailableHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    borderWidth: 1,
+    borderColor: TACTICAL.border,
+    backgroundColor: TACTICAL.panel,
+    borderRadius: 7,
+    padding: 12,
+  },
+  unavailableCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  unavailableTitle: {
+    color: TACTICAL.amber,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+  },
+  unavailableMessage: {
+    color: TACTICAL.text,
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 5,
+  },
+  unavailableMeta: {
+    color: TACTICAL.textMuted,
+    fontSize: 8,
+    fontWeight: '800',
+    marginTop: 7,
+  },
+  unavailableCompact: {
+    flex: 1,
+    minHeight: 180,
   },
 });
 
