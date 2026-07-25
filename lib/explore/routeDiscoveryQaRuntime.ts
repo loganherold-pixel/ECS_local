@@ -1,4 +1,9 @@
-export const ROUTE_DISCOVERY_QA_REGION = Object.freeze({
+import type {
+  RouteDiscoveryQaRegion,
+  RouteDiscoveryQaRuntime,
+} from './routeDiscoveryQaRuntimeContract';
+
+export const ROUTE_DISCOVERY_QA_REGION: Readonly<RouteDiscoveryQaRegion> = Object.freeze({
   key: 'qa_synthetic_basin_v2',
   regionId: 'qa_synthetic_basin_v2',
   fixtureVersion: 'route-discovery-qa-v2',
@@ -16,7 +21,7 @@ export const ROUTE_DISCOVERY_QA_REGION = Object.freeze({
   }),
 });
 
-export function getRouteDiscoveryQaRuntime() {
+export function getRouteDiscoveryQaRuntime(): RouteDiscoveryQaRuntime {
   return {
     enabled: true as const,
     mode: 'route_discovery_qa' as const,

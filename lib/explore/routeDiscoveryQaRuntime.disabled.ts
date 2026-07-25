@@ -1,4 +1,6 @@
-export function getRouteDiscoveryQaRuntime() {
+import type { RouteDiscoveryQaRuntime } from './routeDiscoveryQaRuntimeContract';
+
+export function getRouteDiscoveryQaRuntime(): RouteDiscoveryQaRuntime {
   return {
     enabled: false as const,
     mode: null,

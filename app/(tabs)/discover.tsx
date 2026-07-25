@@ -67,6 +67,11 @@ import { useThrottledGPS } from '../../lib/useThrottledGPS';
 import { haversineDistanceMiles } from '../../lib/useGPSLocation';
 import { offlineDiscoveryBridge } from '../../lib/offlineDiscoveryBridge';
 import { getRouteDiscoveryQaRuntime } from '../../lib/explore/routeDiscoveryQaRuntime';
+import {
+  getRouteDiscoveryQaDefaultRadiusMiles,
+  getRouteDiscoveryQaRegion,
+  resolveRouteDiscoveryQaExploreFilterState,
+} from '../../lib/explore/routeDiscoveryQaRuntimeContract';
 import { selectVisibleExploreRouteProjection } from '../../lib/explore/exploreVisibleRouteProjection';
 import {
   type CompatibilityResult,
@@ -682,14 +687,14 @@ function DiscoverScreenInner() {
   // ── Loading state ─────────────────────────────────────────
   const [isLoading, setIsLoading] = useState(true);
   const routeDiscoveryQaRuntime = useMemo(() => getRouteDiscoveryQaRuntime(), []);
+  const routeDiscoveryQaRegion = getRouteDiscoveryQaRegion(routeDiscoveryQaRuntime);
+  const routeDiscoveryQaDefaultRadiusMiles =
+    getRouteDiscoveryQaDefaultRadiusMiles(routeDiscoveryQaRuntime);
   const initialExploreFilterStateRef = useRef(
-    routeDiscoveryQaRuntime.enabled
-      ? {
-          ...getExploreFilterStateSnapshot(),
-          radiusMiles: routeDiscoveryQaRuntime.region.defaultRadiusMiles as DistanceRadius,
-          refinement: null,
-        }
-      : getExploreFilterStateSnapshot(),
+    resolveRouteDiscoveryQaExploreFilterState(
+      getExploreFilterStateSnapshot(),
+      routeDiscoveryQaDefaultRadiusMiles,
+    ),
   );
 
   // ── Distance radius filter state ──────────────────────────
@@ -715,10 +720,10 @@ function DiscoverScreenInner() {
   const [discoverRouteSourceFailureReason, setDiscoverRouteSourceFailureReason] = useState<string | null>(null);
   const gps = useThrottledGPS({ enabled: isFocused, highAccuracy: false });
   const tripBuilderHandoffUserLocation = useMemo(
-    () => routeDiscoveryQaRuntime.enabled
+    () => routeDiscoveryQaRegion
       ? {
-          latitude: routeDiscoveryQaRuntime.region.latitude,
-          longitude: routeDiscoveryQaRuntime.region.longitude,
+          latitude: routeDiscoveryQaRegion.latitude,
+          longitude: routeDiscoveryQaRegion.longitude,
           source: 'route_discovery_qa_synthetic_region',
         }
       : hasGPSFix
@@ -730,7 +735,7 @@ function DiscoverScreenInner() {
           source: 'explore_live_gps',
         }
       : null,
-    [gps.position?.accuracyM, gps.position?.altitudeFt, hasGPSFix, routeDiscoveryQaRuntime, userLat, userLng],
+    [gps.position?.accuracyM, gps.position?.altitudeFt, hasGPSFix, routeDiscoveryQaRegion, userLat, userLng],
   );
 
   const [hiddenGemPageIndex, setHiddenGemPageIndex] = useState(0);
@@ -798,12 +803,12 @@ function DiscoverScreenInner() {
     let cancelled = false;
     void loadExploreFilterStateSnapshot().then((snapshot) => {
       if (cancelled) return;
-      setDistanceRadius(
-        routeDiscoveryQaRuntime.enabled
-          ? routeDiscoveryQaRuntime.region.defaultRadiusMiles as DistanceRadius
-          : snapshot.radiusMiles,
+      const resolvedSnapshot = resolveRouteDiscoveryQaExploreFilterState(
+        snapshot,
+        routeDiscoveryQaDefaultRadiusMiles,
       );
-      setExploreRefinement(routeDiscoveryQaRuntime.enabled ? null : snapshot.refinement);
+      setDistanceRadius(resolvedSnapshot.radiusMiles);
+      setExploreRefinement(resolvedSnapshot.refinement);
       setActiveExplorerCategoryPanel(null);
       setExploreFilterHydrated(true);
     });
@@ -813,7 +818,7 @@ function DiscoverScreenInner() {
     };
   }, [
     routeDiscoveryQaRuntime.enabled,
-    routeDiscoveryQaRuntime.region.defaultRadiusMiles,
+    routeDiscoveryQaDefaultRadiusMiles,
   ]);
 
   // ── Phase 13: Exploration Progress state ───────────────────
@@ -1073,7 +1078,7 @@ function DiscoverScreenInner() {
   );
   const routeCatalogEffectiveSearchArea = useMemo(
     () => {
-      if (routeDiscoveryQaRuntime.enabled) return routeDiscoveryQaRuntime.region;
+      if (routeDiscoveryQaRegion) return routeDiscoveryQaRegion;
       if (routeCatalogSelectedSearchArea) return routeCatalogSelectedSearchArea;
       if (!hasGPSFix) return null;
       return {
@@ -1085,7 +1090,7 @@ function DiscoverScreenInner() {
         source: 'live_gps' as const,
       };
     },
-    [hasGPSFix, routeCatalogSelectedSearchArea, routeDiscoveryQaRuntime, userLat, userLng],
+    [hasGPSFix, routeCatalogSelectedSearchArea, routeDiscoveryQaRegion, userLat, userLng],
   );
   const routeCatalogHasSearchArea = !!routeCatalogEffectiveSearchArea;
   const routeCatalogCurationCoverageNotice = useMemo(() => {
@@ -1122,10 +1127,10 @@ function DiscoverScreenInner() {
         availableFuelRangeMiles: vehicleProfile?.fuel_range_miles,
         availableWaterCapacityGallons: vehicleProfile?.water_capacity_gal,
         locationSource: routeCatalogEffectiveSearchArea ? routeCatalogEffectiveSearchArea.source : 'search_area_required',
-        ...(routeDiscoveryQaRuntime.enabled
+        ...(routeDiscoveryQaRuntime.enabled && routeDiscoveryQaRegion
           ? {
               qaMode: routeDiscoveryQaRuntime.mode,
-              qaRegionId: routeDiscoveryQaRuntime.region.regionId,
+              qaRegionId: routeDiscoveryQaRegion.regionId,
               qaFixtureVersion: routeDiscoveryQaRuntime.fixtureVersion,
               category: 'trail_packs',
               refinement: exploreRefinement ?? 'all',
@@ -1139,6 +1144,7 @@ function DiscoverScreenInner() {
       activeDistanceRadius,
       routeCatalogEffectiveSearchArea,
       routeCatalogRefinementCriteria,
+      routeDiscoveryQaRegion,
       routeDiscoveryQaRuntime,
       exploreRefinement,
       vehicleProfile?.fuel_range_miles,
@@ -3079,8 +3085,8 @@ function DiscoverScreenInner() {
   const showRefinementEmptyState = exploreRefinement != null && visibleRouteCount === 0;
   useEffect(() => {
     if (!routeDiscoveryQaRuntime.enabled && !isInternalExploreDiagnosticsEnabled()) return;
-    const qaDiagnosticContext = routeDiscoveryQaRuntime.enabled
-      ? { qaRegionId: routeDiscoveryQaRuntime.region.regionId }
+    const qaDiagnosticContext = routeDiscoveryQaRegion
+      ? { qaRegionId: routeDiscoveryQaRegion.regionId }
       : {};
     recordExplorePerformanceEvent('availability_classification_complete', {
       inputCount: visibleTrailPacks.length,
@@ -3103,7 +3109,7 @@ function DiscoverScreenInner() {
       ...qaDiagnosticContext,
       searchFingerprint: liveTrailPackCatalogSnapshot.searchFingerprint ?? undefined,
     });
-  }, [exploreWizardCandidateSet.candidates.length, liveTrailPackCatalogSnapshot.searchFingerprint, routeDiscoveryQaRuntime, visibleRouteCount, visibleTrailPacks.length]);
+  }, [exploreWizardCandidateSet.candidates.length, liveTrailPackCatalogSnapshot.searchFingerprint, routeDiscoveryQaRegion, routeDiscoveryQaRuntime.enabled, visibleRouteCount, visibleTrailPacks.length]);
   const favoriteTrailMap = useMemo(() => {
     const map = new Map<string, FavoriteTrailRecord>();
     favoriteTrails.forEach((favorite) => {
