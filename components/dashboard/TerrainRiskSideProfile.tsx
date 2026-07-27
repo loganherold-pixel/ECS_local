@@ -1,18 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { StyleSheet, TouchableOpacity, View } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, {
-  cancelAnimation,
-  Easing,
-  runOnJS,
-  useAnimatedProps,
-  useSharedValue,
-  withSequence,
-  withTiming,
-} from 'react-native-reanimated';
+import React, { useCallback, useMemo, useState } from 'react';
+import { PanResponder, StyleSheet, TouchableOpacity, View } from 'react-native';
 import Svg, {
   Circle,
-  ClipPath,
   Defs,
   G,
   LinearGradient,
@@ -36,10 +25,6 @@ import {
   buildTerrainRiskReferenceEventForPoint,
   type TerrainRiskReferenceEvent,
 } from '../../lib/terrainRiskReferenceEvents';
-import {
-  incrementTerrainMotionDiagnostic,
-  recordTerrainScrubResponse,
-} from '../../lib/terrainIntelligenceMotion';
 
 const VIEWBOX_WIDTH = 340;
 const VIEWBOX_HEIGHT = 154;
@@ -123,12 +108,6 @@ type Props = {
   referenceEvents?: TerrainRiskReferenceEvent[];
   selectedReferenceEvent?: TerrainRiskReferenceEvent | null;
   onReferencePointPress?: (event: TerrainRiskReferenceEvent) => void;
-  probeDistanceMiles?: number | null;
-  onProbePointChange?: (point: TerrainProfilePoint | null) => void;
-  selectedDistanceRange?: { startDistanceMiles: number; endDistanceMiles: number } | null;
-  animationEnabled?: boolean;
-  profileAnimationKey?: string | null;
-  riskPulseKey?: string | null;
 };
 
 const RISK_COLORS: Record<TerrainRiskLevel, string> = {
@@ -145,11 +124,6 @@ const CONTOUR_PATHS = [
 ];
 const TERRAIN_REFERENCE_MARKER_HIT_SLOP = { top: 8, right: 8, bottom: 8, left: 8 };
 const TERRAIN_REFERENCE_MARKER_HALF_SIZE = 20;
-const PROFILE_REVEAL_LENGTH = 1000;
-const AnimatedPath = Animated.createAnimatedComponent(Path);
-const AnimatedCircle = Animated.createAnimatedComponent(Circle);
-const AnimatedLine = Animated.createAnimatedComponent(Line);
-const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -462,6 +436,18 @@ function formatElevationProbeLabel(elevationFeet: number): string {
   return `${Math.round(elevationFeet).toLocaleString('en-US')} ft`;
 }
 
+function buildCurrentPositionMarkerPath(point: ChartPoint): string {
+  const x = clampNumber(point.x, CHART_FRAME.left + 6, VIEWBOX_WIDTH - CHART_FRAME.right - 6);
+  const y = clampNumber(point.y, CHART_FRAME.top + 6, CHART_FRAME.baselineY - 6);
+  return [
+    `M ${x.toFixed(1)} ${(y - 6).toFixed(1)}`,
+    `L ${(x + 6).toFixed(1)} ${y.toFixed(1)}`,
+    `L ${x.toFixed(1)} ${(y + 6).toFixed(1)}`,
+    `L ${(x - 6).toFixed(1)} ${y.toFixed(1)}`,
+    'Z',
+  ].join(' ');
+}
+
 function toViewBoxPercent(value: number, total: number): `${number}%` {
   return `${(value / total) * 100}%`;
 }
@@ -476,18 +462,11 @@ export default function TerrainRiskSideProfile({
   referenceEvents = [],
   selectedReferenceEvent = null,
   onReferencePointPress,
-  probeDistanceMiles = null,
-  onProbePointChange,
-  selectedDistanceRange = null,
-  animationEnabled = false,
-  profileAnimationKey = null,
-  riskPulseKey = null,
 }: Props) {
   const [chartLayout, setChartLayout] = useState<ChartLayout | null>(null);
   const [selectedProbeDistanceMiles, setSelectedProbeDistanceMiles] = useState<number | null>(null);
   const chart = useMemo(() => {
     if (profile.length < 2 || totalDistanceMiles <= 0) return null;
-    incrementTerrainMotionDiagnostic('profileComputations');
 
     const chartSeries = buildTerrainRiskChartSeries(profile);
     const bounds = buildElevationBounds(chartSeries);
@@ -499,7 +478,6 @@ export default function TerrainRiskSideProfile({
     }));
     const linePath = buildLinePath(points);
     const areaPath = buildAreaPath(points);
-    incrementTerrainMotionDiagnostic('pathGenerations');
     const xTicks = buildDistanceTicks(totalDistanceMiles, unit);
     const yTicks = buildElevationTicks(bounds);
     const segments = buildRiskSegments(points);
@@ -520,77 +498,10 @@ export default function TerrainRiskSideProfile({
     };
   }, [profile, totalDistanceMiles, unit]);
 
-  const revealProgress = useSharedValue(animationEnabled ? 0 : 1);
-  const progressX = useSharedValue(CHART_FRAME.left);
-  const progressY = useSharedValue(CHART_FRAME.baselineY);
-  const probeX = useSharedValue(CHART_FRAME.left);
-  const probeY = useSharedValue(CHART_FRAME.baselineY);
-  const riskPulseOpacity = useSharedValue(0);
-
-  useEffect(() => {
-    cancelAnimation(revealProgress);
-    if (!animationEnabled || !profileAnimationKey) {
-      revealProgress.value = 1;
-      return;
-    }
-    revealProgress.value = 0;
-    revealProgress.value = withTiming(1, { duration: 420, easing: Easing.out(Easing.cubic) });
-  }, [animationEnabled, profileAnimationKey, revealProgress]);
-
-  useEffect(() => {
-    cancelAnimation(riskPulseOpacity);
-    if (!animationEnabled || !riskPulseKey) {
-      riskPulseOpacity.value = 0;
-      return;
-    }
-    riskPulseOpacity.value = withSequence(
-      withTiming(0.18, { duration: 140 }),
-      withTiming(0, { duration: 300 }),
-    );
-  }, [animationEnabled, riskPulseKey, riskPulseOpacity]);
-
-  const revealAnimatedProps = useAnimatedProps(() => ({
-    strokeDashoffset: PROFILE_REVEAL_LENGTH * (1 - revealProgress.value),
-  }));
-  const revealClipAnimatedProps = useAnimatedProps(() => ({
-    width: CHART_FRAME.width * revealProgress.value,
-  }));
-  const progressMarkerAnimatedProps = useAnimatedProps(() => ({
-    cx: progressX.value,
-    cy: progressY.value,
-  }));
-  const progressMarkerPathAnimatedProps = useAnimatedProps(() => {
-    const x = Math.max(CHART_FRAME.left + 6, Math.min(VIEWBOX_WIDTH - CHART_FRAME.right - 6, progressX.value));
-    const y = Math.max(CHART_FRAME.top + 6, Math.min(CHART_FRAME.baselineY - 6, progressY.value));
-    return {
-      d: `M ${x} ${y - 6} L ${x + 6} ${y} L ${x} ${y + 6} L ${x - 6} ${y} Z`,
-    };
-  });
-  const probeLineAnimatedProps = useAnimatedProps(() => ({
-    x1: probeX.value,
-    x2: probeX.value,
-  }));
-  const probeMarkerAnimatedProps = useAnimatedProps(() => ({
-    cx: probeX.value,
-    cy: probeY.value,
-  }));
-  const riskPulseAnimatedProps = useAnimatedProps(() => ({
-    opacity: riskPulseOpacity.value,
-  }));
-
   const currentPositionPoint = useMemo(
     () => chart ? buildCurrentRouteMarkerPoint(chart.points, totalDistanceMiles, completedDistanceMiles) : null,
     [chart, completedDistanceMiles, totalDistanceMiles],
   );
-  useEffect(() => {
-    if (!currentPositionPoint) return;
-    progressX.value = animationEnabled
-      ? withTiming(currentPositionPoint.x, { duration: 220, easing: Easing.out(Easing.cubic) })
-      : currentPositionPoint.x;
-    progressY.value = animationEnabled
-      ? withTiming(currentPositionPoint.y, { duration: 220, easing: Easing.out(Easing.cubic) })
-      : currentPositionPoint.y;
-  }, [animationEnabled, currentPositionPoint, progressX, progressY]);
   const completedProfileLinePath = useMemo(() => {
     if (!chart || !currentPositionPoint || completedDistanceMiles == null) return null;
     const completedPoints = chart.points.filter((point) => point.distanceMiles < completedDistanceMiles);
@@ -598,53 +509,31 @@ export default function TerrainRiskSideProfile({
     return completedPoints.length >= 2 ? buildLinePath(completedPoints) : null;
   }, [chart, completedDistanceMiles, currentPositionPoint]);
 
-  const effectiveProbeDistanceMiles = probeDistanceMiles ?? selectedProbeDistanceMiles;
   const selectedProbePoint = useMemo(
     () => chart
-      ? buildElevationProbePoint(chart.points, totalDistanceMiles, effectiveProbeDistanceMiles)
+      ? buildElevationProbePoint(chart.points, totalDistanceMiles, selectedProbeDistanceMiles)
       : null,
-    [chart, effectiveProbeDistanceMiles, totalDistanceMiles],
+    [chart, selectedProbeDistanceMiles, totalDistanceMiles],
   );
-  useEffect(() => {
-    if (!selectedProbePoint) return;
-    probeX.value = animationEnabled
-      ? withTiming(selectedProbePoint.x, { duration: 100, easing: Easing.out(Easing.cubic) })
-      : selectedProbePoint.x;
-    probeY.value = animationEnabled
-      ? withTiming(selectedProbePoint.y, { duration: 100, easing: Easing.out(Easing.cubic) })
-      : selectedProbePoint.y;
-  }, [animationEnabled, probeX, probeY, selectedProbePoint]);
 
   const updateElevationProbeFromLocation = useCallback((locationX: number) => {
-    const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
     if (!interactive || !chartLayout || chartLayout.width <= 0 || totalDistanceMiles <= 0) return;
     const viewBoxX = (locationX / chartLayout.width) * VIEWBOX_WIDTH;
     const ratio = clampNumber((viewBoxX - CHART_FRAME.left) / CHART_FRAME.width, 0, 1);
-    const requestedDistance = ratio * totalDistanceMiles;
-    const closest = profile.reduce<TerrainProfilePoint | null>(
-      (best, point) => !best ||
-        Math.abs(point.distanceMiles - requestedDistance) < Math.abs(best.distanceMiles - requestedDistance)
-        ? point
-        : best,
-      null,
-    );
-    const snappedDistance = closest?.distanceMiles ?? requestedDistance;
-    setSelectedProbeDistanceMiles(snappedDistance);
-    onProbePointChange?.(closest);
-    const finishedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    recordTerrainScrubResponse(finishedAt - startedAt);
-  }, [chartLayout, interactive, onProbePointChange, profile, totalDistanceMiles]);
+    setSelectedProbeDistanceMiles(ratio * totalDistanceMiles);
+  }, [chartLayout, interactive, totalDistanceMiles]);
 
-  const elevationProbeGesture = useMemo(
-    () => Gesture.Pan()
-      .enabled(interactive && Boolean(chartLayout?.width))
-      .minDistance(0)
-      .onBegin((event) => {
-        runOnJS(updateElevationProbeFromLocation)(event.x);
-      })
-      .onUpdate((event) => {
-        runOnJS(updateElevationProbeFromLocation)(event.x);
-      }),
+  const elevationProbeResponder = useMemo(
+    () => PanResponder.create({
+      onStartShouldSetPanResponder: () => interactive && Boolean(chartLayout?.width),
+      onMoveShouldSetPanResponder: () => interactive && Boolean(chartLayout?.width),
+      onPanResponderGrant: (event) => {
+        updateElevationProbeFromLocation(event.nativeEvent.locationX);
+      },
+      onPanResponderMove: (event) => {
+        updateElevationProbeFromLocation(event.nativeEvent.locationX);
+      },
+    }),
     [chartLayout?.width, interactive, updateElevationProbeFromLocation],
   );
 
@@ -671,7 +560,6 @@ export default function TerrainRiskSideProfile({
   };
 
   return (
-    <GestureDetector gesture={elevationProbeGesture}>
     <View
       accessible={!interactive}
       accessibilityLabel={`Terrain side profile chart. Distance labels use ${unit === 'mi' ? 'miles' : 'kilometers'}. Elevation is shown in feet. Completed route is dimmed, remaining route is emphasized, and high risk route sections are highlighted.`}
@@ -702,14 +590,6 @@ export default function TerrainRiskSideProfile({
             <Stop offset="0.66" stopColor={TACTICAL.danger} stopOpacity="0.18" />
             <Stop offset="1" stopColor={TACTICAL.amber} stopOpacity="0.00" />
           </LinearGradient>
-          <ClipPath id="terrain-profile-reveal-clip">
-            <AnimatedRect
-              animatedProps={revealClipAnimatedProps}
-              x={CHART_FRAME.left}
-              y={CHART_FRAME.top}
-              height={CHART_FRAME.height}
-            />
-          </ClipPath>
         </Defs>
 
         {!transparentBackground ? (
@@ -758,7 +638,6 @@ export default function TerrainRiskSideProfile({
           />
         ))}
 
-        <G clipPath="url(#terrain-profile-reveal-clip)">
         {chart.segments.map((segment) => (
           <Rect
             key={`risk-band-${segment.id}`}
@@ -818,16 +697,6 @@ export default function TerrainRiskSideProfile({
           />
         ))}
 
-        <AnimatedRect
-          animatedProps={riskPulseAnimatedProps}
-          x={CHART_FRAME.left}
-          y={CHART_FRAME.top}
-          width={CHART_FRAME.width}
-          height={CHART_FRAME.height}
-          fill={TACTICAL.danger}
-          pointerEvents="none"
-        />
-
         <Path
           d={chart.linePath}
           fill="none"
@@ -836,34 +705,6 @@ export default function TerrainRiskSideProfile({
           strokeLinecap="round"
           strokeLinejoin="round"
         />
-        <AnimatedPath
-          animatedProps={revealAnimatedProps}
-          d={chart.linePath}
-          fill="none"
-          stroke={TACTICAL.amber}
-          strokeWidth={1.6}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeDasharray={`${PROFILE_REVEAL_LENGTH} ${PROFILE_REVEAL_LENGTH}`}
-        />
-        </G>
-
-        {selectedDistanceRange ? (
-          <Rect
-            x={scaleTerrainDistanceToX(selectedDistanceRange.startDistanceMiles, totalDistanceMiles)}
-            y={CHART_FRAME.top}
-            width={Math.max(
-              2,
-              scaleTerrainDistanceToX(selectedDistanceRange.endDistanceMiles, totalDistanceMiles) -
-                scaleTerrainDistanceToX(selectedDistanceRange.startDistanceMiles, totalDistanceMiles),
-            )}
-            height={CHART_FRAME.height}
-            fill={TACTICAL.amber}
-            opacity={0.16}
-            stroke={TACTICAL.amber}
-            strokeWidth={1.2}
-          />
-        ) : null}
 
         {completedProfileLinePath ? (
           <Path
@@ -895,15 +736,16 @@ export default function TerrainRiskSideProfile({
             accessibilityLabel="Current GPS position on terrain profile"
             accessibilityRole="image"
           >
-            <AnimatedPath
-              animatedProps={progressMarkerPathAnimatedProps}
+            <Path
+              d={buildCurrentPositionMarkerPath(currentPositionPoint)}
               fill={TACTICAL.amber}
               stroke="rgba(3,6,8,0.94)"
               strokeWidth={1.2}
               opacity={0.98}
             />
-            <AnimatedCircle
-              animatedProps={progressMarkerAnimatedProps}
+            <Circle
+              cx={currentPositionPoint.x}
+              cy={currentPositionPoint.y}
               r={2.4}
               fill="#FFFFFF"
               opacity={0.92}
@@ -918,23 +760,26 @@ export default function TerrainRiskSideProfile({
             accessibilityLabel={`Elevation probe ${formatElevationProbeLabel(selectedProbePoint.elevationFeet)} at ${formatDistance(selectedProbePoint.distanceMiles, unit)}`}
             accessibilityRole="image"
           >
-            <AnimatedLine
-              animatedProps={probeLineAnimatedProps}
+            <Line
+              x1={selectedProbePoint.x}
               y1={CHART_FRAME.top}
+              x2={selectedProbePoint.x}
               y2={CHART_FRAME.baselineY}
               stroke={TACTICAL.amber}
               strokeWidth={1}
               strokeDasharray="3 4"
               opacity={0.72}
             />
-            <AnimatedCircle
-              animatedProps={probeMarkerAnimatedProps}
+            <Circle
+              cx={selectedProbePoint.x}
+              cy={selectedProbePoint.y}
               r={8.4}
               fill={TACTICAL.amber}
               opacity={0.16}
             />
-            <AnimatedCircle
-              animatedProps={probeMarkerAnimatedProps}
+            <Circle
+              cx={selectedProbePoint.x}
+              cy={selectedProbePoint.y}
               r={3.8}
               fill="#FFFFFF"
               stroke={TACTICAL.amber}
@@ -1095,9 +940,9 @@ export default function TerrainRiskSideProfile({
       </Svg>
       {interactive ? (
         <View
-          pointerEvents="none"
           testID="terrainRiskElevationProbeTouchLayer"
           style={styles.elevationProbeTouchLayer}
+          {...elevationProbeResponder.panHandlers}
         />
       ) : null}
       {interactive ? chart.referencePoints.map((point) => {
@@ -1134,7 +979,6 @@ export default function TerrainRiskSideProfile({
         );
       }) : null}
     </View>
-    </GestureDetector>
   );
 }
 

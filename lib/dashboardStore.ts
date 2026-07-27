@@ -812,21 +812,19 @@ function normalizeDashboardSlotsForProfile(
     };
   });
 
-  const layoutConfig = getDashboardLayoutConfig(layout);
-  const maxCells = Math.max(layoutConfig.cols * layoutConfig.rows, 1);
-  let usedCells = 0;
+  const maxRows = Math.max(getDashboardLayoutConfig(layout).rows, 1);
+  let usedRows = 0;
   const activeSlots: WidgetSlot[] = [];
 
   for (const slot of fixedSlots) {
     if (!slot.widgetType) continue;
     const size = clampProfileWidgetSize(profile, slot.widgetType, slot.widgetSize, mode);
-    const sizeConfig = WIDGET_SIZE_CONFIG[size];
-    const cellCount = sizeConfig.colSpan * sizeConfig.rowSpan;
-    if (usedCells + cellCount > maxCells) {
+    const rowSpan = size === '2x2' ? 2 : 1;
+    if (usedRows + rowSpan > maxRows) {
       continue;
     }
 
-    usedCells += cellCount;
+    usedRows += rowSpan;
     activeSlots.push({
       ...slot,
       widgetSize: size,
@@ -852,16 +850,14 @@ function normalizeDashboardSlotsForProfile(
   });
 }
 
-function getDashboardWidgetCellCount(widgetId: string, requestedSize?: WidgetSize | null): number {
-  const size = clampDashboardWidgetSize(widgetId, requestedSize);
-  const sizeConfig = WIDGET_SIZE_CONFIG[size];
-  return sizeConfig.colSpan * sizeConfig.rowSpan;
+function getDashboardWidgetRowSpan(widgetId: string, requestedSize?: WidgetSize | null): number {
+  return clampDashboardWidgetSize(widgetId, requestedSize) === '2x2' ? 2 : 1;
 }
 
-function getUsedDashboardCells(slots: WidgetSlot[], excludeSlotIndex?: number): number {
+function getUsedDashboardRows(slots: WidgetSlot[], excludeSlotIndex?: number): number {
   return slots.reduce((total, slot) => {
     if (!slot.widgetType || slot.slotIndex === excludeSlotIndex) return total;
-    return total + getDashboardWidgetCellCount(slot.widgetType, slot.widgetSize);
+    return total + getDashboardWidgetRowSpan(slot.widgetType, slot.widgetSize);
   }, 0);
 }
 
@@ -877,15 +873,14 @@ function canAssignWidgetToDashboardSlot(
   if (mode && !isCuratedWidgetForMode(widgetType, mode)) return false;
   if (!canDashboardLayoutHostWidget(widgetType, layout)) return false;
 
-  const layoutConfig = getDashboardLayoutConfig(layout);
-  const maxCells = Math.max(layoutConfig.cols * layoutConfig.rows, 1);
-  const usedCells = getUsedDashboardCells(slots, slotIndex);
-  const requestedCells = getDashboardWidgetCellCount(
+  const maxRows = Math.max(getDashboardLayoutConfig(layout).rows, 1);
+  const usedRows = getUsedDashboardRows(slots, slotIndex);
+  const requestedRows = getDashboardWidgetRowSpan(
     widgetType,
     clampProfileWidgetSize(profile, widgetType, getDashboardRecommendedSize(widgetType), mode),
   );
 
-  return usedCells + requestedCells <= maxCells;
+  return usedRows + requestedRows <= maxRows;
 }
 
 function repairDashboardSlots(
@@ -981,7 +976,7 @@ let _customPresetsHydrated = false;
  * Validate and migrate a parsed state object.
  * Ensures all profiles exist, migrates old grid layouts, and fills missing fields.
  */
-export function validateAndMigrateDashboardState(parsed: any): DashboardState | null {
+function validateAndMigrate(parsed: any): DashboardState | null {
   if (!isPlainObject(parsed)) return null;
 
   const curatedIssues = validateCuratedDashboardConfig();
@@ -997,18 +992,10 @@ export function validateAndMigrateDashboardState(parsed: any): DashboardState | 
   for (const p of ['expedition', 'vehicle', 'emergency'] as DashboardProfile[]) {
     const defaultProfile = defaults.profiles[p];
     const rawProfile = rawProfiles[p];
-    if (!isPlainObject(rawProfile) && !Array.isArray(rawProfile)) {
-      profiles[p] = defaultProfile;
-      continue;
-    }
-    const rawProfileObject: Record<string, any> | null =
-      !Array.isArray(rawProfile) && isPlainObject(rawProfile)
-        ? rawProfile as Record<string, any>
-        : null;
     const mode = dashboardModeForProfile(p);
     const currentLayout =
-      rawProfileObject && typeof rawProfileObject.gridLayout === 'string'
-        ? rawProfileObject.gridLayout
+      isPlainObject(rawProfile) && typeof rawProfile.gridLayout === 'string'
+        ? rawProfile.gridLayout
         : defaultProfile.gridLayout;
     const profileSlots = coercePersistedSlots(rawProfile);
 
@@ -1021,10 +1008,10 @@ export function validateAndMigrateDashboardState(parsed: any): DashboardState | 
         slots: normalizeDashboardSlotsForProfile(p, profileSlots, mode, migratedLayout),
         layoutVersion: DASHBOARD_LAYOUT_VERSION,
         gridColumns: GRID_LAYOUT_CONFIG[migratedLayout].cols,
-        lastUIState: rawProfileObject ? coerceRecord(rawProfileObject.lastUIState) : {},
+        lastUIState: isPlainObject(rawProfile) ? coerceRecord(rawProfile.lastUIState) : {},
         lastUsedPreset:
-          rawProfileObject && typeof rawProfileObject.lastUsedPreset === 'string'
-            ? rawProfileObject.lastUsedPreset
+          isPlainObject(rawProfile) && typeof rawProfile.lastUsedPreset === 'string'
+            ? rawProfile.lastUsedPreset
             : undefined,
       };
       continue;
@@ -1037,10 +1024,10 @@ export function validateAndMigrateDashboardState(parsed: any): DashboardState | 
       slots: applyDashboardLayoutMetadata(profileSlots),
       layoutVersion: DASHBOARD_LAYOUT_VERSION,
       gridColumns: GRID_LAYOUT_CONFIG[migrateGridLayout(currentLayout)].cols,
-      lastUIState: rawProfileObject ? coerceRecord(rawProfileObject.lastUIState) : {},
+      lastUIState: isPlainObject(rawProfile) ? coerceRecord(rawProfile.lastUIState) : {},
       lastUsedPreset:
-        rawProfileObject && typeof rawProfileObject.lastUsedPreset === 'string'
-          ? rawProfileObject.lastUsedPreset
+        isPlainObject(rawProfile) && typeof rawProfile.lastUsedPreset === 'string'
+          ? rawProfile.lastUsedPreset
           : defaultProfile.lastUsedPreset,
     };
   }
@@ -1079,7 +1066,7 @@ function getStorage(): DashboardState {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        const validated = validateAndMigrateDashboardState(parsed);
+        const validated = validateAndMigrate(parsed);
         if (validated) {
           _cachedState = validated;
           _lastSerializedDashboardState = JSON.stringify(validated);
@@ -1147,7 +1134,7 @@ export function hydrateDashboardState(): Promise<DashboardState | null> {
       const raw = await readDashboardState();
       if (raw) {
         const parsed = JSON.parse(raw);
-        const validated = validateAndMigrateDashboardState(parsed);
+        const validated = validateAndMigrate(parsed);
         if (validated) {
           _cachedState = validated;
           _lastSerializedDashboardState = JSON.stringify(validated);

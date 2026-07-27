@@ -8,16 +8,14 @@ import {
 export type ExploreFeatureId =
   | 'suggested_routes'
   | 'route_filters'
-  | 'trip_builder'
   | 'offline_prep_pack';
 
-export type ExploreFeatureCategory = 'routes' | 'planning';
+export type ExploreFeatureCategory = 'routes' | 'offline';
 
 export type ExploreFeatureStatus = 'live' | 'placeholder';
 
 export type ExploreFeatureFlagKey =
-  | 'EXPO_PUBLIC_ECS_EXPLORE_TRIP_BUILDER'
-  | 'EXPO_PUBLIC_ECS_EXPLORE_OFFLINE_PREP_PACK';
+  'EXPO_PUBLIC_ECS_EXPLORE_OFFLINE_PREP_PACK';
 
 export type ExploreFeatureDefinition = {
   id: ExploreFeatureId;
@@ -48,17 +46,17 @@ export const EXPLORE_FEATURE_CATEGORY_STYLES: Record<
     accentColor: '#66BB6A',
     description: 'Route discovery, scoring, and filter controls.',
   },
-  planning: {
-    label: 'Planning',
+  offline: {
+    label: 'Offline',
     accentColor: '#E6B84C',
-    description: 'Trip planning and offline readiness workflows for Explore.',
+    description: 'Trail downloads and offline readiness for low-service travel.',
   },
 };
 
 const EXPLORE_FEATURE_DEFINITIONS: Omit<ExploreFeatureDefinition, 'enabled'>[] = [
   {
     id: 'suggested_routes',
-    title: 'Suggested Trailheads',
+    title: 'Find Trails',
     description: 'Open curated Explore trailhead suggestions without implying complete trail-route coverage.',
     icon: 'trail-sign-outline',
     category: 'routes',
@@ -77,24 +75,11 @@ const EXPLORE_FEATURE_DEFINITIONS: Omit<ExploreFeatureDefinition, 'enabled'>[] =
     status: 'live',
   },
   {
-    id: 'trip_builder',
-    title: 'Trip Builder',
-    description: 'Turn a selected route into a day trip, overnight route, or expedition-style plan.',
-    icon: 'git-merge-outline',
-    category: 'planning',
-    order: 30,
-    enabledByDefault: true,
-    status: 'live',
-    featureFlagKey: 'EXPO_PUBLIC_ECS_EXPLORE_TRIP_BUILDER',
-    centralFeatureId: 'explore_trip_builder',
-    route: '/explore-trip-builder',
-  },
-  {
     id: 'offline_prep_pack',
-    title: 'Offline Prep Pack',
-    description: 'Save route essentials for low-service travel.',
+    title: 'Offline Trails',
+    description: 'Download trail maps, geometry, and guidance for low-service travel.',
     icon: 'download-outline',
-    category: 'planning',
+    category: 'offline',
     order: 40,
     enabledByDefault: true,
     status: 'live',

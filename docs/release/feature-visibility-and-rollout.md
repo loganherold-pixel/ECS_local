@@ -78,25 +78,3 @@ The gate proves that visibility controls are enforced. It does not approve
 providers, hardware, privacy posture, field behavior, or a public release.
 Those decisions remain with each feature's related readiness gate and owner
 evidence process.
-
-## Terrain Intelligence Command
-
-The expanded interactive HUD is governed by
-`terrain_intelligence_command`. Quick Terrain remains independently available
-through the Dashboard widget registry.
-
-- Enable flag: `EXPO_PUBLIC_ECS_TERRAIN_INTELLIGENCE_COMMAND`
-- Kill switch: `EXPO_PUBLIC_ECS_KILL_TERRAIN_INTELLIGENCE_COMMAND`
-- Default: disabled in every environment
-- Eligible environments: development, test, and internal only
-- Enablement: requires an explicit valid true enable flag
-- Production: environment-blocked regardless of the enable flag
-- Disabled behavior: the Terrain Risk detail opens a conservative explicit
-  unavailable state and retains the truthful Quick Terrain summary
-- Direct route policy: `/terrain-intelligence-command` fails closed and returns
-  to `/dashboard`
-- Readiness gate: `npm run gate:terrain-intelligence-command`
-
-The capability report records implementation and automated checks as complete,
-while preserving restricted rollout, missing native evidence, and production
-approval not granted. These status fields do not accept evidence.

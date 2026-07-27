@@ -14,8 +14,8 @@ import {
 
 type RouteCatalogSummaryCardProps = {
   summary: RouteCatalogSummary;
-  onOpenTripBuilder: (routeId: string) => void;
-  tripBuilderDisabledReason?: string | null;
+  onPrepareOffline: (routeId: string) => void;
+  offlineDisabledReason?: string | null;
   compactPreview?: boolean;
 };
 
@@ -58,8 +58,8 @@ function formatUpdatedAt(updatedAt: string | null): string | null {
 
 export default function RouteCatalogSummaryCard({
   summary,
-  onOpenTripBuilder,
-  tripBuilderDisabledReason = null,
+  onPrepareOffline,
+  offlineDisabledReason = null,
   compactPreview = false,
 }: RouteCatalogSummaryCardProps) {
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
@@ -156,21 +156,21 @@ export default function RouteCatalogSummaryCard({
         ) : null}
         <View style={s.actionRow}>
           <TouchableOpacity
-            style={[s.primaryAction, tripBuilderDisabledReason && s.primaryActionDisabled]}
-            onPress={() => onOpenTripBuilder(summary.routeId)}
-            disabled={!!tripBuilderDisabledReason}
+            style={[s.primaryAction, offlineDisabledReason && s.primaryActionDisabled]}
+            onPress={() => onPrepareOffline(summary.routeId)}
+            disabled={!!offlineDisabledReason}
             activeOpacity={0.75}
-            accessibilityLabel={`Open ${summary.title} in Trip Builder`}
-            accessibilityHint={tripBuilderDisabledReason ?? undefined}
-            accessibilityState={{ disabled: !!tripBuilderDisabledReason }}
-            testID={`route-catalog-open-trip-builder-${summary.routeId}`}
+            accessibilityLabel={`Download ${summary.title} for offline use`}
+            accessibilityHint={offlineDisabledReason ?? undefined}
+            accessibilityState={{ disabled: !!offlineDisabledReason }}
+            testID={`route-catalog-prepare-offline-${summary.routeId}`}
           >
-            <Ionicons name="git-merge-outline" size={13} color={TACTICAL.bg} />
-            <Text style={s.primaryActionText}>OPEN TRIP BUILDER</Text>
+            <Ionicons name="download-outline" size={13} color={TACTICAL.bg} />
+            <Text style={s.primaryActionText}>DOWNLOAD OFFLINE</Text>
           </TouchableOpacity>
         </View>
-        {tripBuilderDisabledReason ? (
-          <Text style={s.disabledReason}>{tripBuilderDisabledReason}</Text>
+        {offlineDisabledReason ? (
+          <Text style={s.disabledReason}>{offlineDisabledReason}</Text>
         ) : null}
       </View>
     </ECSCard>

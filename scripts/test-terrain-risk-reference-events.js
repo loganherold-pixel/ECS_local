@@ -156,8 +156,7 @@ assert(
   'TerrainRiskSideProfile should place a current GPS/progress marker on the elevation line.',
 );
 assert(
-  sideProfileSource.includes("from 'react-native-gesture-handler'") &&
-    sideProfileSource.includes('Gesture.Pan()') &&
+  sideProfileSource.includes('PanResponder') &&
     sideProfileSource.includes('function buildElevationProbePoint') &&
     sideProfileSource.includes('selectedProbePoint') &&
     sideProfileSource.includes('testID="terrainRiskElevationProbe"') &&

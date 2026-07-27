@@ -23,7 +23,7 @@ import {
   type DistanceRadius,
 } from '../../lib/discoverEngine';
 import {
-  EXPLORE_REFINEMENT_OPTIONS,
+  EXPLORE_DISCOVERY_FILTER_OPTIONS,
   type ExploreRefinementFilter,
 } from '../../lib/explore/exploreRefinementFilter';
 
@@ -166,7 +166,7 @@ export default function DistanceRadiusFilter({
 
           <Text style={s.filterGroupLabel}>REFINE</Text>
           <View style={[s.refinementRow, compact && s.segmentedRowCompact]}>
-            {EXPLORE_REFINEMENT_OPTIONS.map((option) => {
+            {EXPLORE_DISCOVERY_FILTER_OPTIONS.map((option) => {
               const isActive = option.key === selectedRefinement;
               const matchCount = refinementCounts[option.key] ?? 0;
               const disabled = !isActive && matchCount === 0;

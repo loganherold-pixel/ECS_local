@@ -339,6 +339,11 @@ assert(!dock.includes('resolveDispatchRolloutConfig'));
 assert(distribution.includes('resolveECSFeatureRouteAccess'));
 assert(routePolicy.includes('resolveECSFeatureRouteAccess'));
 assert(!distribution.includes('process.env.EXPO_PUBLIC_ECS_CONVOY_RIVE_QA'));
-assert(explore.includes("centralFeatureId: 'explore_trip_builder'"));
+assert(!explore.includes("centralFeatureId: 'explore_trip_builder'"));
+assert(explore.includes("centralFeatureId: 'explore_offline_prep'"));
+assert(
+  registrySource.includes("id: 'explore_trip_builder'"),
+  'The legacy direct Trip Builder route should remain governed outside the mounted Explore registry.',
+);
 
 console.log('Authoritative feature visibility and production report checks passed.');

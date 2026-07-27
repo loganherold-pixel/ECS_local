@@ -417,26 +417,6 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     pickerEnabled: true,
   },
   {
-    widgetId: 'terrain-risk',
-    label: 'Terrain Risk',
-    purpose: 'Quick route terrain posture, elevation profile, progress, and next material terrain event.',
-    recommendedSize: 'standard',
-    recommendedWidgetSize: '1x1',
-    supportedWidgetSizes: ['1x1'],
-    minimumWidgetSize: '1x1',
-    userResizable: false,
-    priority: 8,
-    tabEligibility: 'expedition',
-    supportedModes: ['expedition'],
-    liveData: true,
-    liveSources: ['canonical route geometry', 'route elevation analysis', 'route progress', 'active vehicle context'],
-    defaultModes: ['expedition'],
-    isDefaultSelectable: true,
-    fallbackBehavior: 'Shows explicit no-route, loading, partial, stale, unavailable, disabled, or error truth states.',
-    detailView: 'widget_detail',
-    pickerEnabled: true,
-  },
-  {
     widgetId: 'expedition-status-summary',
     label: 'Expedition Status',
     purpose: 'Compact ECS expedition status with top concern, next action, convoy, resource, vehicle, and data-quality context.',
@@ -445,7 +425,7 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
     supportedWidgetSizes: ['2x1', '1x1'],
     minimumWidgetSize: '1x1',
     userResizable: true,
-    priority: 9,
+    priority: 8,
     tabEligibility: 'expedition',
     supportedModes: ['expedition'],
     liveData: true,
@@ -459,9 +439,6 @@ export const DASHBOARD_WIDGET_CATALOG: readonly DashboardCatalogEntry[] = [
 ] as const;
 
 export const DASHBOARD_WIDGET_REPLACEMENTS: Readonly<Record<string, string | null>> = {
-  'quick-terrain': 'terrain-risk',
-  'terrain-risk-widget': 'terrain-risk',
-  'terrain-intelligence': 'terrain-risk',
   progress: 'navigate-surface',
   'route-progress': 'navigate-surface',
   'hwy-forward-weather': 'attitude-command',
@@ -539,9 +516,7 @@ export const DEFAULT_DASHBOARD_LAYOUTS: Record<
   expedition: {
     gridLayout: '2x2',
     slots: [
-      { widgetId: 'attitude-monitor', widgetSize: '2x1' },
-      { widgetId: 'terrain-risk', widgetSize: '1x1' },
-      { widgetId: 'vehicle-systems', widgetSize: '1x1' },
+      { widgetId: 'attitude-command', widgetSize: '2x2' },
     ],
   },
   highway: {
@@ -1163,24 +1138,24 @@ export const WIDGET_REGISTRY: WidgetRegistryEntry[] = [
     widget_status: 'active',
   },
 
-  // Terrain Intelligence compact widget
+  // Phase 10: Terrain Risk Prediction Widget
   {
     widget_id: 'terrain-risk',
     display_name: 'Terrain Risk',
-    description: 'Route-derived terrain posture, elevation profile, progress, and next material terrain event',
+    description: 'Predictive terrain risk assessment: side slope, grade, rollover, traction, and route-ahead forecast from vehicle build and live attitude',
     icon: 'trail-sign-outline',
     category: 'safety',
     default_size: '1x1',
-    default_dashboard: true,
-    default_position_order: 3,
+    default_dashboard: false,
+    default_position_order: 10,
     removable: true,
     requires_advanced_mode: false,
-    requires_sensor: 'none',
+    requires_sensor: 'motion',
     tab_scope: 'dashboard_only',
     supports_compact: true,
     supports_advanced: false,
     supports_modes: ['expedition', 'highway'],
-    data_provides: ['terrain_posture', 'route_elevation_profile', 'route_progress', 'grade_ahead', 'next_terrain_event', 'terrain_source_state'],
+    data_provides: ['terrain_risk_level', 'terrain_risk_score', 'side_slope_risk', 'steep_grade_risk', 'rollover_risk', 'traction_risk', 'route_ahead_risk', 'vehicle_capability'],
     render_ready: true,
     core_instrument: false,
     widget_status: 'active',
@@ -1624,8 +1599,8 @@ export function validateCuratedDashboardConfig(): string[] {
   const pickerEntries = DASHBOARD_WIDGET_CATALOG.filter(entry => entry.pickerEnabled);
   const catalogIds = pickerEntries.map(entry => entry.widgetId);
 
-  if (CURATED_DASHBOARD_WIDGET_IDS.length !== 9) {
-    issues.push(`Expected 9 curated dashboard widgets, found ${CURATED_DASHBOARD_WIDGET_IDS.length}.`);
+  if (CURATED_DASHBOARD_WIDGET_IDS.length !== 8) {
+    issues.push(`Expected 8 curated dashboard widgets, found ${CURATED_DASHBOARD_WIDGET_IDS.length}.`);
   }
   if (curatedUniqueIds.size !== CURATED_DASHBOARD_WIDGET_IDS.length) {
     issues.push('Curated dashboard widget IDs contain duplicates.');
@@ -1652,9 +1627,6 @@ export function validateCuratedDashboardConfig(): string[] {
   if (!expeditionDefault.some(slot => slot.widgetId === 'attitude-monitor' || slot.widgetId === 'attitude-command')) {
     issues.push('Expedition default must include an Attitude instrument.');
   }
-  if (expeditionDefault[1]?.widgetId !== 'terrain-risk') {
-    issues.push('Expedition default must place Terrain Risk in the lower-left slot.');
-  }
 
   for (const mode of Object.keys(DEFAULT_DASHBOARD_LAYOUTS) as DashboardMode[]) {
     for (const slot of DEFAULT_DASHBOARD_LAYOUTS[mode].slots) {
@@ -1667,7 +1639,7 @@ export function validateCuratedDashboardConfig(): string[] {
   const priorities = pickerEntries.map(entry => entry.priority).sort((a, b) => a - b);
   for (let i = 0; i < priorities.length; i += 1) {
     if (priorities[i] !== i + 1) {
-      issues.push('Dashboard widget priorities must form a complete 1-9 ranking.');
+      issues.push('Dashboard widget priorities must form a complete 1-8 ranking.');
       break;
     }
   }

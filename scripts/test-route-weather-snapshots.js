@@ -310,8 +310,8 @@ assert(offlinePrepPack.includes('weatherSnapshotAge'), 'Offline Prep snapshots s
 assert(offlinePrepPack.includes('lastProviderRefreshAt'), 'Offline Prep snapshots should include lastProviderRefreshAt.');
 
 const trailPackCard = read('components/discover/TrailPackCard.tsx');
-const routeCard = read('components/discover/ExploreTripBuilderWizardRouteCard.tsx');
+const routeCard = read('components/discover/ExploreTrailRouteCard.tsx');
 assert(!trailPackCard.includes('fetchSharedWeatherForCoordinates'), 'Explore route cards should not fetch live route weather on initial list render.');
-assert(!routeCard.includes('fetchSharedWeatherForCoordinates'), 'Trip-builder route cards should not fetch live route weather on initial list render.');
+assert(!routeCard.includes('fetchSharedWeatherForCoordinates'), 'Explore trail cards should not fetch live route weather on initial list render.');
 
 console.log('route weather snapshot checks passed');

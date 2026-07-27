@@ -210,7 +210,6 @@ import {
 } from '../../lib/dashboard/dashboardRuntimeSelectors';
 import { EASING, MOTION } from '../../lib/motion';
 import { useStableAnimatedValue } from '../../lib/ecsAnimations';
-import type { WidgetRenderOptions } from '../../components/dashboard/WidgetRenderers';
 
 const ExpeditionTab = React.lazy(() => import('../../components/dashboard/ExpeditionTab'));
 const WidgetDetailModal = React.lazy(() => import('../../components/dashboard/WidgetDetailModal'));
@@ -1499,7 +1498,6 @@ const DashboardGridZone = React.memo(function DashboardGridZone({
                     layoutMode={layoutMode}
                     onEmptySlotPress={onEmptySlotPress}
                     onWidgetPress={onWidgetPress}
-                    onWidgetLongPress={onEnterCustomizeMode}
                     onRemoveWidget={onRemoveWidget}
                     onSwapSlots={onSwapSlots}
                     onResizeWidget={onResizeWidget}
@@ -1609,7 +1607,6 @@ type DashboardModalLayerProps = {
   onRemotenessNavigateFromDetail: (target: RemotenessNavigationTargetType) => void;
   onOpenCommandBriefFromDetail: () => void;
   onTerrainRiskReferenceEvent: (event: TerrainRiskReferenceEvent | null) => void;
-  onTerrainShowOnMap: WidgetRenderOptions['onTerrainShowOnMap'];
   onCloseAuth: () => void;
   onShrinkAndResize: () => void;
   onCancelResize: () => void;
@@ -1662,7 +1659,6 @@ function areDashboardModalLayerPropsEqual(
     previous.onRemotenessNavigateFromDetail !== next.onRemotenessNavigateFromDetail ||
     previous.onOpenCommandBriefFromDetail !== next.onOpenCommandBriefFromDetail ||
     previous.onTerrainRiskReferenceEvent !== next.onTerrainRiskReferenceEvent ||
-    previous.onTerrainShowOnMap !== next.onTerrainShowOnMap ||
     previous.onCloseAuth !== next.onCloseAuth ||
     previous.onShrinkAndResize !== next.onShrinkAndResize ||
     previous.onCancelResize !== next.onCancelResize
@@ -1752,7 +1748,6 @@ const DashboardModalLayer = React.memo(function DashboardModalLayer({
   onRemotenessNavigateFromDetail,
   onOpenCommandBriefFromDetail,
   onTerrainRiskReferenceEvent,
-  onTerrainShowOnMap,
   onCloseAuth,
   onShrinkAndResize,
   onCancelResize,
@@ -1810,7 +1805,6 @@ const DashboardModalLayer = React.memo(function DashboardModalLayer({
               gpsHasFix: gps.hasFix,
               onOpenCommandBrief: onOpenCommandBriefFromDetail,
               onTerrainRiskReferenceEvent,
-              onTerrainShowOnMap,
             }}
             onClose={onCloseDetail}
             onReplace={onReplaceDetailWidget}
@@ -3832,7 +3826,7 @@ function DashboardScreenInner() {
   const handleRestoreDefaults = useCallback(() => {
     Alert.alert(
       'Restore Defaults?',
-      'This restores the curated Dashboard defaults, including Quick Terrain in the lower-left position.',
+      'This will reset the dashboard to the default 2-widget stack (Vehicle Systems + Attitude Monitor).',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -3983,30 +3977,6 @@ function DashboardScreenInner() {
     closeDashboardTransientOverlays();
     handleTabSwitchWithModeSync('brief');
   }, [closeDashboardTransientOverlays, handleTabSwitchWithModeSync]);
-
-  const handleTerrainShowOnMap = useCallback<NonNullable<WidgetRenderOptions['onTerrainShowOnMap']>>(
-    (target) => {
-      closeDashboardTransientOverlays();
-      void stageNavigationFlow({
-        source: 'dashboard',
-        target: 'navigate',
-        intent: 'quick_action',
-        label: 'Terrain Inspection',
-        message: `Terrain inspection at route mile ${target.distanceMiles.toFixed(1)}.`,
-        context: {
-          kind: 'terrain_inspection',
-          routeId: target.routeId,
-          routeGeometryFingerprint: target.routeGeometryFingerprint,
-          distanceMiles: target.distanceMiles,
-          segmentId: target.segmentId,
-          coordinate: target.coordinate,
-          returnTo: '/dashboard',
-          preserveActiveGuidance: true,
-        },
-      }).then(() => router.push('/navigate'));
-    },
-    [closeDashboardTransientOverlays, router],
-  );
 
   const handleRemotenessNavigateFromDetail = useCallback(
     async (target: RemotenessNavigationTargetType) => {
@@ -4798,7 +4768,6 @@ function DashboardScreenInner() {
         onRemotenessNavigateFromDetail={handleRemotenessNavigateFromDetail}
         onOpenCommandBriefFromDetail={handleOpenCommandBrief}
         onTerrainRiskReferenceEvent={handleTerrainRiskReferenceEvent}
-        onTerrainShowOnMap={handleTerrainShowOnMap}
         onCloseAuth={() => setAuthVisible(false)}
         onShrinkAndResize={handleShrinkAndResize}
         onCancelResize={handleCancelResize}

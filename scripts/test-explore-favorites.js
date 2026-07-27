@@ -150,20 +150,19 @@ async function main() {
   );
 
   assert.ok(
-    discoverScreenSource.includes('TRAILS') && discoverScreenSource.includes('PLANS'),
-    'Favorites UI should expose Trails and Plans segments.',
+    discoverScreenSource.includes('favoriteTrailCards') &&
+      discoverScreenSource.includes('handleOpenFavorite'),
+    'Explore should keep the saved-trail favorites surface and reopen behavior.',
   );
   assert.ok(
-    discoverScreenSource.includes('CREATE STACK'),
-    'Favorites UI should expose a dedicated stacked-plan create action.',
+    !discoverScreenSource.includes("label: 'PLANS'") &&
+      !discoverScreenSource.includes('CREATE STACK'),
+    'Explore must not mount saved-plan or stack-builder controls.',
   );
   assert.ok(
-    discoverScreenSource.includes('reorder-three-outline'),
-    'Ordering UI should surface a clear reorder handle.',
-  );
-  assert.ok(
-    discoverScreenSource.includes('current.filter((favoriteId) => favoriteTrailMap.has(favoriteId))'),
-    'Favorites planning state should discard stale selections when saved trails change.',
+    !discoverScreenSource.includes('planBuilderVisible') &&
+      !discoverScreenSource.includes('selectedPlanFavoriteIds'),
+    'Explore must not retain an interactive itinerary/plan-builder state path.',
   );
 
   favoritesStore.removeFavoriteTrailBySourceId('alabama-hills');

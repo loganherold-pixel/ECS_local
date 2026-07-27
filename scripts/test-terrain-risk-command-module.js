@@ -110,12 +110,7 @@ assert(
     terrainRiskRuntimeSource.includes('samplingSignature'),
   'Terrain Risk elevation sampling should key requests by stable route signature instead of route point reference churn.',
 );
-assert(
-  widgetRenderersSource.includes('function getTerrainRiskProfileStatusLabel') &&
-    widgetRenderersSource.includes('if (presentation.profile.length >= 2)') &&
-    widgetRenderersSource.includes('return null;'),
-  'Terrain Risk top-right header must not repeat no-active-route copy.',
-);
+assert(!widgetRenderersSource.includes('NO ACTIVE ROUTE'), 'Terrain Risk widget must not repeat no-active-route copy in the top-right header.');
 assert(widgetRenderersSource.includes('title={terrainRiskHeaderTitle}'), 'Route Terrain Risk inline panel must summarize deterministic risk or an explicit terminal state.');
 assert(widgetRenderersSource.includes('detail={terrainRiskHeaderDetail}'), 'Route Terrain Risk inline panel must keep source truth or a missing-data reason visible.');
 assert(
@@ -212,11 +207,7 @@ assert(
   'Terrain Risk side profile should keep static SVG chart memoization independent from moving route progress.',
 );
 assert(sideProfileSource.includes('Current GPS position'), 'Terrain Risk side profile should label the moving GPS marker for assistive tech.');
-assert(
-  sideProfileSource.includes("from 'react-native-gesture-handler'") &&
-    sideProfileSource.includes('Gesture.Pan()'),
-  'Terrain Risk side profile should expose a UI-thread-capable drag probe for expanded elevation reads.',
-);
+assert(sideProfileSource.includes('PanResponder'), 'Terrain Risk side profile should expose a drag probe for expanded elevation reads.');
 assert(sideProfileSource.includes('function buildElevationProbePoint'), 'Terrain Risk side profile should derive the dragged elevation readout from route data.');
 assert(sideProfileSource.includes('selectedProbePoint'), 'Terrain Risk side profile should track the selected elevation probe point while dragging.');
 assert(sideProfileSource.includes('testID="terrainRiskElevationProbe"'), 'Terrain Risk side profile should render a testable elevation probe overlay.');

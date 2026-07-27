@@ -203,13 +203,14 @@ export function buildExploreTrailPacksProductionReadinessResult(options = {}) {
         !trailPackPreview.includes('LOOP ROUTE') &&
         !trailPackPreview.includes('POINT ROUTE') &&
         !trailPackPreview.includes('s.mapBadge') &&
-        trailPackPreview.includes('accessibilityLabel="Build Trip"') &&
-        discover.includes('handleBuildTripFromRoute(trailPackToExpeditionOpportunity(trailPackPreview))') &&
+        !discover.includes('onBuildTrip=') &&
+        !discover.includes('handleBuildTripFromRoute') &&
         trailPackPreview.includes('Offline cache unavailable for this Trail Pack.') &&
         trailPackPreview.includes('disabled={!effectiveOfflineCacheAvailable}') &&
         discover.includes('trailPackToOfflinePrepCatalogInput') &&
         discover.includes('handleCacheTrailPackOffline') &&
-        discover.includes("saveOfflinePrepPackHandoff(offlinePrepInput, 'route_details')") &&
+        discover.includes("mode: 'trail_download'") &&
+        discover.includes("}, 'route_details')") &&
         trailPackPreview.includes('ECS confidence') &&
         trailPackPreview.includes('WARNINGS') &&
         trailPackPreview.includes('sourceLabel') &&

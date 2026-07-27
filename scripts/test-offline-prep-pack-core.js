@@ -128,12 +128,12 @@ function itemByType(manifest, type) {
 }
 
 const routeOnlyManifest = buildOfflinePrepPackManifest(
-  { route, capturedAt: '2026-05-18T12:00:00.000Z' },
+  { mode: 'trail_download', route, capturedAt: '2026-05-18T12:00:00.000Z' },
   { offlineMapAdapter: unsupportedMapAdapter },
 );
 
 buildOfflinePrepPackManifest(
-  { route, mapStyleKey: 'satellite', capturedAt: '2026-05-18T12:00:00.000Z' },
+  { mode: 'trail_download', route, mapStyleKey: 'satellite', capturedAt: '2026-05-18T12:00:00.000Z' },
   { offlineMapAdapter: styleAwareMapAdapter },
 );
 assert.strictEqual(
@@ -170,12 +170,28 @@ assert.strictEqual(routeOnlyManifest.routeId, route.id);
 assert.strictEqual(itemByType(routeOnlyManifest, 'route_line').status, 'ready');
 assert.strictEqual(itemByType(routeOnlyManifest, 'waypoints').count, 2);
 assert.strictEqual(itemByType(routeOnlyManifest, 'gpx_export').status, 'ready');
-assert.strictEqual(itemByType(routeOnlyManifest, 'trip_itinerary').status, 'unavailable');
 assert.strictEqual(itemByType(routeOnlyManifest, 'offline_map').status, 'unavailable');
-assert.strictEqual(itemByType(routeOnlyManifest, 'campsites').label, 'Campsites and Emergency Points');
-assert.strictEqual(itemByType(routeOnlyManifest, 'campsites').status, 'ready');
-assert.strictEqual(itemByType(routeOnlyManifest, 'campsites').availability, 'not_set');
-assert.ok(!routeOnlyManifest.items.some((entry) => entry.type === 'emergency_points'), 'Emergency support points should be merged into campsites instead of rendered as a separate requirement.');
+for (const tripPlanningItemType of [
+  'trip_itinerary',
+  'trip_sheet',
+  'resupply_points',
+  'smart_resupply_summary',
+]) {
+  assert.ok(
+    !routeOnlyManifest.items.some((entry) => entry.type === tripPlanningItemType),
+    `Route-only trail downloads must omit ${tripPlanningItemType}.`,
+  );
+}
+assert.strictEqual(
+  routeOnlyManifest.tripPlanId,
+  null,
+  'Route-only trail downloads must not fabricate a trip-plan identity.',
+);
+assert.strictEqual(
+  routeOnlyManifest.lifecycle.identity.tripPlanId,
+  null,
+  'Route-only lifecycle linkage must keep tripPlanId absent.',
+);
 assert.strictEqual(routeOnlyManifest.progress.status, 'partially_ready');
 assert.ok(routeOnlyManifest.errors.some((error) => error.itemType === 'offline_map'));
 
@@ -383,7 +399,15 @@ const tripPlan = buildTripPlan({
 });
 
 const tripManifest = buildOfflinePrepPackManifest(
-  { route, tripPlan, vehicleProfile, campsiteCandidates, exitPoints, capturedAt: '2026-05-18T12:00:00.000Z' },
+  {
+    mode: 'trip_plan',
+    route,
+    tripPlan,
+    vehicleProfile,
+    campsiteCandidates,
+    exitPoints,
+    capturedAt: '2026-05-18T12:00:00.000Z',
+  },
   { offlineMapAdapter: pendingMapAdapter },
 );
 
@@ -393,9 +417,11 @@ assert.strictEqual(itemByType(tripManifest, 'trip_itinerary').status, 'ready');
 assert.strictEqual(itemByType(tripManifest, 'trip_sheet').status, 'ready');
 assert.ok(itemByType(tripManifest, 'campsites').count >= 1, 'Trip manifest should include camp candidates from TripPlan/input.');
 assert.ok(itemByType(tripManifest, 'exit_points').count >= 1, 'Trip manifest should include bailout points from TripPlan/input.');
+assert.strictEqual(tripManifest.tripPlanId, tripPlan.id, 'Explicit trip-plan mode should preserve the real TripPlan identity.');
 
 const tripPlanOnlyRouteManifest = buildOfflinePrepPackManifest(
   {
+    mode: 'trip_plan',
     route: { id: 'plan-only-route', name: 'Plan Only Route' },
     tripPlan,
     capturedAt: '2026-05-18T12:00:00.000Z',
@@ -410,7 +436,15 @@ assert.strictEqual(
 );
 
 const smartManifest = buildOfflinePrepPackManifest(
-  { route, tripPlan, smartResupplyPlan: tripPlan.smartResupplyPlan, vehicleProfile, campsiteCandidates, exitPoints },
+  {
+    mode: 'trip_plan',
+    route,
+    tripPlan,
+    smartResupplyPlan: tripPlan.smartResupplyPlan,
+    vehicleProfile,
+    campsiteCandidates,
+    exitPoints,
+  },
   { offlineMapAdapter: cachedMapAdapter },
 );
 
@@ -421,6 +455,7 @@ assert.ok(itemByType(smartManifest, 'resupply_points').count >= 1, 'Smart Resupp
 
 const weatherManifest = buildOfflinePrepPackManifest(
   {
+    mode: 'trip_plan',
     route,
     tripPlan,
     smartResupplyPlan: tripPlan.smartResupplyPlan,
@@ -438,7 +473,7 @@ assert.strictEqual(itemByType(weatherManifest, 'weather_snapshot').status, 'read
 assert.strictEqual(itemByType(weatherManifest, 'weather_snapshot').availability, 'available');
 
 const pack = buildOfflinePrepPack(
-  { route, tripPlan, smartResupplyPlan: tripPlan.smartResupplyPlan, vehicleProfile },
+  { mode: 'trip_plan', route, tripPlan, smartResupplyPlan: tripPlan.smartResupplyPlan, vehicleProfile },
   { offlineMapAdapter: cachedMapAdapter },
 );
 assert.strictEqual(pack.id, smartManifest.id);

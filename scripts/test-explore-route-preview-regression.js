@@ -172,13 +172,24 @@ assert.ok(
   'Trail Pack preview maps should not overlay point/loop route badges or other route-type containers over the map.',
 );
 assert.ok(
-  trailPackPreviewModalSource.includes('onBuildTrip?: () => void;') &&
-    trailPackPreviewModalSource.includes('accessibilityLabel="Build Trip"') &&
-    trailPackPreviewModalSource.includes('onBuildTrip();') &&
-    trailPackPreviewModalSource.includes('BUILD TRIP') &&
-    discoverSource.includes('onBuildTrip={() => {') &&
-    discoverSource.includes('handleBuildTripFromRoute(trailPackToExpeditionOpportunity(trailPackPreview))'),
-  'Trail Pack preview footer should expose Build Trip and wire it to the same Explore Trip Builder handoff as route cards.',
+  !discoverSource.includes('onBuildTrip=') &&
+    !discoverSource.includes('handleBuildTripFromRoute') &&
+    !discoverSource.includes('/explore-trip-builder') &&
+    !discoverSource.includes('BUILD TRIP'),
+  'The mounted Explore preview path should not expose or navigate to Trip Builder.',
+);
+assert.ok(
+  discoverSource.includes('testID="selected-route-prepare-offline-pack"') &&
+    discoverSource.includes('handlePrepareOfflineFromRoute(selectedOpportunity);') &&
+    discoverSource.includes('PREP{\'\\n\'}OFFLINE'),
+  'Selected route detail should retain an explicit Offline Trails handoff after planning actions are removed.',
+);
+assert.ok(
+  trailPackPreviewModalSource.includes('onCacheOffline?: () => void;') &&
+    discoverSource.includes('onCacheOffline={() => {') &&
+    discoverSource.includes('handleCacheTrailPackOffline(trailPackPreview);') &&
+    !discoverSource.includes('onBuildTrip={'),
+  'Mounted Trail Pack preview should expose offline caching without mounting its legacy optional build callback.',
 );
 
 const missingImageAssignment = thumbnails.getExploreRouteThumbnail({

@@ -22,17 +22,24 @@ const registry = require(path.join(root, 'lib', 'explore', 'exploreFeatureRegist
 const routeManifest = require(path.join(root, 'lib', 'routeManifest.ts'));
 
 const discoverSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'discover.tsx'), 'utf8');
-const placeholderSource = fs.readFileSync(
-  path.join(root, 'components', 'discover', 'ExploreFeaturePlaceholderScreen.tsx'),
+const offlinePrepSource = fs.readFileSync(path.join(root, 'app', 'explore-offline-prep-pack.tsx'), 'utf8');
+const planningTabsSource = fs.readFileSync(
+  path.join(root, 'components', 'discover', 'ExplorePlanningTabs.tsx'),
   'utf8',
 );
-const tripBuilderSource = fs.readFileSync(path.join(root, 'app', 'explore-trip-builder.tsx'), 'utf8');
-const offlinePrepSource = fs.readFileSync(path.join(root, 'app', 'explore-offline-prep-pack.tsx'), 'utf8');
 const layoutSource = fs.readFileSync(path.join(root, 'app', '_layout.tsx'), 'utf8');
-const routeManifestSource = fs.readFileSync(path.join(root, 'lib', 'routeManifest.ts'), 'utf8');
-const authResolverSource = fs.readFileSync(path.join(root, 'lib', 'auth', 'distributionEntryResolver.ts'), 'utf8');
-const enrichedCardSource = fs.readFileSync(path.join(root, 'components', 'discover', 'EnrichedRouteCard.tsx'), 'utf8');
-const filterSource = fs.readFileSync(path.join(root, 'components', 'discover', 'DistanceRadiusFilter.tsx'), 'utf8');
+const authResolverSource = fs.readFileSync(
+  path.join(root, 'lib', 'auth', 'distributionEntryResolver.ts'),
+  'utf8',
+);
+const enrichedCardSource = fs.readFileSync(
+  path.join(root, 'components', 'discover', 'EnrichedRouteCard.tsx'),
+  'utf8',
+);
+const filterSource = fs.readFileSync(
+  path.join(root, 'components', 'discover', 'DistanceRadiusFilter.tsx'),
+  'utf8',
+);
 const packageSource = fs.readFileSync(path.join(root, 'package.json'), 'utf8');
 
 function assertIncludes(source, fragment, message) {
@@ -45,210 +52,174 @@ function assertNotIncludes(source, fragment, message) {
 
 const features = registry.getExploreFeatureRegistry({
   env: {
-    EXPO_PUBLIC_ECS_EXPLORE_TRIP_BUILDER: undefined,
     EXPO_PUBLIC_ECS_EXPLORE_OFFLINE_PREP_PACK: undefined,
   },
 });
 
 assert.deepStrictEqual(
   features.map((feature) => feature.id),
-  ['suggested_routes', 'route_filters', 'trip_builder', 'offline_prep_pack'],
-  'Explore feature registry should expose the four top-level Explore options in display order.',
+  ['suggested_routes', 'route_filters', 'offline_prep_pack'],
+  'Explore should register trail discovery, its hidden filter utility, and offline trail downloads only.',
 );
 assert.deepStrictEqual(
   features.map((feature) => feature.order),
-  [10, 20, 30, 40],
-  'Explore feature registry order values should keep Suggested Routes and Route Filters first.',
+  [10, 20, 40],
+  'Explore feature ordering should keep trail discovery first and Offline Trails last.',
 );
 
 for (const feature of features) {
   assert.ok(feature.title, `${feature.id} should have a display title.`);
   assert.ok(feature.description, `${feature.id} should have a short description.`);
   assert.ok(feature.icon, `${feature.id} should use an existing icon reference.`);
-  assert.ok(['routes', 'planning'].includes(feature.category), `${feature.id} should have a supported category.`);
+  assert.ok(['routes', 'offline'].includes(feature.category), `${feature.id} should have a supported category.`);
   assert.strictEqual(typeof feature.enabled, 'boolean', `${feature.id} should resolve enabled state.`);
 }
 
 assert.strictEqual(
   registry.getExploreFeatureById('suggested_routes').status,
   'live',
-  'Suggested Routes should remain a live Explore feature.',
+  'Suggested trailheads should remain a live Explore feature.',
 );
 assert.strictEqual(
   registry.getExploreFeatureById('route_filters').status,
   'live',
-  'Route Filters should remain a live Explore feature.',
-);
-assert.strictEqual(
-  registry.getExploreFeatureById('trip_builder').status,
-  'live',
-  'Trip Builder should be registered as a live wired Explore feature.',
+  'Route filters should remain a live hidden utility.',
 );
 assert.strictEqual(
   registry.getExploreFeatureById('offline_prep_pack').status,
   'live',
-  'Offline Prep Pack should be registered as a live wired Explore feature.',
-);
-assert.strictEqual(
-  registry.getExploreFeatureById('trip_builder').route,
-  '/explore-trip-builder',
-  'Trip Builder should route to the Trip Builder flow.',
+  'Offline Trails should remain a live wired feature.',
 );
 assert.strictEqual(
   registry.getExploreFeatureById('offline_prep_pack').route,
   '/explore-offline-prep-pack',
-  'Offline Prep Pack should route to the Offline Prep Pack flow.',
+  'Offline Trails should route to the canonical offline download screen.',
 );
-
-assert.ok(registry.EXPLORE_FEATURE_CATEGORY_STYLES.planning, 'Planning category styling should exist.');
 assert.strictEqual(
-  registry.EXPLORE_FEATURE_CATEGORY_STYLES.planning.label,
-  'Planning',
-  'Planning category should be available for Explore planning features.',
+  registry.getExploreFeatureById('trip_builder'),
+  null,
+  'Trip Builder must not remain addressable through the mounted Explore feature registry.',
 );
 
-const disabledTripBuilder = registry.getExploreFeatureRegistry({
+assert.ok(registry.EXPLORE_FEATURE_CATEGORY_STYLES.offline, 'Offline category styling should exist.');
+assert.strictEqual(
+  registry.EXPLORE_FEATURE_CATEGORY_STYLES.offline.label,
+  'Offline',
+  'Offline trail downloads should use an explicit Offline category.',
+);
+
+const disabledOffline = registry.getExploreFeatureRegistry({
   env: {
-    EXPO_PUBLIC_ECS_EXPLORE_TRIP_BUILDER: '0',
-    EXPO_PUBLIC_ECS_EXPLORE_OFFLINE_PREP_PACK: 'true',
+    EXPO_PUBLIC_ECS_EXPLORE_OFFLINE_PREP_PACK: 'off',
   },
 });
 assert.strictEqual(
-  disabledTripBuilder.find((feature) => feature.id === 'trip_builder').enabled,
+  disabledOffline.find((feature) => feature.id === 'offline_prep_pack').enabled,
   false,
-  'Trip Builder should respect its disable feature flag.',
-);
-assert.strictEqual(
-  disabledTripBuilder.find((feature) => feature.id === 'offline_prep_pack').enabled,
-  true,
-  'Offline Prep Pack should respect its enable feature flag.',
+  'Offline Trails should respect the canonical feature visibility policy.',
 );
 assert.deepStrictEqual(
   registry.getVisibleExploreFeatures({
     env: {
-      EXPO_PUBLIC_ECS_EXPLORE_TRIP_BUILDER: 'disabled',
-      EXPO_PUBLIC_ECS_EXPLORE_OFFLINE_PREP_PACK: 'off',
+      EXPO_PUBLIC_ECS_EXPLORE_OFFLINE_PREP_PACK: 'disabled',
     },
   }).map((feature) => feature.id),
   ['suggested_routes'],
-  'Visible Explore features should hide internal Route Filters and filter disabled planning features.',
+  'Visible Explore features should hide Route Filters and a disabled Offline Trails capability.',
 );
 assert.deepStrictEqual(
   registry.getVisibleExploreFeatures().map((feature) => feature.id),
-  ['suggested_routes', 'trip_builder', 'offline_prep_pack'],
-  'Visible Explore features should drive the three Explorer primary tabs.',
+  ['suggested_routes', 'offline_prep_pack'],
+  'The mounted Explore selector should expose Find Trails and Offline Trails only.',
 );
 
-assertIncludes(discoverSource, 'getVisibleExploreFeatures', 'Explore tab should consume the visible three-tab feature registry.');
-assertIncludes(discoverSource, 'suggestedRoutesFeatureEnabled', 'Explore should resolve the mounted Suggested Routes rollout from the canonical visible feature registry.');
-assertIncludes(discoverSource, "reason: 'feature_disabled'", 'A disabled Suggested Routes rollout should terminate the provider surface as feature-disabled.');
-assertIncludes(discoverSource, 'testID="explore-suggested-routes-disabled"', 'A disabled Suggested Routes rollout should render an explicit mounted disabled state.');
-assertIncludes(discoverSource, 'if (!suggestedRoutesFeatureEnabled || !routeCatalogHasSearchArea) return;', 'Retry should not issue route-provider work when Suggested Routes is disabled.');
-assertNotIncludes(discoverSource, 'testID="explore-primary-tab-control"', 'Explore tab should not restore the legacy segmented primary tab control.');
-assertIncludes(discoverSource, 'testID="explore-tripbuilder-wizard-surface"', 'Explore tab should expose the direct route-first Trip Builder hero.');
-assertIncludes(discoverSource, 'accessibilityLabel="Open Explore Trip Builder"', 'Explore Trip Builder hero should be a mobile-accessible button.');
-assertIncludes(
-  discoverSource,
-  "handleOpenExploreFeature('trip_builder')",
-  'The Trip Builder hero must use the same canonical feature-gated handler as the registered feature tile.',
-);
-assertIncludes(
-  discoverSource,
-  'testID="explore-tripbuilder-disabled-state"',
-  'A disabled Trip Builder rollout must render an explicit terminal state instead of leaving a no-op hero.',
-);
-assertIncludes(discoverSource, "case 'suggested_routes':", 'Suggested Routes tab should keep routing to existing suggestions.');
-assertNotIncludes(discoverSource, "case 'route_filters':", 'Route Filters should no longer be a primary Explore tab action.');
-assertIncludes(discoverSource, 'activeExplorePrimaryTab === \'suggested_routes\'', 'Suggested Routes should be the face-page tab.');
-assert(
-  discoverSource.includes("pushSingleFlight('/explore-trip-builder')") ||
-    discoverSource.includes("router.push('/explore-trip-builder')"),
-  'Trip Builder should open the real planning surface directly.',
-);
-assertIncludes(discoverSource, 'testID="explore-offline_prep_pack-tab-panel"', 'Offline Prep should keep its inline planning panel.');
-assertNotIncludes(discoverSource, 'testID="explore-open-trip-builder"', 'Trip Builder should not render a redundant inline staging panel.');
-assertIncludes(discoverSource, 'event: \'explore_feature_selected\'', 'Explore feature selections should log a placeholder analytics-style event.');
-assertIncludes(discoverSource, "trip_builder: 'LIVE'", 'Trip Builder should display as live in the Explorer primary tab badge.');
-assertIncludes(discoverSource, "offline_prep_pack: 'LIVE'", 'Offline Prep Pack should display as live in the Explorer primary tab badge.');
-assertNotIncludes(discoverSource, "trip_builder: 'STAGED'", 'Trip Builder should not display a staged badge once live.');
-assertNotIncludes(discoverSource, "offline_prep_pack: 'STAGED'", 'Offline Prep Pack should not display a staged badge once live.');
-assertIncludes(
-  discoverSource,
-  'adaptive.isLandscape && windowWidth >= 640',
-  'Explore category panels should switch Hidden Gems and Popular Trails to a two-column card grid in landscape.',
-);
-assertIncludes(
-  discoverSource,
-  'exploreRouteGridColumns',
-  'Explore landscape card width should be based on the active route grid column count.',
-);
+assertIncludes(discoverSource, 'getVisibleExploreFeatures', 'Explore should consume the canonical visible-feature registry.');
+assertIncludes(discoverSource, 'suggestedRoutesFeatureEnabled', 'Explore should resolve Suggested Routes through that registry.');
+assertIncludes(discoverSource, "reason: 'feature_disabled'", 'A disabled trail rollout should terminate provider work explicitly.');
+assertIncludes(discoverSource, 'testID="explore-suggested-routes-disabled"', 'A disabled trail rollout should render a mounted unavailable state.');
+assertIncludes(discoverSource, 'if (!suggestedRoutesFeatureEnabled || !routeCatalogHasSearchArea) return;', 'Retry should not issue provider work without a valid search area.');
+assertIncludes(discoverSource, "case 'suggested_routes':", 'Find Trails should keep routing to the existing discovery surface.');
+assertIncludes(discoverSource, "case 'offline_prep_pack':", 'Offline Trails should keep routing to the existing download surface.');
+assertNotIncludes(discoverSource, "case 'route_filters':", 'Route Filters should remain a utility rather than a primary tab.');
+assertIncludes(discoverSource, "offline_prep_pack: 'LIVE'", 'Offline Trails should show its live capability badge.');
+assertIncludes(discoverSource, 'testID="explore-offline_prep_pack-tab-panel"', 'Offline Trails should retain an inline selection and import panel.');
+assertIncludes(discoverSource, 'testID="explore-open-offline-prep-pack"', 'Offline Trails should expose an explicit handoff action.');
+assertIncludes(discoverSource, 'testID="explore-offline-prep-import-route-file"', 'Offline Trails should retain private route-file import.');
+assertIncludes(discoverSource, "pathname: '/explore-offline-prep-pack'", 'Explore should hand selected trails to the canonical offline route.');
+assertIncludes(discoverSource, "mode: 'trail_download'", 'Explore offline handoffs should request the route-only manifest mode.');
 
-assertIncludes(discoverSource, 'DistanceRadiusFilter', 'Existing Route Filters component should remain wired.');
-assertIncludes(discoverSource, 'applyExploreRefinementFilter', 'Existing route refinement pipeline should remain wired.');
-assertIncludes(discoverSource, 'EnrichedRouteCard', 'Existing route suggestion cards should remain wired.');
-assertIncludes(discoverSource, 'buildExploreRouteReadinessStorePatch', 'Existing route readiness store patching should remain wired.');
+for (const removedContract of [
+  "'trip_builder'",
+  '/explore-trip-builder',
+  'explore-tripbuilder',
+  'BUILD TRIP',
+  'onBuildTrip=',
+]) {
+  assertNotIncludes(
+    discoverSource,
+    removedContract,
+    `Mounted Explore should not retain the removed planning contract ${removedContract}.`,
+  );
+}
+
+assertIncludes(discoverSource, 'useThrottledGPS', 'Explore should continue using the existing GPS source.');
+assertIncludes(discoverSource, 'hasGPSFix', 'Explore should keep an explicit GPS-fix state.');
+assertIncludes(discoverSource, 'DistanceRadiusFilter', 'The basic distance filter should remain mounted.');
+assertIncludes(discoverSource, 'applyExploreRefinementFilter', 'The route refinement pipeline should remain wired.');
+assertIncludes(discoverSource, 'EnrichedRouteCard', 'Existing trail suggestion cards should remain wired.');
+assertIncludes(discoverSource, 'buildExploreRouteReadinessStorePatch', 'Existing route readiness state should remain wired.');
 assertIncludes(enrichedCardSource, 'ExploreReadinessSummary', 'Existing route cards should still render readiness summary.');
 assertIncludes(
   enrichedCardSource,
   'buildExploreRouteReadinessAssessment',
-  'Existing route cards should still use the route readiness assessment logic.',
+  'Existing route cards should still use route readiness assessment logic.',
 );
-assertIncludes(filterSource, 'EXPLORE_REFINEMENT_OPTIONS.map', 'Existing route filter options should still render.');
+assertIncludes(filterSource, 'EXPLORE_DISCOVERY_FILTER_OPTIONS.map', 'Existing route refinement options should still render.');
 
-assertIncludes(tripBuilderSource, 'Trip Builder', 'Trip Builder screen should be clearly labeled.');
-assertIncludes(
-  tripBuilderSource,
-  'Turn a selected route into a day trip, overnight route, or expedition-style plan.',
-  'Trip Builder should use concise field-oriented helper copy.',
-);
-assertIncludes(tripBuilderSource, 'buildTripPlan({', 'Trip Builder screen should use the planning service.');
-assertIncludes(tripBuilderSource, 'testID="trip-builder-results"', 'Trip Builder screen should render generated results.');
-assertIncludes(offlinePrepSource, 'Offline Prep Pack', 'Offline Prep Pack screen should be clearly labeled.');
+assertIncludes(offlinePrepSource, 'Offline Prep Pack', 'Offline Trails should retain the established download screen.');
+assertIncludes(offlinePrepSource, 'buildOfflinePrepPackManifest(selectedInput)', 'Offline Trails should use the canonical manifest service.');
+assertIncludes(offlinePrepSource, 'testID="offline-prep-manifest"', 'Offline Trails should render generated manifests.');
+assertIncludes(offlinePrepSource, 'Downloads are marked ready only when confirmed by ECS infrastructure.', 'Offline download status should remain truthful.');
+assertIncludes(planningTabsSource, "label: 'Find Trails'", 'Offline navigation should provide a Find Trails return tab.');
+assertIncludes(planningTabsSource, "label: 'Offline Trails'", 'Offline navigation should label the download surface clearly.');
+assertNotIncludes(planningTabsSource, 'trip_builder', 'Offline navigation tabs should not expose Trip Builder.');
+assertNotIncludes(planningTabsSource, '/explore-trip-builder', 'Offline navigation tabs should not link into planning.');
+
 const offlinePrepFeature = registry.getExploreFeatureById('offline_prep_pack');
-assert.ok(offlinePrepFeature, 'Offline Prep Pack should be discoverable through the Explore feature registry API.');
-assert.strictEqual(offlinePrepFeature.category, 'planning');
+assert.ok(offlinePrepFeature, 'Offline Trails should be discoverable through the registry API.');
+assert.strictEqual(offlinePrepFeature.category, 'offline');
 assert.strictEqual(offlinePrepFeature.status, 'live');
 assert.strictEqual(offlinePrepFeature.enabled, true);
 assert.strictEqual(offlinePrepFeature.route, '/explore-offline-prep-pack');
-assert.ok(
-  registry.getVisibleExploreFeatures().some((feature) => feature.id === offlinePrepFeature.id),
-  'An enabled Offline Prep Pack should be returned by the public visible-feature query.',
-);
 assert.strictEqual(
   routeManifest.getRouteFeatureRequirement(offlinePrepFeature.route),
   offlinePrepFeature.centralFeatureId,
-  'Offline Prep execution should target the route protected by the same registered capability.',
+  'Offline execution should target the route protected by the registered capability.',
 );
-assertIncludes(offlinePrepSource, 'buildOfflinePrepPackManifest(selectedInput)', 'Offline Prep Pack screen should use the manifest service.');
-assertIncludes(offlinePrepSource, 'testID="offline-prep-manifest"', 'Offline Prep Pack screen should render generated manifests.');
-assertIncludes(offlinePrepSource, 'Downloads are marked ready only when confirmed by ECS infrastructure.', 'Offline Prep Pack should keep unavailable downloads honest.');
-assertIncludes(placeholderSource, 'registered as a placeholder', 'Placeholder screens should not claim unfinished functionality.');
-assertIncludes(placeholderSource, 'Route suggestions and filters remain available', 'Placeholder screens should preserve current Explore behavior.');
-assertIncludes(layoutSource, 'name="explore-trip-builder"', 'Root stack should register Trip Builder for direct mobile handoff.');
-assertIncludes(layoutSource, 'name="explore-offline-prep-pack"', 'Root stack should register Offline Prep Pack for direct mobile handoff.');
-assert.strictEqual(routeManifest.getRouteMetadata('/explore-trip-builder')?.parentSurface, 'explore');
-assert.strictEqual(routeManifest.getRouteMetadata('/explore-trip-builder')?.safeReturnRoute, '/discover');
+assertIncludes(layoutSource, 'name="explore-offline-prep-pack"', 'The root stack should register Offline Trails.');
 assert.strictEqual(routeManifest.getRouteMetadata('/explore-offline-prep-pack')?.parentSurface, 'explore');
-assert.strictEqual(routeManifest.getRouteOwnership('/explore-trip-builder')?.restorableShellRoute, '/discover');
 assert.strictEqual(routeManifest.getRouteOwnership('/explore-offline-prep-pack')?.restorableShellRoute, '/discover');
 assertIncludes(authResolverSource, 'getRouteMetadata', 'Pre-setup route access should use canonical route metadata.');
-assertIncludes(authResolverSource, "metadata.setupRequirement === 'none'", 'Setup-optional Explore planning routes should remain reachable before vehicle setup.');
+assertIncludes(authResolverSource, "metadata.setupRequirement === 'none'", 'Offline Trails should remain reachable before vehicle setup.');
 
-const combinedNewSurface = [
+const mountedExploreCopy = [
   registry.getExploreFeatureRegistry().map((feature) => `${feature.title} ${feature.description}`).join(' '),
-  placeholderSource,
-  tripBuilderSource,
-  offlinePrepSource,
+  discoverSource,
+  planningTabsSource,
 ].join('\n').toLowerCase();
 
-for (const forbidden of ['comment', 'public submission', 'moderation', 'community report']) {
-  assertNotIncludes(combinedNewSurface, forbidden, `Explore planning wiring should not introduce ${forbidden}.`);
+for (const forbidden of [
+  'resupply plan',
+  'trip builder',
+  'printable itinerary',
+]) {
+  assertNotIncludes(mountedExploreCopy, forbidden, `Mounted Explore should not introduce ${forbidden}.`);
 }
 
 assertIncludes(
   packageSource,
   '"test:explore-feature-registry": "node ./scripts/test-explore-feature-registry.js"',
-  'package.json should expose the Explore feature registry regression test.',
+  'package.json should keep the Explore registry regression test.',
 );
 
 console.log('Explore feature registry checks passed.');

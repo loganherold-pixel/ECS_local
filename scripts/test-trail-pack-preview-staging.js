@@ -214,12 +214,11 @@ assert(
   'Trail Pack preview should display a map-rendered route-line-only snapshot without generated pins or route-type overlay badges',
 );
 assert(
-  previewSource.includes('onBuildTrip?: () => void;') &&
-    previewSource.includes('accessibilityLabel="Build Trip"') &&
-    previewSource.includes('onBuildTrip();') &&
-    previewSource.includes('BUILD TRIP') &&
-    discoverSource.includes('handleBuildTripFromRoute(trailPackToExpeditionOpportunity(trailPackPreview))'),
-  'Trail Pack preview should let users build a trip directly from the preview footer.',
+  !discoverSource.includes('onBuildTrip=') &&
+    !discoverSource.includes('handleBuildTripFromRoute') &&
+    discoverSource.includes('offlineCacheAvailable=') &&
+    discoverSource.includes('handleCacheTrailPackOffline'),
+  'Mounted Explore Trail Pack previews should expose offline caching without a Trip Builder action.',
 );
 assert(
   previewSource.includes('Offline cache unavailable for this Trail Pack.') &&
@@ -288,12 +287,11 @@ assert(
 assert(
   discoverSource.includes("flowLabel: 'Route Preview'") &&
     discoverSource.includes('Trail Pack is staged in Navigate. Review the map overview, then start when ready.') &&
-    previewSource.includes('accessibilityLabel="Build Trip"') &&
     previewSource.includes('accessibilityLabel="Route Preview"') &&
-    previewSource.includes('accessibilityHint="Open Trip Builder with this Trail Pack already selected."') &&
     previewSource.includes('Preview this Trail Pack on the map without starting guidance.') &&
-    previewSource.includes('<Text style={[s.primaryActionText, !canStart && s.primaryActionTextDisabled]}>START</Text>'),
-  'Simplified Trail Pack planning should keep Route Preview, Build Trip, and Start Guidance as separate explicit actions.',
+    previewSource.includes('<Text style={[s.primaryActionText, !canStart && s.primaryActionTextDisabled]}>START</Text>') &&
+    previewSource.includes('OFFLINE'),
+  'Trail Pack discovery should keep Route Preview, offline cache, and Start Guidance as separate explicit actions.',
 );
 
 console.log('Trail Pack preview and staging checks passed');

@@ -55,7 +55,7 @@ import AIRouteCard from '../../components/discover/AIRouteCard';
 import AIRoutePreviewModal from '../../components/discover/AIRoutePreviewModal';
 import RouteCatalogSummaryCard from '../../components/discover/RouteCatalogSummaryCard';
 import TrailPackPreviewModal from '../../components/trailPacks/TrailPackPreviewModal';
-import ExploreTripBuilderWizardRouteCard from '../../components/discover/ExploreTripBuilderWizardRouteCard';
+import ExploreTrailRouteCard from '../../components/discover/ExploreTrailRouteCard';
 import { getExploreRouteThumbnailAssignments } from '../../lib/exploreTrailThumbnails';
 import {
   loadOpportunitiesWithCompatibility,
@@ -81,7 +81,6 @@ import {
   dedupeExploreRoutes,
   getHiddenGemRecommendations,
   getPopularTrailRecommendations,
-  type DiscoveryTabId,
   type CategorizedRoute,
   type ExploreRouteSourceMetadata,
   type HiddenGemPipelineDiagnostics,
@@ -93,11 +92,8 @@ import { vehicleStore } from '../../lib/vehicleStore';
 import { subscribeActiveVehicleState } from '../../lib/activeVehicleContext';
 import { hapticMicro } from '../../lib/haptics';
 import {
-  clearTripBuilderRouteHandoff,
-  saveTripBuilderRouteHandoff,
-} from '../../lib/tripBuilder/tripBuilderRouteHandoffStore';
-import {
   clearOfflinePrepPackHandoff,
+  getOfflinePrepPackRouteCoordinates,
   saveOfflinePrepPackHandoff,
 } from '../../lib/offlinePrepPack';
 import { explorationProgressStore } from '../../lib/explorationProgressStore';
@@ -131,12 +127,9 @@ import {
   getExploreFavoritesSnapshot,
   hydrateExploreFavoritesStore,
   removeFavoriteTrailBySourceId,
-  removeFavoriteTrailPlan,
   subscribeExploreFavorites,
   toggleFavoriteTrail,
-  type FavoriteTrailPlan,
   type FavoriteTrailRecord,
-  upsertFavoriteTrailPlan,
 } from '../../lib/exploreFavoritesStore';
 import { orchestrateExploreSectionRoutes } from '../../lib/explore/exploreOrchestratorAdapter';
 import {
@@ -185,12 +178,11 @@ import {
 } from '../../lib/explore/trailPackSubmissions';
 import {
   applyExploreRefinementFilter,
-  EXPLORE_REFINEMENT_OPTIONS,
+  EXPLORE_DISCOVERY_FILTER_OPTIONS,
   type ExploreRefinementFilter,
 } from '../../lib/explore/exploreRefinementFilter';
 import {
   buildExploreGuidanceReadyInventory,
-  classifyExploreRouteAvailability,
   defaultExploreReadyRouteEligibility,
   deriveExploreGuidanceProviderAvailability,
   deriveExploreRouteSurfaceState,
@@ -269,7 +261,6 @@ import {
   type ExploreWizardRouteCandidate,
   type ExploreWizardRouteSourceKind,
 } from '../../lib/explore/exploreTripBuilderWizard';
-import { saveExploreRouteForPlanning } from '../../lib/explore/exploreRoutePlanningSave';
 import { routeStore } from '../../lib/routeStore';
 import { runStore } from '../../lib/runStore';
 import {
@@ -292,12 +283,12 @@ const UNIFIED_TRAIL_FILTER_META = {
 } as const;
 
 const EXPLORE_WIZARD_SOURCE_FILTERS: { key: ExploreWizardRouteSourceKind | 'all'; label: string }[] = [
-  { key: 'all', label: 'All Routes' },
+  { key: 'all', label: 'All Trails' },
   { key: 'trail_pack', label: 'Trail Packs' },
   { key: 'hidden_gem', label: 'Hidden Gems' },
   { key: 'ecs_idea', label: 'ECS Ideas' },
-  { key: 'saved_built', label: 'Saved/Built' },
-  { key: 'imported_stitched', label: 'Imported/Stitched' },
+  { key: 'saved_built', label: 'Saved Trails' },
+  { key: 'imported_stitched', label: 'Imported Trails' },
 ];
 const EXPLORE_ROUTE_CATALOG_REQUEST_LIMIT = ECS_ROUTE_SEARCH_DEFAULT_PAGE_SIZE;
 
@@ -311,7 +302,7 @@ type PopularTrailEnrichedRoute = EnrichedDiscoveryRoute & {
   sourceMetadata?: ExploreRouteSourceMetadata;
 };
 
-type ExplorePrimaryTab = Extract<ExploreFeatureId, 'suggested_routes' | 'trip_builder' | 'offline_prep_pack'>;
+type ExplorePrimaryTab = Extract<ExploreFeatureId, 'suggested_routes' | 'offline_prep_pack'>;
 
 type ExploreRouteIntentRequest = {
   requestId: number;
@@ -322,13 +313,6 @@ type ExploreCatalogPaginationRequest = {
   generation: number;
   controller: AbortController;
 };
-
-export const FALLBACK_DISCOVERY_TABS: { id: DiscoveryTabId; label: string; icon: string; accentColor: string; description: string }[] = [
-  { id: 'day-trips', label: 'DAY TRIPS', icon: 'sunny-outline', accentColor: '#66BB6A', description: 'Short routes under 6 hours — perfect for a day out' },
-  { id: 'weekend-trips', label: 'WEEKEND TRIPS', icon: 'moon-outline', accentColor: 'rgba(140, 120, 210, 0.85)', description: '1–2 day routes for overnight exploration' },
-  { id: 'expeditions', label: 'EXPEDITIONS', icon: 'compass-outline', accentColor: 'rgba(200, 150, 60, 0.85)', description: 'Multi-day backcountry routes for extended travel' },
-  { id: 'remote-routes', label: 'REMOTE ROUTES', icon: 'radio-outline', accentColor: '#E67E22', description: 'High-remoteness routes with limited services' },
-];
 
 const FAVORITES_VISIBLE_LIMIT = 5;
 const EXPLORE_CATEGORY_PAGE_SIZE = 10;
@@ -440,7 +424,7 @@ type ExploreWizardRouteCardListItemProps = {
   onPreviewCandidate: (candidate: ExploreWizardRouteCandidate) => void;
   onStartCandidate: (candidate: ExploreWizardRouteCandidate) => void;
   onSaveCandidate: (candidate: ExploreWizardRouteCandidate) => void;
-  onBuildTripCandidate: (candidate: ExploreWizardRouteCandidate) => void;
+  onPrepareOfflineCandidate: (candidate: ExploreWizardRouteCandidate) => void;
   onThumbnailLoadDuration: (durationMs: number, metadata: Record<string, unknown>) => void;
 };
 
@@ -453,12 +437,12 @@ const ExploreWizardRouteCardListItem = React.memo(function ExploreWizardRouteCar
   onPreviewCandidate,
   onStartCandidate,
   onSaveCandidate,
-  onBuildTripCandidate,
+  onPrepareOfflineCandidate,
   onThumbnailLoadDuration,
 }: ExploreWizardRouteCardListItemProps) {
   return (
     <View style={[s.exploreWizardCardWrap, routeCardWidth ? { width: routeCardWidth } : null]}>
-      <ExploreTripBuilderWizardRouteCard
+      <ExploreTrailRouteCard
         candidate={candidate}
         sourceLabel={getExploreWizardSourceLabel(candidate.sourceKind)}
         isSaved={isSaved}
@@ -467,7 +451,7 @@ const ExploreWizardRouteCardListItem = React.memo(function ExploreWizardRouteCar
         onPreview={() => onPreviewCandidate(candidate)}
         onStart={() => onStartCandidate(candidate)}
         onSave={() => onSaveCandidate(candidate)}
-        onBuildTrip={() => onBuildTripCandidate(candidate)}
+        onPrepareOffline={() => onPrepareOfflineCandidate(candidate)}
         onThumbnailLoadDuration={onThumbnailLoadDuration}
       />
     </View>
@@ -818,14 +802,6 @@ function buildValidatedExploreNavigationPayload(
   return { payload, unavailableReason };
 }
 
-function formatStackedPlanLabel(plan: FavoriteTrailPlan): string {
-  if (plan.items.length === 0) return 'Empty plan';
-  if (plan.items.length === 1) return plan.items[0].title;
-  const preview = plan.items.slice(0, 2).map((item) => item.title).join(' -> ');
-  if (plan.items.length === 2) return preview;
-  return `${preview} + ${plan.items.length - 2}`;
-}
-
 function favoriteTrailToExpeditionRoute(favorite: FavoriteTrailRecord): ExpeditionOpportunity {
   const payload = favorite.navigationPayload;
   const payloadRecord = payload as NavigationHandoffPayload & { region?: unknown };
@@ -927,18 +903,6 @@ function DiscoverScreenInner() {
   const [discoverRouteSourceFailureReason, setDiscoverRouteSourceFailureReason] = useState<string | null>(null);
   const gps = useThrottledGPS({ enabled: isFocused, highAccuracy: false });
   const locationRecoveryState = gps.applicationPermissionState;
-  const tripBuilderHandoffUserLocation = useMemo(
-    () => hasGPSFix
-      ? {
-          latitude: userLat,
-          longitude: userLng,
-          accuracyMeters: gps.position?.accuracyM ?? undefined,
-          elevationFeet: gps.position?.altitudeFt ?? undefined,
-          source: 'explore_live_gps',
-        }
-      : null,
-    [gps.position?.accuracyM, gps.position?.altitudeFt, hasGPSFix, userLat, userLng],
-  );
 
   const [hiddenGemPageIndex, setHiddenGemPageIndex] = useState(0);
   const [trailPackPageIndex, setTrailPackPageIndex] = useState(0);
@@ -1006,14 +970,6 @@ function DiscoverScreenInner() {
   const suggestedRoutesFeatureEnabled = exploreTopLevelFeatures.some(
     (feature) => feature.id === 'suggested_routes' && feature.enabled,
   );
-  const tripBuilderFeatureEnabled = exploreTopLevelFeatures.some(
-    (feature) => feature.id === 'trip_builder' && feature.enabled,
-  );
-  const [favoritesView, setFavoritesView] = useState<'trails' | 'plans'>('trails');
-  const [favoritesPlanMode, setFavoritesPlanMode] = useState(false);
-  const [planBuilderVisible, setPlanBuilderVisible] = useState(false);
-  const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
-  const [selectedPlanFavoriteIds, setSelectedPlanFavoriteIds] = useState<string[]>([]);
   const {
     aiState,
     exploreView,
@@ -1031,7 +987,11 @@ function DiscoverScreenInner() {
     void loadExploreFilterStateSnapshot().then((snapshot) => {
       if (cancelled) return;
       setDistanceRadius(snapshot.radiusMiles);
-      setExploreRefinement(snapshot.refinement);
+      setExploreRefinement(
+        EXPLORE_DISCOVERY_FILTER_OPTIONS.some((option) => option.key === snapshot.refinement)
+          ? snapshot.refinement
+          : null,
+      );
       setActiveExplorerCategoryPanel(snapshot.activeCategoryPanel);
       setExploreFilterHydrated(true);
     });
@@ -1422,7 +1382,7 @@ function DiscoverScreenInner() {
       return {
         ...routeCatalogLocationCriteria,
         // Explore is a summary-first surface. Canonical geometry is fetched
-        // only after the operator selects a route and opens Trip Builder.
+        // only after the operator selects a route for preview, guidance, or offline use.
         limit: EXPLORE_ROUTE_CATALOG_REQUEST_LIMIT,
         includePreviewGeometry: false,
         vehicleClass: vehicleProfile?.vehicleType ?? null,
@@ -2178,13 +2138,6 @@ function DiscoverScreenInner() {
     );
   }, [activeVehicleId]);
 
-  const stageTripBuilderItineraryHandoff = useCallback((route: ExpeditionOpportunity) => {
-    saveTripBuilderRouteHandoff(route as any, {
-      userLocation: tripBuilderHandoffUserLocation,
-      deferItineraryBuild: true,
-    });
-  }, [tripBuilderHandoffUserLocation]);
-
   const hydrateRouteCatalogOpportunityForHandoff = useCallback(
     async (
       route: ExpeditionOpportunity,
@@ -2307,10 +2260,9 @@ function DiscoverScreenInner() {
     hapticMicro();
     if (!guardGuidanceReadyRouteHandoff(op, 'analysis_preview')) return;
     stageExploreReadinessPreview(op);
-    stageTripBuilderItineraryHandoff(op);
     setSelectedOpportunity(op);
     setAnalysisVisible(true);
-  }, [guardGuidanceReadyRouteHandoff, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff]);
+  }, [guardGuidanceReadyRouteHandoff, stageExploreReadinessPreview]);
 
   const handleCloseAnalysis = useCallback(() => {
     setAnalysisVisible(false);
@@ -2384,24 +2336,16 @@ function DiscoverScreenInner() {
   // ── Phase 17: AI Route Preview handlers ───────────────────
   const handleToggleFavoritesExpanded = useCallback(() => {
     hapticMicro();
-    setFavoritesExpanded((prev) => {
-      const next = !prev;
-      if (!next && favoritesPlanMode) {
-        setFavoritesPlanMode(false);
-        setSelectedPlanFavoriteIds([]);
-      }
-      return next;
-    });
-  }, [favoritesPlanMode]);
+    setFavoritesExpanded((prev) => !prev);
+  }, []);
 
   const handleAIPreview = useCallback((route: AIGeneratedRoute) => {
     hapticMicro();
     if (!guardGuidanceReadyRouteHandoff(route, 'ai_preview')) return;
     stageExploreReadinessPreview(route);
-    stageTripBuilderItineraryHandoff(route);
     setAiPreviewRoute(route);
     setAiPreviewVisible(true);
-  }, [guardGuidanceReadyRouteHandoff, stageExploreReadinessPreview, stageTripBuilderItineraryHandoff]);
+  }, [guardGuidanceReadyRouteHandoff, stageExploreReadinessPreview]);
 
   const confirmRouteHandoffAgainstActiveGuidance = useCallback(
     async (payload: NavigationHandoffPayload): Promise<NavigationHandoffPayload | null> => {
@@ -2535,33 +2479,9 @@ function DiscoverScreenInner() {
     [beginExploreRouteIntentRequest, confirmRouteHandoffAgainstActiveGuidance, finishExploreRouteIntentRequest, guardGuidanceReadyRouteHandoff, guardHydratedGuidanceReadyHandoff, hasGPSFix, hydrateRouteCatalogOpportunityForHandoff, isCurrentExploreRouteIntentRequest, pushSingleFlight, stageExploreReadinessPreview, userLat, userLng],
   );
 
-  const handleBuildTripFromRoute = useCallback((route: ExpeditionOpportunity) => {
-    hapticMicro();
-    const availability = classifyExploreRouteAvailability(route);
-    if (!availability.tripBuilder.eligible) {
-      Alert.alert(
-        'Trip Builder unavailable',
-        availability.tripBuilder.reason ??
-          'This route does not have enough safe summary identity and endpoint data for Trip Builder.',
-      );
-      return;
-    }
-    stageTripBuilderItineraryHandoff(route);
-    setAnalysisVisible(false);
-    setSelectedOpportunity(null);
-    setAiPreviewVisible(false);
-    setAiPreviewRoute(null);
-    setTrailPackPreview(null);
-    pushSingleFlight({
-      pathname: '/explore-trip-builder',
-      params: { routeId: route.id, setup: '1' },
-    } as any);
-  }, [pushSingleFlight, stageTripBuilderItineraryHandoff]);
-
   const handlePrepareOfflineFromRoute = useCallback(
     async (route: ExpeditionOpportunity) => {
       hapticMicro();
-      if (!guardGuidanceReadyRouteHandoff(route, 'offline_prep')) return;
       const request = beginExploreRouteIntentRequest();
       try {
         const routeForHandoff = await hydrateRouteCatalogOpportunityForHandoff(route, {
@@ -2569,9 +2489,19 @@ function DiscoverScreenInner() {
           signal: request.controller.signal,
         });
         if (!isCurrentExploreRouteIntentRequest(request)) return;
-        if (!guardHydratedGuidanceReadyHandoff(routeForHandoff, 'offline_prep')) return;
+        const routePoints = getOfflinePrepPackRouteCoordinates({
+          route: routeForHandoff as any,
+        });
+        if (routePoints.length < 2) {
+          Alert.alert(
+            'Offline route unavailable',
+            'Measured trail geometry is required before this trail can be downloaded for offline use.',
+          );
+          return;
+        }
         stageExploreReadinessPreview(routeForHandoff);
         saveOfflinePrepPackHandoff({
+          mode: 'trail_download',
           route: routeForHandoff as any,
           campsiteCandidates: extractExploreRouteCampMarkers(routeForHandoff).map((marker) => ({
             id: marker.id,
@@ -2604,7 +2534,7 @@ function DiscoverScreenInner() {
         finishExploreRouteIntentRequest(request);
       }
     },
-    [beginExploreRouteIntentRequest, finishExploreRouteIntentRequest, guardGuidanceReadyRouteHandoff, guardHydratedGuidanceReadyHandoff, hydrateRouteCatalogOpportunityForHandoff, isCurrentExploreRouteIntentRequest, pushSingleFlight, stageExploreReadinessPreview],
+    [beginExploreRouteIntentRequest, finishExploreRouteIntentRequest, hydrateRouteCatalogOpportunityForHandoff, isCurrentExploreRouteIntentRequest, pushSingleFlight, stageExploreReadinessPreview],
   );
 
   const handleViewRouteCamps = useCallback(
@@ -2716,7 +2646,10 @@ function DiscoverScreenInner() {
         return;
       }
 
-      saveOfflinePrepPackHandoff(offlinePrepInput, 'route_details');
+      saveOfflinePrepPackHandoff({
+        ...offlinePrepInput,
+        mode: 'trail_download',
+      }, 'route_details');
       setAnalysisVisible(false);
       setSelectedOpportunity(null);
       setAiPreviewVisible(false);
@@ -2815,91 +2748,18 @@ function DiscoverScreenInner() {
     [handleAIPreview, handlePreviewTrailPack, handleSelectOpportunity, publicDiscoverableTrailPacks],
   );
 
-  const hydrateExploreWizardCandidateForPlanning = useCallback(
-    async (
-      candidate: ExploreWizardRouteCandidate,
-      options: { signal?: AbortSignal } = {},
-    ): Promise<ExploreWizardRouteCandidate> => {
-      const routeForPlanning = await hydrateRouteCatalogOpportunityForHandoff(candidate.route, {
-        requireFullCatalogDetail: true,
-        signal: options.signal,
-      });
-      const availability = classifyExploreRouteAvailability(routeForPlanning);
-      if (!availability.discoverability.eligible || !availability.tripBuilder.eligible) {
-        throw new Error(
-          availability.tripBuilder.reason ??
-            availability.discoverability.reason ??
-            'The authoritative route detail is not eligible for Trip Builder planning.',
-        );
-      }
-      const { payload, unavailableReason } = buildValidatedExploreNavigationPayload(routeForPlanning);
-      if (!payload || unavailableReason) {
-        throw new Error(unavailableReason ?? 'Verified route detail is not ready for planning.');
-      }
-      return {
-        ...candidate,
-        route: routeForPlanning,
-        navigationPayload: payload,
-        title: payload.title || candidate.title,
-        subtitle: payload.subtitle ?? candidate.subtitle,
-        tripBuilderEligible: true,
-        guidanceReady: availability.guidance.eligible,
-        detailState: availability.detailState,
-        tripBuilderUnavailableReason: null,
-        guidanceUnavailableReason: availability.guidance.reason,
-        unavailableReason: availability.guidance.reason,
-      };
-    },
-    [hydrateRouteCatalogOpportunityForHandoff],
-  );
-
   const handleSaveExploreWizardCandidate = useCallback(
-    async (candidate: ExploreWizardRouteCandidate) => {
-      hapticMicro();
-      setExploreWizardSaveNotice(null);
-      try {
-        const hydratedCandidate = await hydrateExploreWizardCandidateForPlanning(candidate);
-        const result = await saveExploreRouteForPlanning(hydratedCandidate);
-        setFavoritesSnapshot(getExploreFavoritesSnapshot());
-        setLocalRouteAssetRevision((current) => current + 1);
-        setExploreWizardSaveNotice(
-          result.createdRoute
-            ? `${hydratedCandidate.title} saved as a favorite and stitch-ready route asset.`
-            : `${hydratedCandidate.title} is already saved and stitch-ready.`,
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Explore route could not be saved.';
-        reportRecoverableFailure({
-          severity: 'low',
-          issueTitle: 'Explore TripBuilder save unavailable',
-          ecsArea: 'explore',
-          message,
-          signature: `explore_tripbuilder_save_unavailable:${candidate.id}`,
-          metadata: {
-            routeId: candidate.route.id,
-            routeName: candidate.route.name,
-            sourceKind: candidate.sourceKind,
-          },
-        });
-        Alert.alert('Save unavailable', message);
-      }
-    },
-    [hydrateExploreWizardCandidateForPlanning],
-  );
-
-  const handleBuildTripFromExploreWizardCandidate = useCallback(
     (candidate: ExploreWizardRouteCandidate) => {
-      if (!candidate.tripBuilderEligible) {
-        Alert.alert(
-          'Trip Builder unavailable',
-          candidate.tripBuilderUnavailableReason ??
-            'This route summary does not have enough verified identity and endpoint data for Trip Builder.',
-        );
-        return;
-      }
-      handleBuildTripFromRoute(candidate.route);
+      hapticMicro();
+      const saved = toggleFavoriteTrail(candidate.route);
+      setFavoritesSnapshot(getExploreFavoritesSnapshot());
+      setExploreWizardSaveNotice(
+        saved
+          ? `${candidate.title} saved to Favorites.`
+          : `${candidate.title} removed from Favorites.`,
+      );
     },
-    [handleBuildTripFromRoute],
+    [],
   );
 
   const handleStartExploreWizardCandidate = useCallback(
@@ -2909,12 +2769,19 @@ function DiscoverScreenInner() {
         flowLabel: 'Starting Guidance',
         flowMessage: 'Explore route accepted. ECS is opening Navigate and starting the active-guidance confirmation flow.',
         flowContext: {
-          exploreAction: 'tripbuilder_start',
+          exploreAction: 'trail_start',
           sourceKind: candidate.sourceKind,
         },
       });
     },
     [handleNavigateToRoute],
+  );
+
+  const handlePrepareOfflineExploreWizardCandidate = useCallback(
+    (candidate: ExploreWizardRouteCandidate) => {
+      void handlePrepareOfflineFromRoute(candidate.route);
+    },
+    [handlePrepareOfflineFromRoute],
   );
 
   const handleCloseAIPreview = useCallback(() => {
@@ -3369,7 +3236,7 @@ function DiscoverScreenInner() {
   const distanceRadiusNarrative = distanceRadius == null ? 'the current range' : `${distanceRadius} miles`;
   const distanceRadiusFooterLabel = distanceRadius == null ? 'ALL RANGE' : `${distanceRadius} MI`;
   const selectedExploreRefinementLabel =
-    EXPLORE_REFINEMENT_OPTIONS.find((option) => option.key === exploreRefinement)?.label ?? null;
+    EXPLORE_DISCOVERY_FILTER_OPTIONS.find((option) => option.key === exploreRefinement)?.label ?? null;
   const exploreFilterNarrative = selectedExploreRefinementLabel
     ? `${distanceRadiusNarrative} with ${selectedExploreRefinementLabel.toLowerCase()} selected`
     : distanceRadiusNarrative;
@@ -3858,7 +3725,6 @@ function DiscoverScreenInner() {
   const totalRouteCount = totalQualifyingRouteCount;
   const hasDiscoveryOverrides = distanceRadius !== DEFAULT_DISTANCE_RADIUS || exploreRefinement != null;
   const favoriteTrails = favoritesSnapshot.favorites;
-  const favoritePlans = favoritesSnapshot.plans;
   const filteredExploreRouteRankById = useMemo(() => {
     const ranks = new Map<string, number>();
     [...refinedCanonicalRoutes, ...refinedAIRoutes].forEach((route, index) => {
@@ -3897,28 +3763,15 @@ function DiscoverScreenInner() {
   }, [favoriteTrails, filteredExploreRouteIds, filteredExploreRouteRankById]);
   const favoriteTrailAdditionalMatchesAvailable =
     matchedFavoriteTrailUniqueCount > filteredFavoriteTrails.length;
-  const filteredFavoritePlans = useMemo(() => {
-    if (filteredExploreRouteIds.size === 0) return [] as FavoriteTrailPlan[];
-    return favoritePlans.filter((plan) =>
-      plan.items.some((item) => filteredExploreRouteIds.has(item.sourceTrailId)),
-    );
-  }, [favoritePlans, filteredExploreRouteIds]);
-  const favoritesTotal = filteredFavoriteTrails.length + filteredFavoritePlans.length;
+  const favoritesTotal = filteredFavoriteTrails.length;
   const latestFavoriteTrail = favoriteTrails[0] ?? null;
-  const latestFavoritePlan = favoritePlans[0] ?? null;
   const favoritesSummaryText = latestFavoriteTrail
     ? latestFavoriteTrail.subtitle ?? 'Most recently saved trail'
-    : latestFavoritePlan
-      ? `${latestFavoritePlan.items.length} stop${latestFavoritePlan.items.length !== 1 ? 's' : ''} saved for review`
-      : 'Save trails from Hidden Gems, Trail Packs, or ECS Route Ideas to reopen them later.';
+    : 'Save trails from Hidden Gems, Trail Packs, or ECS Route Ideas to reopen them later.';
   const favoriteTrailViewportHeight = useMemo(() => {
     if (favoriteTrails.length <= FAVORITES_VISIBLE_LIMIT) return undefined;
     return 412;
   }, [favoriteTrails.length]);
-  const favoritePlanViewportHeight = useMemo(() => {
-    if (favoritePlans.length <= FAVORITES_VISIBLE_LIMIT) return undefined;
-    return 404;
-  }, [favoritePlans.length]);
   const favoriteTrailIds = useMemo(
     () => new Set(favoriteTrails.map((favorite) => favorite.sourceTrailId)),
     [favoriteTrails],
@@ -4417,13 +4270,13 @@ function DiscoverScreenInner() {
         onPreviewCandidate={handlePreviewExploreWizardCandidate}
         onStartCandidate={handleStartExploreWizardCandidate}
         onSaveCandidate={handleSaveExploreWizardCandidate}
-        onBuildTripCandidate={handleBuildTripFromExploreWizardCandidate}
+        onPrepareOfflineCandidate={handlePrepareOfflineExploreWizardCandidate}
         onThumbnailLoadDuration={handleExploreWizardThumbnailLoadDuration}
       />
     ),
     [
       favoriteTrailIds,
-      handleBuildTripFromExploreWizardCandidate,
+      handlePrepareOfflineExploreWizardCandidate,
       handleExploreWizardThumbnailLoadDuration,
       handlePreviewExploreWizardCandidate,
       handleSaveExploreWizardCandidate,
@@ -4439,68 +4292,32 @@ function DiscoverScreenInner() {
     ) : null),
     [exploreRouteGridColumns, hasMoreExploreWizardCandidates],
   );
-  const favoriteTrailMap = useMemo(() => {
-    const map = new Map<string, FavoriteTrailRecord>();
-    favoriteTrails.forEach((favorite) => {
-      map.set(favorite.favoriteId, favorite);
-    });
-    return map;
-  }, [favoriteTrails]);
-  const selectedPlanFavorites = useMemo(
-    () =>
-      selectedPlanFavoriteIds
-        .map((favoriteId) => favoriteTrailMap.get(favoriteId) ?? null)
-        .filter((favorite): favorite is FavoriteTrailRecord => !!favorite),
-    [favoriteTrailMap, selectedPlanFavoriteIds],
-  );
-
-  useEffect(() => {
-    setSelectedPlanFavoriteIds((current) => {
-      const validIds = current.filter((favoriteId) => favoriteTrailMap.has(favoriteId));
-      return validIds.length === current.length ? current : validIds;
-    });
-  }, [favoriteTrailMap]);
-
   useEffect(() => {
     setFavoritesPageIndex(0);
-  }, [favoritesView, filteredFavoriteTrails.length, filteredFavoritePlans.length]);
+  }, [filteredFavoriteTrails.length]);
 
   const handleToggleFavorite = useCallback((route: ExpeditionOpportunity) => {
     void toggleFavoriteTrail(route);
   }, []);
 
-  const handleOpenRouteCatalogSummaryTripBuilder = useCallback((routeId: string) => {
+  const handlePrepareRouteCatalogSummaryOffline = useCallback((routeId: string) => {
     const summary = routeCatalogSummaryById.get(routeId) ?? null;
     if (!summary) return;
-    hapticMicro();
     const routeForHandoff = routeCatalogSummaryToDeferredOpportunity(summary, {
       publicRecommendation:
         liveTrailPackCatalogSnapshot.source === 'route_catalog' && summary.sourceType !== 'preview',
       sourceState: routeCatalogSummarySourceState,
     });
     if (!routeForHandoff) {
-      Alert.alert('Trip Builder unavailable', 'This route summary has no usable map anchor.');
+      Alert.alert('Offline trail unavailable', 'This trail summary has no usable map anchor.');
       return;
     }
-    const availability = classifyExploreRouteAvailability(routeForHandoff);
-    if (!availability.tripBuilder.eligible) {
-      Alert.alert(
-        'Trip Builder unavailable',
-        availability.tripBuilder.reason ?? 'Route summary is blocked from Trip Builder.',
-      );
-      return;
-    }
-    stageTripBuilderItineraryHandoff(routeForHandoff);
-    pushSingleFlight({
-      pathname: '/explore-trip-builder',
-      params: { routeId: routeForHandoff.id, setup: '1' },
-    } as any);
+    void handlePrepareOfflineFromRoute(routeForHandoff);
   }, [
+    handlePrepareOfflineFromRoute,
     liveTrailPackCatalogSnapshot.source,
-    pushSingleFlight,
     routeCatalogSummaryById,
     routeCatalogSummarySourceState,
-    stageTripBuilderItineraryHandoff,
   ]);
 
   const handleNavigateToFavorite = useCallback(
@@ -4568,110 +4385,6 @@ function DiscoverScreenInner() {
     [handleNavigateToFavorite, handleSelectOpportunity],
   );
 
-  const closePlanBuilder = useCallback(() => {
-    setPlanBuilderVisible(false);
-    setEditingPlanId(null);
-    setSelectedPlanFavoriteIds([]);
-    setFavoritesPlanMode(false);
-  }, []);
-
-  const exitFavoritesPlanMode = useCallback(() => {
-    setFavoritesPlanMode(false);
-    setSelectedPlanFavoriteIds([]);
-  }, []);
-
-  const handleOpenPlanBuilder = useCallback(
-    (plan?: FavoriteTrailPlan) => {
-      hapticMicro();
-      setEditingPlanId(plan?.planId ?? null);
-      if (plan) {
-        const availableFavoriteIds = plan.orderedFavoriteIds.filter((favoriteId) =>
-          favoriteTrailMap.has(favoriteId),
-        );
-        setSelectedPlanFavoriteIds(availableFavoriteIds);
-        setFavoritesView('plans');
-      } else {
-        if (selectedPlanFavoriteIds.length < 2) return;
-        setFavoritesView('trails');
-      }
-      setPlanBuilderVisible(true);
-    },
-    [favoriteTrailMap, selectedPlanFavoriteIds.length],
-  );
-
-  const handleTogglePlanFavorite = useCallback((favoriteId: string) => {
-    hapticMicro();
-    setSelectedPlanFavoriteIds((current) => {
-      if (current.includes(favoriteId)) {
-        return current.filter((entry) => entry !== favoriteId);
-      }
-      return [...current, favoriteId];
-    });
-  }, []);
-
-  const handleMoveSelectedFavorite = useCallback((favoriteId: string, direction: -1 | 1) => {
-    hapticMicro();
-    setSelectedPlanFavoriteIds((current) => {
-      const index = current.indexOf(favoriteId);
-      const nextIndex = index + direction;
-      if (index < 0 || nextIndex < 0 || nextIndex >= current.length) return current;
-      const next = [...current];
-      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
-      return next;
-    });
-  }, []);
-
-  const handleSavePlan = useCallback(async () => {
-    const plan = await upsertFavoriteTrailPlan({
-      planId: editingPlanId,
-      favoriteIds: selectedPlanFavoriteIds,
-    });
-    if (!plan) return;
-    hapticMicro();
-    setPlanBuilderVisible(false);
-    setEditingPlanId(null);
-    setSelectedPlanFavoriteIds([]);
-    setFavoritesPlanMode(false);
-  }, [editingPlanId, selectedPlanFavoriteIds]);
-
-  const handleDeletePlan = useCallback((planId: string) => {
-    const plan = favoritePlans.find((entry) => entry.planId === planId) ?? null;
-    Alert.alert(
-      'Delete saved route stack?',
-      plan
-        ? `Delete ${plan.title}? The saved routes remain available individually.`
-        : 'Delete this route stack? The saved routes remain available individually.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            hapticMicro();
-            void removeFavoriteTrailPlan(planId);
-          },
-        },
-      ],
-    );
-  }, [favoritePlans]);
-
-  const handleBeginCreatePlan = useCallback(() => {
-    if (selectedPlanFavoriteIds.length < 2) return;
-    handleOpenPlanBuilder();
-  }, [handleOpenPlanBuilder, selectedPlanFavoriteIds.length]);
-
-  const handleToggleFavoritesPlanMode = useCallback(() => {
-    hapticMicro();
-    setFavoritesView('trails');
-    setFavoritesPlanMode((current) => {
-      const next = !current;
-      if (!next) {
-        setSelectedPlanFavoriteIds([]);
-      }
-      return next;
-    });
-  }, []);
-
   const handleRemoveFavorite = useCallback((routeId: string) => {
     const favorite = favoriteTrails.find((entry) => entry.sourceTrailId === routeId) ?? null;
     Alert.alert(
@@ -4685,21 +4398,11 @@ function DiscoverScreenInner() {
           onPress: () => {
             hapticMicro();
             void removeFavoriteTrailBySourceId(routeId);
-            if (favorite) {
-              setSelectedPlanFavoriteIds((current) =>
-                current.filter((favoriteId) => favoriteId !== favorite.favoriteId),
-              );
-            }
           },
         },
       ],
     );
   }, [favoriteTrails]);
-
-  const handleRemovePlanDraftItem = useCallback((favoriteId: string) => {
-    hapticMicro();
-    setSelectedPlanFavoriteIds((current) => current.filter((entry) => entry !== favoriteId));
-  }, []);
 
   const showInitialLoading = isLoading && !hasLoadedExplorer && opportunities.length === 0;
   const showSectionLoading = isLoading && (hasLoadedExplorer || opportunities.length > 0);
@@ -4890,7 +4593,7 @@ function DiscoverScreenInner() {
           : routeCatalogLegacyFallbackWithData
             ? 'Fallback route summaries remain degraded and locally filtered. They do not bypass ECS source, access, moderation, or guidance gates.'
             : exploreWizardCandidateSet.candidates.length > 0
-              ? `${exploreWizardCandidateSet.candidates.length} route${exploreWizardCandidateSet.candidates.length === 1 ? '' : 's'} are available for discovery. ${exploreDeferredRouteCount} require${exploreDeferredRouteCount === 1 ? 's' : ''} verified geometry preparation after selection in Trip Builder; ${exploreGuidanceReadyCount} ${exploreGuidanceReadyCount === 1 ? 'is' : 'are'} currently guidance ready.`
+              ? `${exploreWizardCandidateSet.candidates.length} route${exploreWizardCandidateSet.candidates.length === 1 ? '' : 's'} are available for discovery. ${exploreDeferredRouteCount} require${exploreDeferredRouteCount === 1 ? 's' : ''} verified geometry preparation after selection; ${exploreGuidanceReadyCount} ${exploreGuidanceReadyCount === 1 ? 'is' : 'are'} currently guidance ready.`
               : routeCatalogHasNonReadyProviderResults
                 ? 'Source-backed records were found, but ECS access, moderation, source, condition, vehicle, or metadata gates block them from discovery.'
                 : 'No approved routes match the current area and filters.';
@@ -4986,8 +4689,7 @@ function DiscoverScreenInner() {
   ]);
 
   const favoriteTrailListScrollable = favoriteTrails.length > FAVORITES_VISIBLE_LIMIT;
-  const favoritePlanListScrollable = favoritePlans.length > FAVORITES_VISIBLE_LIMIT;
-  const activeFavoritePanelItems = favoritesView === 'trails' ? filteredFavoriteTrails : filteredFavoritePlans;
+  const activeFavoritePanelItems = filteredFavoriteTrails;
   const favoritePanelTotalPages = Math.max(
     1,
     Math.ceil(activeFavoritePanelItems.length / EXPLORE_CATEGORY_PAGE_SIZE),
@@ -4997,18 +4699,11 @@ function DiscoverScreenInner() {
     : Math.min(favoritesPageIndex, favoritePanelTotalPages - 1);
   const favoritePanelOffset = normalizedFavoritesPageIndex * EXPLORE_CATEGORY_PAGE_SIZE;
   const pagedFavoriteTrails = useMemo(
-    () =>
-      favoritesView === 'trails'
-        ? filteredFavoriteTrails.slice(favoritePanelOffset, favoritePanelOffset + EXPLORE_CATEGORY_PAGE_SIZE)
-        : [],
-    [favoritePanelOffset, favoritesView, filteredFavoriteTrails],
-  );
-  const pagedFavoritePlans = useMemo(
-    () =>
-      favoritesView === 'plans'
-        ? filteredFavoritePlans.slice(favoritePanelOffset, favoritePanelOffset + EXPLORE_CATEGORY_PAGE_SIZE)
-        : [],
-    [favoritePanelOffset, favoritesView, filteredFavoritePlans],
+    () => filteredFavoriteTrails.slice(
+      favoritePanelOffset,
+      favoritePanelOffset + EXPLORE_CATEGORY_PAGE_SIZE,
+    ),
+    [favoritePanelOffset, filteredFavoriteTrails],
   );
   const favoriteTrailThumbnailAssignments = useMemo(
     () =>
@@ -5027,43 +4722,25 @@ function DiscoverScreenInner() {
     [pagedFavoriteTrails],
   );
   const favoriteTrailCards = pagedFavoriteTrails.map((favorite) => {
-    const isSelected = selectedPlanFavoriteIds.includes(favorite.favoriteId);
     const favoriteThumbnail = favoriteTrailThumbnailAssignments.get(String(favorite.sourceTrailId)) ?? null;
     return (
       <TouchableOpacity
         key={favorite.favoriteId}
-        style={[
-          s.favoriteCard,
-          favoritesPlanMode && s.favoriteCardSelectable,
-          isSelected && s.favoriteCardSelected,
-        ]}
+        style={s.favoriteCard}
         activeOpacity={0.84}
         accessible={false}
-        onPress={() =>
-          favoritesPlanMode
-            ? handleTogglePlanFavorite(favorite.favoriteId)
-            : handleOpenFavorite(favorite)
-        }
+        onPress={() => handleOpenFavorite(favorite)}
       >
         <View style={s.favoriteCardTopRow}>
           <TouchableOpacity
             style={s.favoriteCardCopy}
             activeOpacity={0.84}
             accessibilityRole="button"
-            accessibilityLabel={favoritesPlanMode
-              ? `${isSelected ? 'Remove' : 'Add'} saved route ${favorite.title} ${isSelected ? 'from' : 'to'} stack draft`
-              : `Open saved route ${favorite.title}`}
-            accessibilityHint={favoritesPlanMode
-              ? 'Changes whether this route is included in the route stack draft'
-              : 'Opens the saved route preview'}
-            accessibilityState={{ selected: favoritesPlanMode ? isSelected : undefined }}
+            accessibilityLabel={`Open saved route ${favorite.title}`}
+            accessibilityHint="Opens the saved route preview"
             onPress={(event) => {
               event.stopPropagation?.();
-              if (favoritesPlanMode) {
-                handleTogglePlanFavorite(favorite.favoriteId);
-              } else {
-                handleOpenFavorite(favorite);
-              }
+              handleOpenFavorite(favorite);
             }}
           >
             <Text style={s.favoriteCardTitle} numberOfLines={2} maxFontSizeMultiplier={1.6}>{favorite.title}</Text>
@@ -5072,30 +4749,20 @@ function DiscoverScreenInner() {
             </Text>
           </TouchableOpacity>
 
-          {favoritesPlanMode ? (
-            <View style={s.favoriteSelectIndicator}>
-              <Ionicons
-                name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
-                size={16}
-                color={isSelected ? TACTICAL.amber : TACTICAL.textMuted}
-              />
-            </View>
-          ) : (
-            <TouchableOpacity
-              style={s.favoriteRemoveBtn}
-              activeOpacity={0.75}
-              accessibilityRole="button"
-              accessibilityLabel={`Remove ${favorite.title} from saved routes`}
-              accessibilityHint="Opens a confirmation before removing this saved route"
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              onPress={(event) => {
-                event.stopPropagation?.();
-                handleRemoveFavorite(favorite.sourceTrailId);
-              }}
-            >
-              <Ionicons name="star" size={12} color={TACTICAL.amber} />
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity
+            style={s.favoriteRemoveBtn}
+            activeOpacity={0.75}
+            accessibilityRole="button"
+            accessibilityLabel={`Remove ${favorite.title} from saved routes`}
+            accessibilityHint="Opens a confirmation before removing this saved route"
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            onPress={(event) => {
+              event.stopPropagation?.();
+              handleRemoveFavorite(favorite.sourceTrailId);
+            }}
+          >
+            <Ionicons name="star" size={12} color={TACTICAL.amber} />
+          </TouchableOpacity>
         </View>
 
         {favoriteThumbnail?.uri ? (
@@ -5132,128 +4799,44 @@ function DiscoverScreenInner() {
           ) : null}
         </View>
 
-        {!favoritesPlanMode ? (
-          <View style={s.favoriteQuickRow}>
-            <Text style={s.favoriteQuickHint}>Review saved route</Text>
-            <View style={s.favoriteToolbarActions}>
-              <TouchableOpacity
-                style={s.favoriteQuickNavigateBtn}
-                activeOpacity={0.75}
-                accessibilityRole="button"
-                accessibilityLabel={`Submit ${favorite.title} to ECS Trail Packs`}
-                accessibilityHint="Opens the route submission workflow; it does not publish automatically"
-                hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
-                onPress={(event) => {
-                  event.stopPropagation?.();
-                  handleSubmitFavoriteTrailPack(favorite);
-                }}
-              >
-                <Ionicons name="trail-sign-outline" size={11} color={TACTICAL.amber} />
-                <Text style={s.favoriteQuickNavigateText}>SUBMIT</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={s.favoriteQuickNavigateBtn}
-                activeOpacity={0.75}
-                accessibilityRole="button"
-                accessibilityLabel={`Navigate ${favorite.title}`}
-                accessibilityHint="Stages this saved route for Navigate"
-                hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
-                onPress={(event) => {
-                  event.stopPropagation?.();
-                  void handleNavigateToFavorite(favorite);
-                }}
-              >
-                <Ionicons name="navigate-outline" size={11} color={TACTICAL.amber} />
-                <Text style={s.favoriteQuickNavigateText}>NAVIGATE</Text>
-              </TouchableOpacity>
-            </View>
+        <View style={s.favoriteQuickRow}>
+          <Text style={s.favoriteQuickHint}>Review saved route</Text>
+          <View style={s.favoriteToolbarActions}>
+            <TouchableOpacity
+              style={s.favoriteQuickNavigateBtn}
+              activeOpacity={0.75}
+              accessibilityRole="button"
+              accessibilityLabel={`Submit ${favorite.title} to ECS Trail Packs`}
+              accessibilityHint="Opens the route submission workflow; it does not publish automatically"
+              hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
+              onPress={(event) => {
+                event.stopPropagation?.();
+                handleSubmitFavoriteTrailPack(favorite);
+              }}
+            >
+              <Ionicons name="trail-sign-outline" size={11} color={TACTICAL.amber} />
+              <Text style={s.favoriteQuickNavigateText}>SUBMIT</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={s.favoriteQuickNavigateBtn}
+              activeOpacity={0.75}
+              accessibilityRole="button"
+              accessibilityLabel={`Navigate ${favorite.title}`}
+              accessibilityHint="Stages this saved route for Navigate"
+              hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
+              onPress={(event) => {
+                event.stopPropagation?.();
+                void handleNavigateToFavorite(favorite);
+              }}
+            >
+              <Ionicons name="navigate-outline" size={11} color={TACTICAL.amber} />
+              <Text style={s.favoriteQuickNavigateText}>NAVIGATE</Text>
+            </TouchableOpacity>
           </View>
-        ) : (
-          <View style={s.favoritePlanModeHintRow}>
-            <Ionicons name="albums-outline" size={11} color={TACTICAL.textMuted} />
-            <Text style={s.favoritePlanModeHintText}>
-              {isSelected ? 'Included in stack draft' : 'Tap to add to stack draft'}
-            </Text>
-          </View>
-        )}
+        </View>
       </TouchableOpacity>
     );
   });
-  const favoritePlanCards = pagedFavoritePlans.map((plan) => (
-    <TouchableOpacity
-      key={plan.planId}
-      style={s.favoritePlanCard}
-      activeOpacity={0.84}
-      accessible={false}
-      onPress={() => handleOpenPlanBuilder(plan)}
-    >
-      <View style={s.favoritePlanTopRow}>
-        <TouchableOpacity
-          style={s.favoriteCardCopy}
-          activeOpacity={0.84}
-          accessibilityRole="button"
-          accessibilityLabel={`Open saved route stack ${plan.title}`}
-          accessibilityHint="Opens this route stack in the builder"
-          onPress={(event) => {
-            event.stopPropagation?.();
-            handleOpenPlanBuilder(plan);
-          }}
-        >
-          <Text style={s.favoritePlanTitle} numberOfLines={2} maxFontSizeMultiplier={1.6}>{plan.title}</Text>
-          <Text style={s.favoritePlanSubtitle} numberOfLines={3} maxFontSizeMultiplier={1.6}>
-            {formatStackedPlanLabel(plan)}
-          </Text>
-        </TouchableOpacity>
-        <View style={s.favoritePlanCountBadge}>
-          <Text style={s.favoritePlanCountText}>{plan.items.length}</Text>
-        </View>
-      </View>
-
-      <View style={s.favoritePlanMetaRow}>
-        <View style={s.favoriteMetaBadge}>
-          <Text style={s.favoriteMetaBadgeText}>
-            UPDATED {new Date(plan.updatedAt).toLocaleDateString()}
-          </Text>
-        </View>
-      </View>
-
-      <View style={s.favoriteQuickRow}>
-        <Text style={s.favoriteQuickHint}>Review saved stack</Text>
-        <View style={s.favoriteToolbarActions}>
-          <TouchableOpacity
-            style={s.favoriteActionBtn}
-            activeOpacity={0.75}
-            accessibilityRole="button"
-            accessibilityLabel={`Edit order for ${plan.title}`}
-            accessibilityHint="Opens this route stack in the builder"
-            hitSlop={{ top: 7, bottom: 7, left: 7, right: 7 }}
-            onPress={(event) => {
-              event.stopPropagation?.();
-              handleOpenPlanBuilder(plan);
-            }}
-          >
-            <Ionicons name="reorder-three-outline" size={11} color={TACTICAL.textMuted} />
-            <Text style={s.favoriteActionText}>EDIT ORDER</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={s.favoriteActionBtn}
-            activeOpacity={0.75}
-            accessibilityRole="button"
-            accessibilityLabel={`Delete route stack ${plan.title}`}
-            accessibilityHint="Opens a confirmation before deleting this route stack"
-            hitSlop={{ top: 7, bottom: 7, left: 7, right: 7 }}
-            onPress={(event) => {
-              event.stopPropagation?.();
-              handleDeletePlan(plan.planId);
-            }}
-          >
-            <Ionicons name="trash-outline" size={11} color={TACTICAL.textMuted} />
-            <Text style={s.favoriteActionText}>DELETE</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </TouchableOpacity>
-  ));
 
   const explorerCategoryTiles = useMemo(
     () => [
@@ -5306,7 +4889,6 @@ function DiscoverScreenInner() {
     () => ({
       suggested_routes: canonicalExplorePlanningRoutes.length,
       route_filters: selectedExploreRefinementLabel ?? `${activeDistanceRadius} mi`,
-      trip_builder: 'LIVE',
       offline_prep_pack: 'LIVE',
     }),
     [
@@ -5326,7 +4908,7 @@ function DiscoverScreenInner() {
         routes: canonicalExplorePlanningRoutes as any,
         radiusMiles: activeDistanceRadius,
         refinementLabel: selectedExploreRefinementLabel,
-        source: featureId === 'trip_builder' ? 'trip_builder_tab' : featureId === 'offline_prep_pack' ? 'offline_prep_tab' : 'suggested_routes',
+        source: featureId === 'offline_prep_pack' ? 'offline_prep_tab' : 'suggested_routes',
       });
       ecsLog.info('DISCOVERY', '[EXPLORE_FEATURE] selected', {
         featureId,
@@ -5341,11 +4923,6 @@ function DiscoverScreenInner() {
           setActiveExplorePrimaryTab('suggested_routes');
           setActiveExplorerCategoryPanel(null);
           return;
-        case 'trip_builder':
-          setActiveExplorerCategoryPanel(null);
-          clearTripBuilderRouteHandoff();
-          pushSingleFlight('/explore-trip-builder');
-          return;
         case 'offline_prep_pack':
           setActiveExplorePrimaryTab('offline_prep_pack');
           setActiveExplorerCategoryPanel(null);
@@ -5359,14 +4936,9 @@ function DiscoverScreenInner() {
       activeDistanceRadius,
       canonicalExplorePlanningRoutes,
       exploreTopLevelFeatures,
-      pushSingleFlight,
       selectedExploreRefinementLabel,
     ],
   );
-
-  const handleOpenExploreTripBuilderFromHero = useCallback(() => {
-    handleOpenExploreFeature('trip_builder');
-  }, [handleOpenExploreFeature]);
 
   useEffect(() => {
     if (activeExplorePrimaryTab === 'suggested_routes') return;
@@ -5387,10 +4959,10 @@ function DiscoverScreenInner() {
     [canonicalExplorePlanningRoutes, explorePlanningSelectedRouteId],
   );
 
-  const handleOpenActivePlanningFlow = useCallback(async () => {
+  const handleOpenActivePlanningFlow = useCallback(() => {
     if (activeExplorePrimaryTab !== 'offline_prep_pack') return;
-    hapticMicro();
     if (!selectedExplorePlanningRoute) {
+      hapticMicro();
       saveExplorePlanningRouteContext({
         routes: canonicalExplorePlanningRoutes as any,
         radiusMiles: activeDistanceRadius,
@@ -5400,62 +4972,12 @@ function DiscoverScreenInner() {
       pushSingleFlight('/explore-offline-prep-pack');
       return;
     }
-    if (!guardGuidanceReadyRouteHandoff(selectedExplorePlanningRoute, 'offline_prep_tab')) return;
-    const request = beginExploreRouteIntentRequest();
-    try {
-      const hydratedRoute = await hydrateRouteCatalogOpportunityForHandoff(
-        selectedExplorePlanningRoute,
-        {
-          requireFullCatalogDetail: true,
-          signal: request.controller.signal,
-        },
-      );
-      if (!isCurrentExploreRouteIntentRequest(request)) return;
-      if (!guardHydratedGuidanceReadyHandoff(hydratedRoute, 'offline_prep_tab')) return;
-      saveExplorePlanningRouteContext({
-        routes: canonicalExplorePlanningRoutes.map((route) =>
-          String(route.id) === String(hydratedRoute.id) ? hydratedRoute : route) as any,
-        radiusMiles: activeDistanceRadius,
-        refinementLabel: selectedExploreRefinementLabel,
-        source: 'offline_prep_tab',
-      });
-      saveOfflinePrepPackHandoff({
-        route: hydratedRoute as any,
-        campsiteCandidates: extractExploreRouteCampMarkers(hydratedRoute).map((marker) => ({
-          id: marker.id,
-          name: marker.title,
-          location: { latitude: marker.latitude, longitude: marker.longitude },
-          score: marker.score,
-          legalConfidence: marker.confidence,
-          accessConfidence: marker.confidence,
-          source: marker.source ?? 'explore_route_camp_marker',
-          notes: [marker.subtitle],
-        })),
-      }, 'explore');
-      if (!isCurrentExploreRouteIntentRequest(request)) return;
-      pushSingleFlight({
-        pathname: '/explore-offline-prep-pack',
-        params: { routeId: hydratedRoute.id },
-      } as any);
-    } catch {
-      if (!isCurrentExploreRouteIntentRequest(request)) return;
-      Alert.alert(
-        'Offline route unavailable',
-        'Authoritative route detail could not be loaded. Retry before preparing this route for offline use.',
-      );
-    } finally {
-      finishExploreRouteIntentRequest(request);
-    }
+    void handlePrepareOfflineFromRoute(selectedExplorePlanningRoute);
   }, [
     activeDistanceRadius,
     activeExplorePrimaryTab,
-    beginExploreRouteIntentRequest,
     canonicalExplorePlanningRoutes,
-    finishExploreRouteIntentRequest,
-    guardGuidanceReadyRouteHandoff,
-    guardHydratedGuidanceReadyHandoff,
-    hydrateRouteCatalogOpportunityForHandoff,
-    isCurrentExploreRouteIntentRequest,
+    handlePrepareOfflineFromRoute,
     pushSingleFlight,
     selectedExplorePlanningRoute,
     selectedExploreRefinementLabel,
@@ -5885,14 +5407,14 @@ function DiscoverScreenInner() {
                   >
                     <RouteCatalogSummaryCard
                       summary={summary}
-                      onOpenTripBuilder={handleOpenRouteCatalogSummaryTripBuilder}
-                      tripBuilderDisabledReason={
+                      onPrepareOffline={handlePrepareRouteCatalogSummaryOffline}
+                      offlineDisabledReason={
                         summary.sourceType === 'preview'
-                          ? 'Pending moderation; this summary cannot open Trip Builder.'
+                          ? 'Pending moderation; this trail cannot be downloaded yet.'
                           : liveTrailPackCatalogSnapshot.source !== 'route_catalog'
                             ? 'Verified catalog detail is unavailable for this degraded source.'
                             : !summary.trailheadCoordinate
-                              ? 'A verified trailhead or endpoint is required to open Trip Builder.'
+                              ? 'A verified trailhead or endpoint is required for an offline download.'
                               : null
                       }
                       compactPreview
@@ -5949,9 +5471,6 @@ function DiscoverScreenInner() {
                   void handleNavigateToRoute(route);
                 }}
                 onToggleFavorite={() => handleToggleFavorite(route)}
-                onBuildRoute={() => {
-                  handleBuildTripFromRoute(route);
-                }}
                 compactPreview
               />
             ))}
@@ -5960,103 +5479,31 @@ function DiscoverScreenInner() {
       case 'favorites':
         return (
           <View style={s.explorerPanelFavoritesWrap}>
-            <View style={s.favoriteSegmentWrap}>
-              <ECSSegmentedControl
-                options={[
-                  { key: 'trails', label: 'TRAILS', badge: filteredFavoriteTrails.length > 0 ? filteredFavoriteTrails.length : null },
-                  { key: 'plans', label: 'PLANS', badge: filteredFavoritePlans.length > 0 ? filteredFavoritePlans.length : null },
-                ]}
-                value={favoritesView}
-                onChange={(next) => {
-                  hapticMicro();
-                  setFavoritesPageIndex(0);
-                  setFavoritesView(next as 'trails' | 'plans');
-                  if (next === 'plans') {
-                    exitFavoritesPlanMode();
-                  }
-                }}
-              />
+            <View style={s.favoriteToolbar}>
+              <Text style={s.favoriteToolbarText}>
+                Favorites are filtered to the current Explore trail context.
+              </Text>
             </View>
 
-            {favoritesView === 'trails' ? (
-              <>
-                <View style={s.favoriteToolbar}>
-                  {favoritesPlanMode ? (
-                    <>
-                      <Text style={s.favoriteToolbarText}>
-                        {selectedPlanFavoriteIds.length} selected for stacking
-                      </Text>
-                      <View style={s.favoriteToolbarActions}>
-                        <TouchableOpacity
-                          style={s.favoriteToolbarBtn}
-                          activeOpacity={0.78}
-                          onPress={exitFavoritesPlanMode}
-                        >
-                          <Text style={s.favoriteToolbarBtnText}>CANCEL</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[
-                            s.favoriteToolbarPrimaryBtn,
-                            selectedPlanFavoriteIds.length < 2 && s.favoriteToolbarPrimaryBtnDisabled,
-                          ]}
-                          activeOpacity={selectedPlanFavoriteIds.length < 2 ? 1 : 0.82}
-                          disabled={selectedPlanFavoriteIds.length < 2}
-                          onPress={handleBeginCreatePlan}
-                        >
-                          <Text style={s.favoriteToolbarPrimaryText}>CREATE STACK</Text>
-                        </TouchableOpacity>
-                      </View>
-                    </>
-                  ) : (
-                    <>
-                      <Text style={s.favoriteToolbarText}>
-                        Favorites are filtered to the current Explore route context.
-                      </Text>
-                      <TouchableOpacity
-                        style={s.favoritePlannerBtn}
-                        activeOpacity={0.8}
-                        onPress={handleToggleFavoritesPlanMode}
-                      >
-                        <Ionicons name="checkmark-circle-outline" size={11} color={TACTICAL.amber} />
-                        <Text style={s.favoritePlannerBtnText}>SELECT</Text>
-                      </TouchableOpacity>
-                    </>
-                  )}
-                </View>
+            {favoriteTrailAdditionalMatchesAvailable ? (
+              <View style={s.inlineSectionNotice} testID="explore-favorites-search-cap-notice">
+                <Ionicons name="funnel-outline" size={13} color={TACTICAL.amber} />
+                <Text style={s.inlineSectionNoticeText}>
+                  {ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE}
+                </Text>
+              </View>
+            ) : null}
 
-                {favoriteTrailAdditionalMatchesAvailable ? (
-                  <View style={s.inlineSectionNotice} testID="explore-favorites-search-cap-notice">
-                    <Ionicons name="funnel-outline" size={13} color={TACTICAL.amber} />
-                    <Text style={s.inlineSectionNoticeText}>
-                      {ECS_ROUTE_SEARCH_RESULT_CAP_NOTICE}
-                    </Text>
-                  </View>
-                ) : null}
-
-                {filteredFavoriteTrails.length === 0 ? (
-                  <ECSResultsEmptyState
-                    style={s.favoriteEmptyState}
-                    title={ECS_STATE_COPY.explore.noFavoritesSaved.title}
-                    message="No saved trails match the current Explore filters."
-                    icon="star-outline"
-                    variant="compact"
-                  />
-                ) : (
-                  <View style={s.favoriteList}>{favoriteTrailCards}</View>
-                )}
-              </>
+            {filteredFavoriteTrails.length === 0 ? (
+              <ECSResultsEmptyState
+                style={s.favoriteEmptyState}
+                title={ECS_STATE_COPY.explore.noFavoritesSaved.title}
+                message="No saved trails match the current Explore filters."
+                icon="star-outline"
+                variant="compact"
+              />
             ) : (
-              filteredFavoritePlans.length > 0 ? (
-                <View style={s.favoritePlanList}>{favoritePlanCards}</View>
-              ) : (
-                <ECSResultsEmptyState
-                  style={s.favoriteEmptyState}
-                  title="No Stacked Plans in Context"
-                  message="Saved trail stacks appear here when at least one stop matches the current Explore filters."
-                  icon="git-merge-outline"
-                  variant="compact"
-                />
-              )
+              <View style={s.favoriteList}>{favoriteTrailCards}</View>
             )}
           </View>
         );
@@ -6087,38 +5534,6 @@ function DiscoverScreenInner() {
           onMomentumScrollEnd={handleExploreScrollEnd}
           scrollEventThrottle={32}
         >
-
-          {tripBuilderFeatureEnabled ? (
-            <TouchableOpacity
-              style={s.exploreWizardHero}
-              testID="explore-tripbuilder-wizard-surface"
-              activeOpacity={0.84}
-              onPress={handleOpenExploreTripBuilderFromHero}
-              accessibilityRole="button"
-              accessibilityLabel="Open Explore Trip Builder"
-              accessibilityHint="Open Trip Builder to choose an available route and prepare its route detail."
-            >
-              <View style={s.exploreWizardHeroIcon}>
-                <Ionicons name="trail-sign-outline" size={18} color={TACTICAL.amber} />
-              </View>
-              <View style={s.exploreWizardHeroCopy}>
-                <Text style={s.exploreWizardEyebrow}>EXPLORE TRIP BUILDER</Text>
-                <Text style={s.exploreWizardTitle}>Pick an available route</Text>
-                <Text style={s.exploreWizardText}>
-                  Choose from approved route summaries. Trip Builder prepares detailed geometry after selection and keeps guidance readiness explicit.
-                </Text>
-              </View>
-            </TouchableOpacity>
-          ) : (
-            <View testID="explore-tripbuilder-disabled-state">
-              <ExplorerStateCard
-                icon="lock-closed-outline"
-                title="Trip Builder Disabled"
-                message="Trip Builder is unavailable for the current ECS rollout. No planning route was opened."
-                stateKind="disabled"
-              />
-            </View>
-          )}
 
           {activeExplorePrimaryTab === 'suggested_routes' && !suggestedRoutesFeatureEnabled ? (
             <View testID="explore-suggested-routes-disabled">
@@ -6324,7 +5739,7 @@ function DiscoverScreenInner() {
 
               <View style={s.exploreWizardStatusCard}>
                 <View style={s.exploreWizardStatusCopy}>
-                  <Text style={s.exploreWizardStatusTitle}>Available Routes</Text>
+                  <Text style={s.exploreWizardStatusTitle}>Available Trails</Text>
                   <Text style={s.exploreWizardStatusText}>{exploreAvailableStatusMessage}</Text>
                   <View style={s.exploreGuidanceCountRow} testID="explore-guidance-ready-counts">
                     {routeCatalogEmptyWithoutGuidance ? (
@@ -6395,7 +5810,7 @@ function DiscoverScreenInner() {
                   <Ionicons name="refresh-outline" size={15} color={TACTICAL.amber} />
                   <Text style={s.inlineSectionNoticeText}>
                     {routeCatalogCachedWithData
-                      ? 'Cached route summaries remain visible while ECS refreshes the live catalog. Geometry stays deferred until selection in Trip Builder.'
+                      ? 'Cached route summaries remain visible while ECS refreshes the live catalog. Geometry is verified only after a trail is selected.'
                       : 'Available route summaries remain visible while ECS refreshes this catalog.'}
                   </Text>
                 </View>
@@ -6686,9 +6101,6 @@ function DiscoverScreenInner() {
                         void handleNavigateToRoute(route);
                       }}
                       onToggleFavorite={() => handleToggleFavorite(route)}
-                      onBuildRoute={() => {
-                        handleBuildTripFromRoute(route);
-                      }}
                       compactPreview
                     />
                   ))}
@@ -7132,9 +6544,6 @@ function DiscoverScreenInner() {
                             void handleNavigateToRoute(route);
                           }}
                           onToggleFavorite={() => handleToggleFavorite(route)}
-                          onBuildRoute={() => {
-                            handleBuildTripFromRoute(route);
-                          }}
                           compactPreview
                         />
                       ))}
@@ -7182,9 +6591,6 @@ function DiscoverScreenInner() {
                         <View style={s.gemMetaBadge}>
                           <Text style={s.gemMetaBadgeText}>{favoriteTrails.length} TRAILS</Text>
                         </View>
-                        <View style={s.gemMetaBadge}>
-                          <Text style={s.gemMetaBadgeText}>{favoritePlans.length} STACKS</Text>
-                        </View>
                       </View>
                       <Text style={s.favoriteUtilitySummaryText} numberOfLines={2}>
                         {favoritesSummaryText}
@@ -7218,122 +6624,36 @@ function DiscoverScreenInner() {
 
                     {favoritesExpanded && (
                       <>
-                        <View style={s.favoriteSegmentWrap}>
-                          <ECSSegmentedControl
-                            options={[
-                              { key: 'trails', label: 'TRAILS', badge: favoriteTrails.length > 0 ? favoriteTrails.length : null },
-                              { key: 'plans', label: 'PLANS', badge: favoritePlans.length > 0 ? favoritePlans.length : null },
-                            ]}
-                            value={favoritesView}
-                            onChange={(next) => {
-                              hapticMicro();
-                              setFavoritesView(next as 'trails' | 'plans');
-                              if (next === 'plans') {
-                                exitFavoritesPlanMode();
-                              }
-                            }}
-                          />
+                        <View style={s.favoriteToolbar}>
+                          <Text style={s.favoriteToolbarText}>
+                            Tap a saved trail to reopen it. Navigate stays one tap away.
+                          </Text>
                         </View>
 
-                        {favoritesView === 'trails' ? (
-                          <>
-                            <View style={s.favoriteToolbar}>
-                              {favoritesPlanMode ? (
-                                <>
-                                  <Text style={s.favoriteToolbarText}>
-                                    {selectedPlanFavoriteIds.length} selected for stacking
-                                  </Text>
-                                  <View style={s.favoriteToolbarActions}>
-                                    <TouchableOpacity
-                                      style={s.favoriteToolbarBtn}
-                                      activeOpacity={0.78}
-                                      onPress={exitFavoritesPlanMode}
-                                    >
-                                      <Text style={s.favoriteToolbarBtnText}>CANCEL</Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                      style={[
-                                        s.favoriteToolbarPrimaryBtn,
-                                        selectedPlanFavoriteIds.length < 2 && s.favoriteToolbarPrimaryBtnDisabled,
-                                      ]}
-                                      activeOpacity={selectedPlanFavoriteIds.length < 2 ? 1 : 0.82}
-                                      disabled={selectedPlanFavoriteIds.length < 2}
-                                      onPress={handleBeginCreatePlan}
-                                    >
-                                      <Text style={s.favoriteToolbarPrimaryText}>CREATE STACK</Text>
-                                    </TouchableOpacity>
-                                  </View>
-                                </>
-                              ) : (
-                                <>
-                                  <Text style={s.favoriteToolbarText}>
-                                    Tap a saved trail to reopen it. Navigate stays one tap away.
-                                  </Text>
-                                  <TouchableOpacity
-                                    style={s.favoritePlannerBtn}
-                                    activeOpacity={0.8}
-                                    onPress={handleToggleFavoritesPlanMode}
-                                  >
-                                    <Ionicons name="checkmark-circle-outline" size={11} color={TACTICAL.amber} />
-                                    <Text style={s.favoritePlannerBtnText}>SELECT</Text>
-                                  </TouchableOpacity>
-                                </>
-                              )}
-                            </View>
-
-                            {favoriteTrails.length === 0 ? (
-                              <ECSResultsEmptyState
-                                style={s.favoriteEmptyState}
-                                title={ECS_STATE_COPY.explore.noFavoritesSaved.title}
-                                message="Save a trail in Hidden Gems, Trail Packs, or ECS Route Ideas to keep it here."
-                                icon="star-outline"
-                                variant="compact"
-                              />
-                            ) : (
-                              favoriteTrailListScrollable ? (
-                                <ScrollView
-                                  style={
-                                    favoriteTrailViewportHeight
-                                      ? [s.favoriteScrollViewport, { maxHeight: favoriteTrailViewportHeight }]
-                                      : undefined
-                                  }
-                                  contentContainerStyle={s.favoriteList}
-                                  showsVerticalScrollIndicator
-                                  nestedScrollEnabled
-                                >
-                                  {favoriteTrailCards}
-                                </ScrollView>
-                              ) : (
-                                <View style={s.favoriteList}>{favoriteTrailCards}</View>
-                              )
-                            )}
-                          </>
+                        {favoriteTrails.length === 0 ? (
+                          <ECSResultsEmptyState
+                            style={s.favoriteEmptyState}
+                            title={ECS_STATE_COPY.explore.noFavoritesSaved.title}
+                            message="Save a trail in Hidden Gems, Trail Packs, or ECS Route Ideas to keep it here."
+                            icon="star-outline"
+                            variant="compact"
+                          />
                         ) : (
-                          favoritePlans.length > 0 ? (
-                            favoritePlanListScrollable ? (
-                              <ScrollView
-                                style={
-                                  favoritePlanViewportHeight
-                                    ? [s.favoriteScrollViewport, { maxHeight: favoritePlanViewportHeight }]
-                                    : undefined
-                                }
-                                contentContainerStyle={s.favoritePlanList}
-                                showsVerticalScrollIndicator
-                                nestedScrollEnabled
-                              >
-                                {favoritePlanCards}
-                              </ScrollView>
-                            ) : (
-                              <View style={s.favoritePlanList}>{favoritePlanCards}</View>
-                            )
+                          favoriteTrailListScrollable ? (
+                            <ScrollView
+                              style={
+                                favoriteTrailViewportHeight
+                                  ? [s.favoriteScrollViewport, { maxHeight: favoriteTrailViewportHeight }]
+                                  : undefined
+                              }
+                              contentContainerStyle={s.favoriteList}
+                              showsVerticalScrollIndicator
+                              nestedScrollEnabled
+                            >
+                              {favoriteTrailCards}
+                            </ScrollView>
                           ) : (
-                            <ECSResultsEmptyState
-                              style={s.favoriteEmptyState}
-                              title="No Stacked Plans Yet"
-                              message="Switch to Trails, select multiple favorites, then create a stack for later review."
-                              icon="git-merge-outline"
-                              variant="compact"
-                            />
+                            <View style={s.favoriteList}>{favoriteTrailCards}</View>
                           )
                         )}
                       </>
@@ -7364,10 +6684,10 @@ function DiscoverScreenInner() {
                   />
                 </View>
                 <View style={s.explorePlanningHeroCopy}>
-                  <Text style={s.explorePlanningEyebrow}>EXPLORER PLANNING</Text>
-                  <Text style={s.explorePlanningTitle}>Offline Prep Pack</Text>
+                  <Text style={s.explorePlanningEyebrow}>OFFLINE TRAILS</Text>
+                  <Text style={s.explorePlanningTitle}>Download trails for offline use</Text>
                   <Text style={s.explorePlanningText}>
-                    Choose from the active Guidance Ready filter, then save route essentials for low-service travel.
+                    Select a trail or import a GPX/KML/GeoJSON file, then download measured route geometry, map tiles, and available guidance for low-service travel.
                   </Text>
                 </View>
               </View>
@@ -7386,7 +6706,7 @@ function DiscoverScreenInner() {
                 <View style={s.explorePlanningContextPill}>
                   <Ionicons name="trail-sign-outline" size={10} color={TACTICAL.textMuted} />
                   <Text style={s.explorePlanningContextText}>
-                    {canonicalExplorePlanningRoutes.length} READY ROUTE{canonicalExplorePlanningRoutes.length === 1 ? '' : 'S'}
+                    {canonicalExplorePlanningRoutes.length} AVAILABLE TRAIL{canonicalExplorePlanningRoutes.length === 1 ? '' : 'S'}
                   </Text>
                 </View>
               </View>
@@ -7472,7 +6792,7 @@ function DiscoverScreenInner() {
                     activeOpacity={0.84}
                     onPress={handleOpenActivePlanningFlow}
                     accessibilityRole="button"
-                    accessibilityLabel="Open Offline Prep Pack"
+                    accessibilityLabel="Open Offline Trails"
                     testID="explore-open-offline-prep-pack"
                   >
                     <Ionicons
@@ -7480,7 +6800,7 @@ function DiscoverScreenInner() {
                       size={14}
                       color="#081014"
                     />
-                    <Text style={s.explorePlanningPrimaryText}>Open Offline Prep Pack</Text>
+                    <Text style={s.explorePlanningPrimaryText}>Open Offline Trails</Text>
                   </TouchableOpacity>
                 </>
               )}
@@ -7625,17 +6945,6 @@ function DiscoverScreenInner() {
                 <TouchableOpacity
                   style={s.offlinePrepFooterBtn}
                   activeOpacity={0.84}
-                  onPress={() => { handleBuildTripFromRoute(selectedOpportunity); }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Build Trip"
-                  testID="selected-route-build-trip"
-                >
-                  <Ionicons name="git-merge-outline" size={14} color={TACTICAL.amber} />
-                  <Text style={s.offlinePrepFooterText} numberOfLines={2}>BUILD{'\n'}TRIP</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={s.offlinePrepFooterBtn}
-                  activeOpacity={0.84}
                   onPress={() => { handlePrepareOfflineFromRoute(selectedOpportunity); }}
                   accessibilityRole="button"
                   accessibilityLabel="Prepare Offline Pack"
@@ -7728,9 +7037,6 @@ function DiscoverScreenInner() {
                 }
               : undefined
           }
-          onBuildTrip={() => {
-            if (trailPackPreview) handleBuildTripFromRoute(trailPackToExpeditionOpportunity(trailPackPreview));
-          }}
           onStartGuidance={() => {
             if (trailPackPreview) void handleStartTrailPackGuidance(trailPackPreview);
           }}
@@ -7832,111 +7138,6 @@ function DiscoverScreenInner() {
         </TacticalPopupShell>
 
         {/* ── Phase 18: AI Route Preview Modal with enrichment ── */}
-        <TacticalPopupShell
-          visible={planBuilderVisible}
-          onClose={closePlanBuilder}
-          title={editingPlanId ? 'EDIT STACKED PLAN' : 'STACK FAVORITE TRAILS'}
-          icon="reorder-three-outline"
-          eyebrow="EXPLORE FAVORITES"
-          subtitle="Review the saved trail order below and keep the stack ready for later Navigate handoff."
-          overlayClass="editor"
-          maxWidth={760}
-          footer={
-            <View style={s.planModalFooter}>
-              <TouchableOpacity
-                style={s.planModalSecondaryBtn}
-                activeOpacity={0.8}
-                onPress={closePlanBuilder}
-              >
-                <Text style={s.planModalSecondaryText}>CANCEL</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  s.planModalPrimaryBtn,
-                  selectedPlanFavoriteIds.length < 2 && s.planModalPrimaryBtnDisabled,
-                ]}
-                activeOpacity={selectedPlanFavoriteIds.length < 2 ? 1 : 0.85}
-                onPress={handleSavePlan}
-                disabled={selectedPlanFavoriteIds.length < 2}
-              >
-                <Text style={s.planModalPrimaryText}>
-                  {editingPlanId ? 'SAVE PLAN' : 'CREATE STACK'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          }
-        >
-          <View style={s.planModalSection}>
-            <Text style={s.planModalTitle}>Order your saved trail stack</Text>
-            <Text style={s.planModalBody}>
-              Arrange this sequence the way you want to run or evaluate it later. ECS will preserve the saved order for future Navigate or Expedition planning.
-            </Text>
-          </View>
-
-          <View style={s.planModalSelectedHeader}>
-            <Text style={s.planModalSectionLabel}>TRAIL ORDER</Text>
-            <Text style={s.planModalSectionMeta}>{selectedPlanFavoriteIds.length} trails in stack</Text>
-          </View>
-
-          {selectedPlanFavorites.length === 0 ? (
-            <View style={s.planModalEmptyState}>
-              <Ionicons name="reorder-three-outline" size={18} color={TACTICAL.textMuted} />
-              <Text style={s.planModalEmptyTitle}>NOT ENOUGH TRAILS SELECTED</Text>
-              <Text style={s.planModalEmptyText}>
-                Select at least two saved favorites before creating or editing a stack.
-              </Text>
-            </View>
-          ) : (
-            <View style={s.planSelectionList}>
-              {selectedPlanFavorites.map((favorite, index) => (
-                <View key={favorite.favoriteId} style={s.planSelectionCard}>
-                  <View style={s.planDragHandle}>
-                    <Ionicons name="reorder-three-outline" size={16} color={TACTICAL.textMuted} />
-                  </View>
-                  <View style={s.planSelectionIndex}>
-                    <Text style={s.planSelectionIndexText}>{index + 1}</Text>
-                  </View>
-                  <View style={s.planSelectionCopy}>
-                    <Text style={s.planSelectionTitle} numberOfLines={1}>{favorite.title}</Text>
-                    <Text style={s.planSelectionSubtitle} numberOfLines={1}>
-                      {favorite.subtitle ?? 'Saved from Explore'}
-                    </Text>
-                  </View>
-                  <View style={s.planSelectionActions}>
-                    <TouchableOpacity
-                      style={s.planOrderBtn}
-                      activeOpacity={0.75}
-                      onPress={() => handleRemovePlanDraftItem(favorite.favoriteId)}
-                    >
-                      <Ionicons name="close-outline" size={12} color={TACTICAL.textMuted} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={s.planOrderBtn}
-                      activeOpacity={0.75}
-                      onPress={() => handleMoveSelectedFavorite(favorite.favoriteId, -1)}
-                      disabled={index === 0}
-                    >
-                      <Ionicons name="chevron-up-outline" size={12} color={index === 0 ? TACTICAL.textMuted : TACTICAL.amber} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={s.planOrderBtn}
-                      activeOpacity={0.75}
-                      onPress={() => handleMoveSelectedFavorite(favorite.favoriteId, 1)}
-                      disabled={index === selectedPlanFavorites.length - 1}
-                    >
-                      <Ionicons
-                        name="chevron-down-outline"
-                        size={12}
-                        color={index === selectedPlanFavorites.length - 1 ? TACTICAL.textMuted : TACTICAL.amber}
-                      />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              ))}
-            </View>
-          )}
-        </TacticalPopupShell>
-
         <AIRoutePreviewModal
           visible={aiPreviewVisible}
           route={aiPreviewRoute}
@@ -7960,15 +7161,6 @@ function DiscoverScreenInner() {
                 }
               : undefined
           }
-          onBuildRoute={
-            aiPreviewRoute
-              ? () => {
-                  handleBuildTripFromRoute(aiPreviewRoute);
-                }
-              : undefined
-          }
-          buildRouteDisabled={false}
-          buildRouteDisabledReason={null}
         />
 
       </View>
@@ -9411,43 +8603,6 @@ const s = StyleSheet.create({
     borderColor: TACTICAL.amber + '35',
     backgroundColor: TACTICAL.amber + '0C',
   },
-  favoriteHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  favoriteSegmentWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 4,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
-    gap: 6,
-  },
-  favoriteSegmentBtn: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  favoriteSegmentBtnActive: {
-    backgroundColor: TACTICAL.amber + '10',
-    borderWidth: 1,
-    borderColor: TACTICAL.amber + '24',
-  },
-  favoriteSegmentText: {
-    fontSize: 8,
-    fontWeight: '900',
-    letterSpacing: 1.6,
-    color: TACTICAL.textMuted,
-  },
-  favoriteSegmentTextActive: {
-    color: TACTICAL.amber,
-  },
   favoriteToolbar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -9464,55 +8619,6 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-  },
-  favoriteToolbarBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
-  },
-  favoriteToolbarBtnText: {
-    fontSize: 8,
-    fontWeight: '900',
-    letterSpacing: 1.4,
-    color: TACTICAL.textMuted,
-  },
-  favoriteToolbarPrimaryBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: TACTICAL.amber + '35',
-    backgroundColor: TACTICAL.amber + '12',
-  },
-  favoriteToolbarPrimaryBtnDisabled: {
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
-  },
-  favoriteToolbarPrimaryText: {
-    fontSize: 8,
-    fontWeight: '900',
-    letterSpacing: 1.4,
-    color: TACTICAL.amber,
-  },
-  favoritePlannerBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: TACTICAL.amber + '35',
-    backgroundColor: TACTICAL.amber + '0C',
-  },
-  favoritePlannerBtnText: {
-    fontSize: 8,
-    fontWeight: '900',
-    letterSpacing: 1.4,
-    color: TACTICAL.amber,
   },
   favoriteEmptyState: {
     alignItems: 'center',
@@ -9551,13 +8657,6 @@ const s = StyleSheet.create({
     borderColor: 'rgba(196,138,44,0.12)',
     backgroundColor: 'rgba(255,255,255,0.02)',
   },
-  favoriteCardSelectable: {
-    borderColor: ECS.stroke,
-  },
-  favoriteCardSelected: {
-    borderColor: TACTICAL.amber + '35',
-    backgroundColor: TACTICAL.amber + '0C',
-  },
   favoriteCardTopRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -9584,13 +8683,6 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: TACTICAL.amber + '35',
     backgroundColor: TACTICAL.amber + '0C',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  favoriteSelectIndicator: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -9676,301 +8768,6 @@ const s = StyleSheet.create({
     fontSize: 8,
     fontWeight: '900',
     letterSpacing: 1.3,
-    color: TACTICAL.amber,
-  },
-  favoritePlanModeHintRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  favoritePlanModeHintText: {
-    fontSize: 10,
-    color: TACTICAL.textMuted,
-  },
-  favoriteActionRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: 8,
-  },
-  favoriteActionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
-  },
-  favoriteActionText: {
-    fontSize: 7,
-    fontWeight: '900',
-    letterSpacing: 1.3,
-    color: TACTICAL.textMuted,
-  },
-  favoritePlanSection: {
-    gap: 8,
-    paddingTop: 4,
-    borderTopWidth: GOLD_RAIL.subsectionWidth,
-    borderTopColor: GOLD_RAIL.internal,
-  },
-  favoritePlanSectionTitle: {
-    fontSize: 8,
-    fontWeight: '900',
-    letterSpacing: 2,
-    color: TACTICAL.amber,
-  },
-  favoritePlanList: {
-    gap: 8,
-  },
-  favoritePlanCard: {
-    gap: 8,
-    padding: 11,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
-  },
-  favoritePlanTopRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  favoritePlanTitle: {
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 1,
-    color: TACTICAL.text,
-  },
-  favoritePlanSubtitle: {
-    fontSize: 10,
-    lineHeight: 15,
-    color: TACTICAL.textMuted,
-  },
-  favoritePlanMetaRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  favoritePlanCountBadge: {
-    minWidth: 28,
-    height: 28,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: TACTICAL.amber + '30',
-    backgroundColor: TACTICAL.amber + '0C',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  favoritePlanCountText: {
-    fontSize: 10,
-    fontWeight: '900',
-    color: TACTICAL.amber,
-  },
-  planModalSection: {
-    gap: 6,
-  },
-  planModalTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 1.4,
-    color: TACTICAL.text,
-  },
-  planModalBody: {
-    fontSize: 10,
-    lineHeight: 16,
-    color: TACTICAL.textMuted,
-  },
-  planModalSelectedHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-    marginTop: 8,
-  },
-  planModalSectionLabel: {
-    fontSize: 8,
-    fontWeight: '900',
-    letterSpacing: 2,
-    color: TACTICAL.amber,
-  },
-  planModalSectionMeta: {
-    fontSize: 8,
-    fontWeight: '700',
-    letterSpacing: 1.2,
-    color: TACTICAL.textMuted,
-  },
-  planModalEmptyState: {
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 16,
-    paddingHorizontal: 14,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
-  },
-  planModalEmptyTitle: {
-    fontSize: 9,
-    fontWeight: '900',
-    letterSpacing: 1.8,
-    color: TACTICAL.textMuted,
-    textAlign: 'center',
-  },
-  planModalEmptyText: {
-    fontSize: 10,
-    lineHeight: 15,
-    color: TACTICAL.textMuted,
-    textAlign: 'center',
-  },
-  planSelectionList: {
-    gap: 8,
-  },
-  planSelectionCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    padding: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: TACTICAL.amber + '25',
-    backgroundColor: TACTICAL.amber + '08',
-  },
-  planDragHandle: {
-    width: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  planSelectionIndex: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: TACTICAL.amber + '35',
-    backgroundColor: 'rgba(0,0,0,0.18)',
-  },
-  planSelectionIndexText: {
-    fontSize: 9,
-    fontWeight: '900',
-    color: TACTICAL.amber,
-  },
-  planSelectionCopy: {
-    flex: 1,
-    gap: 2,
-  },
-  planSelectionTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: TACTICAL.text,
-  },
-  planSelectionSubtitle: {
-    fontSize: 10,
-    color: TACTICAL.textMuted,
-  },
-  planSelectionActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  planOrderBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  planFavoriteList: {
-    gap: 8,
-  },
-  planFavoriteCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    padding: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
-  },
-  planFavoriteCardSelected: {
-    borderColor: TACTICAL.amber + '35',
-    backgroundColor: TACTICAL.amber + '0C',
-  },
-  planFavoriteToggle: {
-    width: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  planFavoriteCopy: {
-    flex: 1,
-    gap: 2,
-  },
-  planFavoriteTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: TACTICAL.text,
-  },
-  planFavoriteSubtitle: {
-    fontSize: 10,
-    color: TACTICAL.textMuted,
-  },
-  planFavoriteMeta: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: 'rgba(0,0,0,0.18)',
-  },
-  planFavoriteMetaText: {
-    fontSize: 7,
-    fontWeight: '800',
-    letterSpacing: 1,
-    color: TACTICAL.textMuted,
-  },
-  planModalFooter: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    alignItems: 'center',
-    gap: 10,
-  },
-  planModalSecondaryBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
-  },
-  planModalSecondaryText: {
-    fontSize: 9,
-    fontWeight: '900',
-    letterSpacing: 1.4,
-    color: TACTICAL.textMuted,
-  },
-  planModalPrimaryBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: TACTICAL.amber + '35',
-    backgroundColor: TACTICAL.amber + '12',
-  },
-  planModalPrimaryBtnDisabled: {
-    borderColor: ECS.stroke,
-    backgroundColor: ECS.bgElev,
-  },
-  planModalPrimaryText: {
-    fontSize: 9,
-    fontWeight: '900',
-    letterSpacing: 1.4,
     color: TACTICAL.amber,
   },
   routeCardMetaRow: {

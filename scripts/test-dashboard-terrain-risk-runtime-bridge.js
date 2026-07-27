@@ -54,8 +54,8 @@ assert(
   'The registered runtime path must not mount the legacy prop-less Terrain Risk implementation.',
 );
 assert(
-  /function StandaloneTerrainRiskRuntimeWidget[\s\S]*?useRouteProgressCommandSnapshot\(options\)[\s\S]*?useTerrainRiskDashboardRuntime\(\{[\s\S]*?<TerrainIntelligenceCommand[\s\S]*?<QuickTerrainWidget/.test(widgetRenderersSource),
-  'The standalone mounted component must subscribe to route progress, build the shared runtime model, and route it to expanded and compact presentations.',
+  /function StandaloneTerrainRiskRuntimeWidget[\s\S]*?useRouteProgressCommandSnapshot\(options\)[\s\S]*?useTerrainRiskDashboardRuntime\(\{[\s\S]*?<AttitudeCommandTerrainRiskPreview/.test(widgetRenderersSource),
+  'The standalone mounted component must subscribe to route progress, build the shared runtime model, and pass it to the real graph presentation.',
 );
 assert.strictEqual(
   (widgetRenderersSource.match(/useTerrainRiskDashboardRuntime\(\{/g) || []).length,

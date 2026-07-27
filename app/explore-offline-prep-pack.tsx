@@ -110,8 +110,6 @@ import type {
   TripBuilderRouteInput,
   TripBuilderVehicleProfile,
 } from '../lib/tripBuilder';
-import { exportExploreTripManifestPdf } from '../lib/explore/exploreTripManifestExport';
-import type { ExploreTripManifestExportResult } from '../lib/explore/exploreTripManifestExport';
 
 const OFFLINE_PREP_CONTENT_BOTTOM_CLEARANCE = 20;
 const OFFLINE_PREP_HYDRATION_TIMEOUT_MS = 8_000;
@@ -1025,7 +1023,6 @@ export default function ExploreOfflinePrepPackScreen() {
   const [prepareAttempted, setPrepareAttempted] = useState(false);
   const [prepareConfirmVisible, setPrepareConfirmVisible] = useState(false);
   const [prepareSaving, setPrepareSaving] = useState(false);
-  const [manifestExporting, setManifestExporting] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [geometryResolving, setGeometryResolving] = useState(false);
@@ -1043,7 +1040,6 @@ export default function ExploreOfflinePrepPackScreen() {
   const weatherRequestGenerationRef = useRef(0);
   const mapRetryRequestRef = useRef(false);
   const prepareActionLifecycleRef = useRef(createOfflinePrepActionLifecycle<void>());
-  const exportActionLifecycleRef = useRef(createOfflinePrepActionLifecycle<ExploreTripManifestExportResult>());
   const importingRouteRef = useRef(false);
   const autoImportOpenedRef = useRef(false);
   const routeLoadTaskRef = useRef<ShellInteractionTask | null>(null);
@@ -1089,19 +1085,15 @@ export default function ExploreOfflinePrepPackScreen() {
   useEffect(() => {
     mountedRef.current = true;
     prepareActionLifecycleRef.current = createOfflinePrepActionLifecycle<void>();
-    exportActionLifecycleRef.current = createOfflinePrepActionLifecycle<ExploreTripManifestExportResult>();
     return () => {
       mountedRef.current = false;
       prepareActionLifecycleRef.current.dispose();
-      exportActionLifecycleRef.current.dispose();
     };
   }, []);
 
   useEffect(() => {
     prepareActionLifecycleRef.current.cancel('route_changed');
-    exportActionLifecycleRef.current.cancel('route_changed');
     setPrepareSaving(false);
-    setManifestExporting(false);
   }, [selectedRouteId]);
 
   useEffect(() => {
@@ -1180,11 +1172,14 @@ export default function ExploreOfflinePrepPackScreen() {
     if (handoffInput && routeId(handoffInput.route) === selectedRouteKey) {
       return {
         ...handoffInput,
+        mode: handoffInput.mode ??
+          (handoffInput.itinerary || handoffInput.tripPlan ? 'trip_plan' : 'trail_download'),
         mapStyleKey: handoffInput.mapStyleKey ?? DEFAULT_MAP_STYLE,
         weatherSnapshot: weatherSnapshot ?? handoffInput.weatherSnapshot ?? null,
       };
     }
     return {
+      mode: 'trail_download',
       route: selectedRoute,
       mapStyleKey: DEFAULT_MAP_STYLE,
       vehicleProfile: buildVehicleProfile(),
@@ -1205,7 +1200,6 @@ export default function ExploreOfflinePrepPackScreen() {
       setPrepareAttempted(false);
       setPrepareConfirmVisible(false);
       setPrepareSaving(false);
-      setManifestExporting(false);
       setActionMessage(null);
     } catch {
       setManifest(null);
@@ -1792,51 +1786,6 @@ export default function ExploreOfflinePrepPackScreen() {
     void prepareOfflinePack();
   };
 
-  const handleExportPrintableManifest = useCallback(async () => {
-    if (!manifest || !selectedInput) {
-      setError('Select a route before exporting a family emergency manifest.');
-      return;
-    }
-    const fingerprint = createOfflinePrepActionFingerprint({
-      action: 'export_manifest',
-      routeId: routeId(selectedInput.route),
-      manifestId: manifest.id,
-      sourceRevision: manifest.generatedAt,
-    });
-    const execution = exportActionLifecycleRef.current.run({
-      action: 'export_manifest',
-      fingerprint,
-      attempt: 'refresh',
-      safeErrorCode: 'OFFLINE_PREP_MANIFEST_EXPORT_FAILED',
-      execute: () => exportExploreTripManifestPdf({
-        title: `${routeName(selectedInput.route)} Family Emergency Trip Manifest`,
-        manifest,
-        route: selectedInput.route,
-        routeCoordinates: getOfflinePrepPackRouteCoordinates(selectedInput),
-        itinerary: selectedInput.itinerary ?? null,
-        tripPlan: selectedInput.tripPlan ?? null,
-        readiness: selectedInput.readiness ?? selectedInput.tripPlan?.readinessReference ?? null,
-        vehicleProfile: selectedInput.vehicleProfile ?? null,
-        emergencyPoints: selectedInput.emergencyPoints ?? null,
-        emergencyNotes: selectedInput.emergencyNotes ?? null,
-        offlinePresentation: packPresentation,
-      }),
-    });
-    if (execution.decision === 'started') {
-      hapticMicro();
-      setManifestExporting(true);
-      setError(null);
-    }
-    const outcome = await execution.promise;
-    setManifestExporting(false);
-    if (!outcome.accepted) return;
-    if (outcome.status === 'succeeded' && outcome.data?.success) {
-      setActionMessage('Family emergency trip manifest is ready to print or share with a trusted contact.');
-    } else {
-      setError(outcome.data?.error ?? 'Family emergency manifest export failed.');
-    }
-  }, [manifest, packPresentation, selectedInput]);
-
   const handleRetry = () => {
     if (!selectedInput) {
       hapticMicro();
@@ -1936,11 +1885,6 @@ export default function ExploreOfflinePrepPackScreen() {
 
   const handleBackToSuggestedRoutes = () => {
     clearOfflinePrepPackHandoff();
-    const routeIdForReturn = selectedRoute ? routeId(selectedRoute) : selectedRouteId;
-    if (handoffInput?.tripPlan && routeIdForReturn) {
-      returnSingleFlight(`/explore-trip-builder?routeId=${encodeURIComponent(routeIdForReturn)}&setup=1`);
-      return;
-    }
     returnSingleFlight('/discover');
   };
 
@@ -2023,10 +1967,10 @@ export default function ExploreOfflinePrepPackScreen() {
               <Ionicons name="download-outline" size={18} color={TACTICAL.amber} />
             </View>
             <View style={styles.heroCopy}>
-              <Text style={styles.eyebrow}>EXPLORE PLANNING</Text>
+              <Text style={styles.eyebrow}>EXPLORE OFFLINE</Text>
               <Text style={styles.heroTitle}>Offline Prep Pack</Text>
               <Text style={styles.heroText}>
-                Download the map, route, guidance, and itinerary needed to follow this trip without service.
+                Download trail maps, route geometry, and available guidance for use without service.
               </Text>
             </View>
           </View>
@@ -2450,21 +2394,6 @@ export default function ExploreOfflinePrepPackScreen() {
                   accessibilityHint={packPresentation.kind === 'degraded' || packPresentation.kind === 'blocked'
                     ? 'Opens the required and degraded Offline Prep details'
                     : 'Downloads or retries the route assets required for offline navigation'}
-                />
-              </View>
-              <View style={styles.actionDockButton} testID="offline-prep-printable-manifest">
-                <ECSButton
-                  label={manifestExporting ? 'Generating…' : 'Print / Share Emergency Manifest'}
-                  icon="share-outline"
-                  variant="secondary"
-                  size="large"
-                  grow
-                  loading={manifestExporting}
-                  onPress={() => {
-                    void handleExportPrintableManifest();
-                  }}
-                  accessibilityLabel="Print or share family emergency trip manifest"
-                  accessibilityHint="Creates a private family-facing packet with the saved itinerary, route-readiness score, planned coordinates, and offline status"
                 />
               </View>
             </View>

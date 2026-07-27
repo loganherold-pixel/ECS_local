@@ -2,7 +2,6 @@ export const ECS_FEATURE_IDS = [
   'fleet_tab',
   'navigate_tab',
   'dashboard_tab',
-  'terrain_intelligence_command',
   'explore_tab',
   'dispatch_tab',
   'explore_trip_builder',
@@ -123,14 +122,6 @@ export type ECSFeatureDefinition = {
   killSwitch: string;
   unavailableCopy: string;
   relatedReadinessGate: string | null;
-  verification?: {
-    implementationStatus: 'complete' | 'partial';
-    automatedChecks: 'passed' | 'pending';
-    rolloutStatus: 'restricted' | 'available';
-    nativeEvidenceStatus: 'missing' | 'accepted';
-    productionApproval: 'not_granted' | 'granted';
-    relatedTests: readonly string[];
-  };
   routePolicy?: ECSFeatureRoutePolicy;
 };
 
@@ -195,64 +186,6 @@ export const ECS_FEATURE_REGISTRY: readonly ECSFeatureDefinition[] = [
   primaryTabFeature('fleet_tab', 'fleet', 'Fleet', 'production', '/fleet', 'gate:fleet-production'),
   primaryTabFeature('navigate_tab', 'navigate', 'Navigate', 'beta', '/navigate', 'gate:offline-navigation-production'),
   primaryTabFeature('dashboard_tab', 'dashboard', 'Dashboard', 'production', '/dashboard', 'gate:dashboard-production'),
-  {
-    id: 'terrain_intelligence_command',
-    ownerDomain: 'dashboard',
-    userFacingLabel: 'Terrain Intelligence Command',
-    maturity: 'restricted_field_test',
-    defaultEnabled: false,
-    environment: {
-      allowed: ['development', 'test', 'internal'],
-      enableFlag: 'EXPO_PUBLIC_ECS_TERRAIN_INTELLIGENCE_COMMAND',
-      enableFlagRequired: true,
-    },
-    accountRequirement: 'none',
-    backendDependencies: [],
-    providerDependencies: [],
-    nativeDependencies: [],
-    permissionDependencies: [],
-    featureDependencies: ['dashboard_tab'],
-    productionEvidence: {
-      requirements: [
-        'field_active_guidance',
-        'field_active_vehicle_switch',
-        'mobile_android_golden_journey',
-        'mobile_ios_golden_journey',
-        'mobile_map_responsiveness',
-        'mobile_background_restoration',
-        'mobile_battery',
-        'mobile_thermal',
-        'field_owner_acceptance',
-      ],
-      requiredToEnable: false,
-    },
-    offlineSupport: 'full',
-    degradedBehavior: {
-      allowed: true,
-      copy: 'Interactive Terrain Intelligence is restricted. Quick Terrain remains available with truthful cached, stale, partial, or unavailable route state.',
-    },
-    killSwitch: 'EXPO_PUBLIC_ECS_KILL_TERRAIN_INTELLIGENCE_COMMAND',
-    unavailableCopy: 'Interactive Terrain Intelligence is not available in this release.',
-    relatedReadinessGate: 'gate:terrain-intelligence-command',
-    verification: {
-      implementationStatus: 'complete',
-      automatedChecks: 'passed',
-      rolloutStatus: 'restricted',
-      nativeEvidenceStatus: 'missing',
-      productionApproval: 'not_granted',
-      relatedTests: [
-        'test:terrain-intelligence-rollout',
-        'test:dashboard-quick-terrain',
-        'test:terrain-intelligence-command',
-        'test:terrain-intelligence-motion',
-      ],
-    },
-    routePolicy: {
-      paths: ['/terrain-intelligence-command'],
-      unavailableBehavior: 'block',
-      safeReturnRoute: '/dashboard',
-    },
-  },
   primaryTabFeature('explore_tab', 'explore', 'Explore', 'beta', '/discover', 'gate:explore-trail-packs-production'),
   primaryTabFeature('dispatch_tab', 'dispatch', 'Dispatch', 'beta', '/alert', 'gate:dispatch-convoy-production'),
   {
@@ -289,7 +222,7 @@ export const ECS_FEATURE_REGISTRY: readonly ECSFeatureDefinition[] = [
   {
     id: 'explore_offline_prep',
     ownerDomain: 'explore',
-    userFacingLabel: 'Offline Prep Pack',
+    userFacingLabel: 'Offline Trails',
     maturity: 'beta',
     defaultEnabled: true,
     environment: {
@@ -309,7 +242,7 @@ export const ECS_FEATURE_REGISTRY: readonly ECSFeatureDefinition[] = [
     offlineSupport: 'full',
     degradedBehavior: LOCAL_DEGRADED_BEHAVIOR,
     killSwitch: 'EXPO_PUBLIC_ECS_KILL_EXPLORE_OFFLINE_PREP',
-    unavailableCopy: 'Offline Prep Pack is unavailable for this rollout.',
+    unavailableCopy: 'Offline trail downloads are unavailable for this rollout.',
     relatedReadinessGate: 'gate:offline-navigation-production',
     routePolicy: {
       paths: ['/explore-offline-prep-pack'],
@@ -957,7 +890,6 @@ export function buildECSCapabilityMatrix(context: ECSFeatureVisibilityContext) {
       enableFlag: feature.environment.enableFlag ?? null,
       unavailableCopy: feature.unavailableCopy,
       relatedReadinessGate: feature.relatedReadinessGate,
-      verification: feature.verification ?? null,
       routes: feature.routePolicy?.paths ?? [],
     };
   });
@@ -1379,10 +1311,6 @@ function getRuntimeEnvironmentVariables(): Record<string, string | undefined> {
       EXPO_PUBLIC_ECS_MISSION_COMMAND: process.env.EXPO_PUBLIC_ECS_MISSION_COMMAND,
       EXPO_PUBLIC_ECS_KILL_MISSION_COMMAND: process.env.EXPO_PUBLIC_ECS_KILL_MISSION_COMMAND,
       EXPO_PUBLIC_ECS_KILL_DISPATCH_TAB: process.env.EXPO_PUBLIC_ECS_KILL_DISPATCH_TAB,
-      EXPO_PUBLIC_ECS_TERRAIN_INTELLIGENCE_COMMAND:
-        process.env.EXPO_PUBLIC_ECS_TERRAIN_INTELLIGENCE_COMMAND,
-      EXPO_PUBLIC_ECS_KILL_TERRAIN_INTELLIGENCE_COMMAND:
-        process.env.EXPO_PUBLIC_ECS_KILL_TERRAIN_INTELLIGENCE_COMMAND,
       EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER:
         process.env.EXPO_PUBLIC_ECS_ESTABLISHED_CAMPSITES_LAYER,
       EXPO_PUBLIC_ECS_KILL_ESTABLISHED_CAMPGROUNDS:

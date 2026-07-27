@@ -142,15 +142,16 @@ assert.strictEqual(
 );
 
 assert.ok(
-  discoverSource.includes('stageTripBuilderItineraryHandoff(op);') &&
-    discoverSource.includes('setAnalysisVisible(true);'),
-  'Opening an Explore suggested route should stage the Trip Builder itinerary draft while preserving the analysis modal.',
+  !discoverSource.includes('stageTripBuilderItineraryHandoff') &&
+    discoverSource.includes('setAnalysisVisible(true);') &&
+    discoverSource.includes('ExploreTrailRouteCard'),
+  'Opening an Explore trail should preserve route analysis without silently staging a Trip Builder itinerary.',
 );
 assert.ok(
-  discoverSource.includes('deferItineraryBuild: true') &&
-    discoverSource.includes('stageTripBuilderItineraryHandoff(route);') &&
-    discoverSource.includes("pathname: '/explore-trip-builder'"),
-  'Build Trip should keep the existing persisted handoff while deferring geometry preparation.',
+  !discoverSource.includes("pathname: '/explore-trip-builder'") &&
+    discoverSource.includes('handlePrepareOfflineExploreWizardCandidate') &&
+    discoverSource.includes("mode: 'trail_download'"),
+  'Mounted Explore should route selected trails to route-only offline download instead of itinerary preparation.',
 );
 assert.ok(
   tripBuilderSource.includes('continueTripBuilderRoutePreparation(started, selectedRoute') &&

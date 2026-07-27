@@ -23,8 +23,8 @@ require.extensions['.ts'] = compileTypescript;
 require.extensions['.tsx'] = compileTypescript;
 
 const discoverSource = fs.readFileSync(path.join(root, 'app', '(tabs)', 'discover.tsx'), 'utf8');
-const wizardCardSource = fs.readFileSync(
-  path.join(root, 'components', 'discover', 'ExploreTripBuilderWizardRouteCard.tsx'),
+const trailCardSource = fs.readFileSync(
+  path.join(root, 'components', 'discover', 'ExploreTrailRouteCard.tsx'),
   'utf8',
 );
 const trailPackCardSource = fs.readFileSync(path.join(root, 'components', 'discover', 'TrailPackCard.tsx'), 'utf8');
@@ -334,7 +334,7 @@ assert(
   'thumbnailFailed',
   'onError',
 ].forEach((needle) => {
-  assert(wizardCardSource.includes(needle), `Wizard route card should progressively render thumbnails/enrichment: ${needle}.`);
+  assert(trailCardSource.includes(needle), `Trail route card should progressively render thumbnails/enrichment: ${needle}.`);
 });
 [
   'React.memo',

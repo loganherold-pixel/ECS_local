@@ -81,7 +81,7 @@ function makeRoute(id, overrides = {}) {
 }
 
 assert(
-  discover.includes('Available Routes') &&
+  discover.includes('Available Trails') &&
     discover.includes('canonicalExplorePlanningRoutes') &&
     discover.includes('const mapInventory = buildExploreGuidanceReadyInventory') &&
     readyInventory.includes('MIN_GUIDANCE_READY_ROUTE_MILES'),
@@ -135,28 +135,28 @@ assert(
 );
 assert(
   (discover.match(/requireFullCatalogDetail: true/g) ?? []).length >= 3 &&
-    discover.includes('saveExploreRouteForPlanning(hydratedCandidate)') &&
-    discover.includes('const handleOpenRouteCatalogSummaryTripBuilder') &&
-    discover.includes('classifyExploreRouteAvailability(routeForHandoff)') &&
-    discover.includes('stageTripBuilderItineraryHandoff(routeForHandoff)') &&
-    discover.includes("pathname: '/explore-trip-builder'") &&
+    discover.includes('const handlePrepareRouteCatalogSummaryOffline') &&
+    discover.includes('void handlePrepareOfflineFromRoute(routeForHandoff)') &&
+    discover.includes('getOfflinePrepPackRouteCoordinates({') &&
+    discover.includes("mode: 'trail_download'") &&
+    discover.includes('Measured trail geometry is required before this trail can be downloaded') &&
     discover.includes('Verified route detail could not be loaded. Retry when the route provider is available.'),
-  'Deferred summaries should hand off directly while geometry-ready non-summary routes retain canonical hydrate/save normalization.',
+  'Deferred summaries should hydrate authoritative detail on selection and stage only geometry-backed trail downloads.',
 );
 assert(
   discover.includes('guardHydratedGuidanceReadyHandoff') &&
     discover.includes('guardGuidanceReadyRouteHandoff') &&
     discover.includes("guardHydratedGuidanceReadyHandoff(routeForHandoff, 'navigate')") &&
     discover.includes('explore_hydrated_route_not_ready') &&
-    discover.includes('classifyExploreRouteAvailability(routeForPlanning)'),
-  'Navigate must retain strict guidance checks while planning uses the separate post-hydration discovery and Trip Builder decisions.',
+    !discover.includes("guardHydratedGuidanceReadyHandoff(routeForHandoff, 'offline_prep')"),
+  'Navigate must retain strict guidance checks while offline downloads use the separate measured-geometry boundary.',
 );
 assert(
   discover.includes('beginExploreRouteIntentRequest') &&
     discover.includes("controller.abort('superseded')") &&
     discover.includes('isCurrentExploreRouteIntentRequest(request)') &&
     discover.includes('signal: request.controller.signal'),
-  'Rapid Explore Start/Build actions should abort or supersede older route-detail work before it can stage a stale handoff.',
+  'Rapid Explore Start/download actions should abort or supersede older route-detail work before it can stage a stale handoff.',
 );
 assert(
   discover.includes('routeCatalogProviderUnavailableWithLocalReady') &&

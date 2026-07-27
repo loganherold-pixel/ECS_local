@@ -141,6 +141,11 @@ export type OfflinePrepPack = {
 
 export type OfflinePrepPackInput = {
   route: TripBuilderRouteInput;
+  /**
+   * Trail downloads contain only route/navigation assets. Trip-plan mode keeps
+   * the richer itinerary payload for non-Explore compatibility flows.
+   */
+  mode?: 'trail_download' | 'trip_plan';
   /** Exact base-map style included in the offline route package. */
   mapStyleKey?: MapStyleKey | null;
   /** Provider-normalized road approach, including ordered steps and legs. */

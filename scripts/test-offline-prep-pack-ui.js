@@ -35,7 +35,6 @@ const screen = read('app/explore-offline-prep-pack.tsx');
 const rootLayout = read('app/_layout.tsx');
 const planningTabs = read('components/discover/ExplorePlanningTabs.tsx');
 const registry = read('lib/explore/exploreFeatureRegistry.ts');
-const tripBuilder = read('app/explore-trip-builder.tsx');
 const discover = read('app/(tabs)/discover.tsx');
 const ecsButton = read('components/ECSButton.tsx');
 
@@ -44,10 +43,20 @@ const ecsButton = read('components/ECSButton.tsx');
 includes(rootLayout, 'name="explore-offline-prep-pack"', 'Root Offline Prep route registration');
 includes(registry, "route: '/explore-offline-prep-pack'", 'Explore feature registry route');
 includes(planningTabs, "offline_prep_pack: '/explore-offline-prep-pack'", 'Explore planning-tab route');
+includes(planningTabs, "suggested_routes: '/discover'", 'Find Trails return route');
+includes(planningTabs, "label: 'Find Trails'", 'Find Trails tab label');
+includes(planningTabs, "label: 'Offline Trails'", 'Offline Trails tab label');
+assert.ok(!planningTabs.includes('trip_builder'), 'Offline tabs must not expose Trip Builder.');
+assert.ok(!planningTabs.includes('/explore-trip-builder'), 'Offline tabs must not link into Trip Builder.');
 includes(screen, 'export default function ExploreOfflinePrepPackScreen()', 'Mounted Offline Prep component');
 includes(screen, 'activeTab="offline_prep_pack"', 'Mounted active Explore planning tab');
-includes(tripBuilder, "pushSingleFlight('/explore-offline-prep-pack')", 'Trip Builder handoff route');
 includes(discover, "pathname: '/explore-offline-prep-pack'", 'Explore handoff route');
+includes(screen, "returnSingleFlight('/discover')", 'Offline Trails back action');
+assert.ok(
+  !screen.includes("returnSingleFlight('/explore-trip-builder") &&
+    !screen.includes('`/explore-trip-builder?'),
+  'Offline Trails must always return to Find Trails rather than restoring removed planning UI.',
+);
 
 // Compact overview and persistent action-dock contract. Detailed assets remain
 // available through progressive disclosure instead of pushing actions below them.
@@ -59,7 +68,6 @@ includes(discover, "pathname: '/explore-offline-prep-pack'", 'Explore handoff ro
   'offline-prep-details-toggle',
   'offline-prep-action-dock',
   'offline-prep-prepare',
-  'offline-prep-printable-manifest',
   'offline-prep-map-queue-state',
   'offline-prep-failed-state',
 ].forEach((testId) => {
@@ -82,9 +90,13 @@ assert.match(
 );
 includes(screen, 'testID={`offline-prep-group-${group.id}`}', 'Compact asset groups');
 includes(screen, 'testID="offline-prep-required-attention"', 'Required-attention summary');
-includes(screen, 'Print / Share Emergency Manifest', 'Family emergency manifest action');
 assert.ok(!screen.includes('Export GPX'), 'The compact pack must not add a redundant GPX action.');
 assert.ok(!screen.includes('Save Trip Sheet'), 'The compact pack must not add a redundant trip-sheet action.');
+assert.ok(
+  !screen.includes('testID="offline-prep-printable-manifest"') &&
+    !screen.includes('Print / Share Emergency Manifest'),
+  'The mounted route-download dock must not expose a printable itinerary manifest.',
+);
 
 // Failures must win over normal empty state and remain visible even while a manifest
 // exists. This is a narrow static contract because the repository has no mounted
@@ -103,10 +115,6 @@ includes(screen, 'accessibilityRole="progressbar"', 'Required-asset progress sem
 includes(screen, 'accessibilityLabel="Required offline navigation assets"', 'Required-asset progress label');
 includes(screen, 'accessibilityValue={{ min: 0, max: 100, now: requiredPercent', 'Required-asset progress value');
 includes(screen, 'accessibilityState={{ expanded: detailsVisible }}', 'Details disclosure state');
-includes(screen, 'accessibilityLabel="Print or share family emergency trip manifest"', 'Family manifest accessibility label');
-includes(screen, 'routeCoordinates: getOfflinePrepPackRouteCoordinates(selectedInput)', 'Canonical route coordinates passed to family manifest');
-includes(screen, 'readiness: selectedInput.readiness ?? selectedInput.tripPlan?.readinessReference ?? null', 'Route-linked readiness passed to family manifest');
-includes(screen, 'offlinePresentation: packPresentation', 'Offline presentation remains distinct from route readiness');
 includes(screen, '<ECSOperationalAnnouncer event={packStateAnnouncement} />', 'Terminal pack-state announcement');
 includes(screen, 'performOfflinePackPreparation = async (context: OfflinePrepActionContext)', 'Mounted action lifecycle context');
 includes(screen, 'styleKey: mapStyleKey', 'Reused route regions retain canonical prepared map-style identity');
@@ -162,7 +170,6 @@ function fixtureItems() {
     }),
     item('route_line', { required: true, count: 24 }),
     item('road_turn_guidance', { required: true, count: 7 }),
-    item('trip_itinerary', { required: true, count: 4 }),
     item('weather_snapshot', {
       status: 'unavailable',
       availability: 'not_set',
@@ -195,7 +202,7 @@ function fixtureManifest(items) {
       percent: 60,
     },
     errors: items.map((entry) => entry.error).filter(Boolean),
-    tripPlanId: 'ui-trip-plan',
+    tripPlanId: null,
     routeAssetId: 'ui-route-asset',
     lifecycle: { phase: 'offline_ready', identity: {}, provenance: {} },
     readinessManifest,
@@ -226,6 +233,12 @@ function queue(status, overrides = {}) {
 }
 
 const manifest = fixtureManifest(fixtureItems());
+assert.ok(
+  !manifest.items.some((entry) =>
+    ['trip_itinerary', 'trip_sheet', 'resupply_points', 'smart_resupply_summary'].includes(entry.type),
+  ),
+  'Mounted route-only fixtures should model navigation assets without itinerary or resupply artifacts.',
+);
 const needsDownload = buildOfflinePrepPackPresentation({
   manifest,
   mapQueueState: queue('not_requested'),

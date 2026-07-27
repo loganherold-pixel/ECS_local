@@ -204,18 +204,18 @@ const removedStandaloneWidgets = [
   'sustainability',
 ];
 
-assert.strictEqual(curatedIds.length, 9, 'Dashboard library must expose exactly 9 consolidated curated widgets.');
+assert.strictEqual(curatedIds.length, 8, 'Dashboard library must expose exactly 8 consolidated curated widgets.');
 assert.strictEqual(new Set(curatedIds).size, curatedIds.length, 'Curated widget IDs must remain unique.');
-assert.deepStrictEqual(priorities, [1, 2, 3, 4, 5, 6, 7, 8, 9], 'Dashboard widget priorities must remain a complete 1-9 ranking.');
-assert.strictEqual(expeditionDefaults.length, 3, 'Expedition defaults must include the top attitude row and two lower quick widgets.');
+assert.deepStrictEqual(priorities, [1, 2, 3, 4, 5, 6, 7, 8], 'Dashboard widget priorities must remain a complete 1-8 ranking.');
+assert.strictEqual(expeditionDefaults.length, 1, 'Expedition defaults must stay focused on one command surface.');
 assert.ok(
-  expeditionDefaults.includes('attitude-monitor'),
-  'Expedition defaults must include Attitude Monitor.',
+  expeditionDefaults.includes('attitude-command'),
+  'Expedition defaults must include Attitude Command.',
 );
 assert.deepStrictEqual(
   expeditionDefaults,
-  ['attitude-monitor', 'terrain-risk', 'vehicle-systems'],
-  'Expedition defaults must place Quick Terrain lower-left and Vehicle Systems lower-right.',
+  ['attitude-command'],
+  'Expedition defaults must use the locked Attitude Command widget system.',
 );
 assert.strictEqual(legacyHighwayDefaults.length, 2, 'Legacy Highway widget defaults must stay at exactly two consolidated widgets.');
 assert.deepStrictEqual(
@@ -399,13 +399,11 @@ assert.ok(
   assert.ok(
     widgetGridSource.includes('onWidgetPress: (slot: WidgetSlot) => void;') &&
       widgetGridSource.includes('onWidgetPress(slot);') &&
-      widgetGridSource.includes('onWidgetLongPress?: (slot: WidgetSlot) => void;') &&
-      widgetGridSource.includes('longPressConsumedSlotRef') &&
-      dashboardSource.includes('onWidgetLongPress={onEnterCustomizeMode}') &&
+      !widgetGridSource.includes('onWidgetLongPress') &&
       !widgetGridSource.includes('onOpenWidgetReplacementPicker?.(slot)') &&
       !widgetRenderersSource.includes('accessibilityLabel="Change center module"') &&
       !widgetRenderersSource.includes('title="Change Center Module"'),
-    'Dashboard must use tap-to-detail and route long-press into existing layout management, not the retired replacement menu.',
+    'Dashboard must use the tap-to-detail widget path while suppressing the old Attitude Command long-press widget menu and retired Change Center menu.',
   );
   assert.ok(
     !widgetRenderersSource.includes('const openModuleSelector = useCallback') &&
@@ -513,16 +511,17 @@ assert.ok(
   'Weather header must keep the icon tightly inline and centered with the single-word title.',
 );
 assert.ok(
-  widgetRenderersSource.includes('headerStatusLabel={getTerrainRiskProfileStatusLabel(terrainRiskPresentation)}') &&
-    widgetRenderersSource.includes("headerStatusValue={terrainRiskHeaderRoute ? `${formatTerrainRiskLabel(terrainRiskHeaderRoute.overallRiskLabel).toUpperCase()} ${terrainRiskHeaderRoute.overallRiskScore}` : null}") &&
+  widgetRenderersSource.includes("headerStatusLabel={terrainRiskRoute ? terrainRiskRoute.dataState === 'estimated-route' ? 'GPS ALT ESTIMATE' : 'ELEVATION PROFILE' : null}") &&
+    widgetRenderersSource.includes("headerStatusValue={terrainRiskRoute ? `${formatTerrainRiskLabel(terrainRiskRoute.overallRiskLabel).toUpperCase()} ${terrainRiskRoute.overallRiskScore}` : null}") &&
     widgetRenderersSource.includes('commandPanelHeaderStatus') &&
     !widgetRenderersSource.includes('terrainRiskCornerReadoutOverlay'),
   'Route Terrain Risk source and score must live in the top-right header instead of over the chart.',
 );
 assert.ok(
-  widgetRenderersSource.includes("case 'idle': return 'NO ACTIVE ROUTE'") &&
-    widgetRenderersSource.includes("case 'loading': return 'LOADING ANALYSIS'"),
-  'Quick Terrain standby must distinguish no-route and loading states.',
+  widgetRenderersSource.includes('!route && terrainRisk.active ?') &&
+    widgetRenderersSource.includes('TERRAIN PROFILE PENDING') &&
+    !widgetRenderersSource.includes("'NO ACTIVE ROUTE'"),
+  'Route Terrain Risk standby must not repeat a No Active Route label above the existing standby copy.',
 );
 assert.ok(
   widgetRenderersSource.includes('const usesTrailingHeaderIcon = isVehiclePanel || isPowerPanel') &&
@@ -589,9 +588,9 @@ assert.ok(
 );
 assert.ok(
   dashboardStoreSource.includes('function canAssignWidgetToDashboardSlot') &&
-    dashboardStoreSource.includes('usedCells + requestedCells <= maxCells') &&
+    dashboardStoreSource.includes('usedRows + requestedRows <= maxRows') &&
     dashboardStoreSource.includes('canAssignWidget(profile: DashboardProfile, slotIndex: number, widgetType: string): boolean'),
-  'Dashboard store must enforce canonical widget area against available grid cells.',
+  'Dashboard store must reject a third 2x1 or any widget added beside a 2x2 region.',
 );
 assert.ok(
   widgetLibraryManagerSource.includes('dashboardStore.canAssignWidget') &&
@@ -1182,11 +1181,8 @@ assert.ok(
     expeditionTabSource.includes('Your completed journeys will appear here.') &&
     !expeditionTabSource.includes('<ExpeditionSummaryCard') &&
     !expeditionTabSource.includes('<ExpeditionDebriefModal') &&
-    expeditionTabSource.includes('buildExpeditionRecapRoutePresentation({') &&
-    expeditionTabSource.includes('routeGeometry: trip.routeGeometry') &&
-    expeditionTabSource.includes('plannedRouteGeometry: trip.plannedRouteGeometry') &&
-    expeditionTabSource.includes('routeGeometry={recapRoutePresentation.geometry}'),
-  'Expedition Hub must use completed trip records, expose the requested hub copy, avoid summary/debrief UI, and resolve selected-trip geometry through the truthful recap presentation model.',
+    expeditionTabSource.includes('routeGeometry={trip.routeGeometry}'),
+  'Expedition Hub must use completed trip records, expose the requested hub copy, avoid summary/debrief UI, and pass route geometry only from selected trip detail.',
 );
 for (const label of [
   'Overview',
@@ -1213,7 +1209,7 @@ for (const snippet of [
   'ExpeditionNotableMomentsTimeline',
   'BadgeUnlockSummary',
   'BadgeGrid',
-  'ExpeditionBadgeCatalogView',
+  'BadgeMilestoneList',
   'PersonalRecordsPreview',
   'ExpeditionReportsView',
   'refreshExpeditionInsights',

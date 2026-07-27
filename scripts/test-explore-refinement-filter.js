@@ -186,7 +186,8 @@ assert.ok(
 );
 assert.ok(
   discoverSource.includes('setDistanceRadius(snapshot.radiusMiles)') &&
-    discoverSource.includes('setExploreRefinement(snapshot.refinement)') &&
+    discoverSource.includes('EXPLORE_DISCOVERY_FILTER_OPTIONS.some') &&
+    discoverSource.includes('? snapshot.refinement') &&
     discoverSource.includes('setActiveExplorerCategoryPanel(snapshot.activeCategoryPanel)') &&
     !discoverSource.includes('setRouteCatalogPreviewGeometryRequested'),
   'Explore should restore validated range, refinement, and category filters without turning list hydration into a detail-geometry request.',
@@ -224,7 +225,7 @@ assert.ok(
     !guidanceReadyInventoryBlock.includes('hiddenGemExploreOrchestration') &&
     !guidanceReadyInventoryBlock.includes('filteredFavoriteTrails') &&
     !discoverSource.includes('ecsRouteIdeas: visibleAIRoutes'),
-  'Explore TripBuilder guidance candidates should use area/radius-annotated diagnostic pools instead of active-refinement or page-sized visible route pools.',
+  'Explore trail candidates should use area/radius-annotated diagnostic pools instead of active-refinement or page-sized visible route pools.',
 );
 assert.ok(
   !discoverSource.includes('routeCatalogRefinementCriteria') &&
@@ -285,11 +286,10 @@ assert.ok(
 );
 assert.ok(
   helperSource.includes('Remoteness') &&
-    helperSource.includes('Day Trip') &&
-    helperSource.includes('Weekend Trip') &&
-    helperSource.includes('Expedition') &&
-    filterSource.includes('EXPLORE_REFINEMENT_OPTIONS.map'),
-  'The filter panel should render all four refinement labels.',
+    helperSource.includes('EXPLORE_DISCOVERY_FILTER_OPTIONS') &&
+    filterSource.includes('EXPLORE_DISCOVERY_FILTER_OPTIONS.map') &&
+    !filterSource.includes('EXPLORE_REFINEMENT_OPTIONS.map'),
+  'The mounted Explore filter panel should expose the basic trail-focused refinement set.',
 );
 assert.ok(
   filterSource.includes('onChangeRefinement(isActive ? null : option.key)'),

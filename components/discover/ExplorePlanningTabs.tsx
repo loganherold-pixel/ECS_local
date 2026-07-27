@@ -5,17 +5,15 @@ import { ECSSegmentedControl } from '../ECSChip';
 import { deferShellRouteNavigation, type ShellInteractionTask } from '../../lib/shellInteractionScheduler';
 import { useECSNavigation } from '../../lib/navigation/useECSNavigation';
 
-type ExplorePlanningTab = 'suggested_routes' | 'trip_builder' | 'offline_prep_pack';
+type ExplorePlanningTab = 'suggested_routes' | 'offline_prep_pack';
 
 const EXPLORE_PLANNING_TAB_OPTIONS = [
-  { key: 'suggested_routes', label: 'Suggested Trailheads', icon: 'map-outline' as const },
-  { key: 'trip_builder', label: 'Trip Builder', icon: 'git-merge-outline' as const },
-  { key: 'offline_prep_pack', label: 'Offline Prep', icon: 'download-outline' as const },
+  { key: 'suggested_routes', label: 'Find Trails', icon: 'map-outline' as const },
+  { key: 'offline_prep_pack', label: 'Offline Trails', icon: 'download-outline' as const },
 ];
 
 const EXPLORE_PLANNING_TAB_ROUTES: Record<ExplorePlanningTab, string> = {
   suggested_routes: '/discover',
-  trip_builder: '/explore-trip-builder',
   offline_prep_pack: '/explore-offline-prep-pack',
 };
 

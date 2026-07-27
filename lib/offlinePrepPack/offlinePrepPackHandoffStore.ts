@@ -42,10 +42,13 @@ function buildLifecycle(input: OfflinePrepPackInput, createdAt: string): ECSJour
   const routeKey = routeId(input);
   const current = readJourneyLinkageFromMetadata(input.route.routeMetadata);
   const offlinePackageId = canonicalJourneyEntityId('offline_package', routeKey);
+  const isTrailDownload = input.mode === 'trail_download';
   return mergeJourneyLinkage(input.tripPlan?.lifecycle ?? current, {
     phase: 'offline_ready',
     identity: {
-      tripPlanId: input.tripPlan?.id ?? current?.identity.tripPlanId ?? canonicalJourneyEntityId('trip_plan', routeKey),
+      tripPlanId: isTrailDownload
+        ? null
+        : input.tripPlan?.id ?? current?.identity.tripPlanId ?? canonicalJourneyEntityId('trip_plan', routeKey),
       offlinePackageId,
     },
     activeVehicleId: input.vehicleProfile?.id ?? current?.activeVehicleId ?? null,

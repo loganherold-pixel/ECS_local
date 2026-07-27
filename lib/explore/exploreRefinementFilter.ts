@@ -9,6 +9,10 @@ export const EXPLORE_REFINEMENT_OPTIONS: { key: ExploreRefinementFilter; label: 
   { key: 'expedition', label: 'Expedition' },
 ];
 
+export const EXPLORE_DISCOVERY_FILTER_OPTIONS: { key: ExploreRefinementFilter; label: string }[] = [
+  { key: 'remoteness', label: 'Remoteness' },
+];
+
 type RefinableTrail = Partial<ExpeditionOpportunity> & object;
 type UnknownRecord = Record<string, unknown>;
 

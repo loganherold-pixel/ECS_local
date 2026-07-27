@@ -45,13 +45,10 @@ const itineraryReview = read('lib/tripBuilder/tripItineraryReview.ts');
 const routePreparation = read('lib/tripBuilder/tripBuilderRoutePreparation.ts');
 const routeImportParser = read('lib/navigateRouteImport.ts');
 
-assertIncludes(registry, "id: 'trip_builder'", 'Explore registry');
-assertIncludes(registry, "description: 'Turn a selected route into a day trip, overnight route, or expedition-style plan.'", 'Explore registry');
-assertIncludes(registry, "status: 'live'", 'Explore registry');
+assert(!registry.includes("id: 'trip_builder'"), 'Mounted Explore registry should not expose Trip Builder.');
 assertIncludes(registry, "id: 'offline_prep_pack'", 'Explore registry');
 assertIncludes(screen, 'testID="trip-builder-screen"', 'Trip Builder screen');
-assertIncludes(screen, 'ExplorePlanningTabs', 'Trip Builder should keep Explore top tabs available.');
-assertIncludes(screen, 'activeTab="trip_builder"', 'Trip Builder should mark the Trip Builder tab active.');
+assert(!screen.includes('ExplorePlanningTabs'), 'Legacy Trip Builder should not link itself back into mounted Explore tabs.');
 assertIncludes(screen, 'loadTripBuilderRouteHandoff', 'Trip Builder route handoff');
 assertIncludes(screen, 'loadExplorePlanningRouteContext', 'Trip Builder should consume active Explorer filter route context.');
 assertIncludes(screen, 'mergeRealTripBuilderRouteOptions([', 'Trip Builder route selection should merge only production-backed route sources.');
@@ -468,35 +465,19 @@ assert(clearPlanCalls === 2, 'Only selecting a different route or importing a re
 assert(!/const togglePriority =[\s\S]*?setPlan\(null\);[\s\S]*?setPriorities/.test(screen), 'Priority edits should not close an already generated Trip Builder result.');
 assert(!/setGroupType\(option\.value\);\s*setPlan\(null\);/.test(screen), 'Group type edits should not close an already generated Trip Builder result.');
 
-assertIncludes(discover, 'stageTripBuilderItineraryHandoff(route);', 'Explore selected route handoff');
-assertIncludes(discover, 'userLocation: tripBuilderHandoffUserLocation', 'Explore selected route GPS itinerary handoff');
-assertIncludes(discover, "pathname: '/explore-trip-builder'", 'Explore selected route navigation');
-assertIncludes(discover, "params: { routeId: routeForHandoff.id, setup: '1' }", 'Explore route preselection should open Trip Setup directly');
-assertIncludes(discover, "case 'trip_builder':", 'Explore Trip Builder tab option');
-assertIncludes(discover, 'clearTripBuilderRouteHandoff();', 'Explore top-level Trip Builder reset');
-assertIncludes(discover, "pushSingleFlight('/explore-trip-builder')", 'Explore Trip Builder tab should open the real route picker through single-flight navigation.');
-assert(!discover.includes('testID="explore-open-trip-builder"'), 'Explore should not render a redundant Open Trip Builder staging page.');
-assertIncludes(discover, 'testID="explore-tripbuilder-wizard-surface"', 'Explore should render the direct route-first TripBuilder wizard surface.');
-assertIncludes(discover, 'EXPLORE TRIP BUILDER', 'Explore Trip Builder hero eyebrow should render readable spaced copy on mobile.');
-assert(!discover.includes('EXPLORE TRIPBUILDER'), 'Explore Trip Builder hero eyebrow should not use compressed compound copy.');
-assertIncludes(discover, 'const handleOpenExploreTripBuilderFromHero = useCallback(() => {', 'Explore TripBuilder hero should use a dedicated press handler.');
-assertIncludes(discover, 'accessibilityLabel="Open Explore Trip Builder"', 'Explore TripBuilder hero should expose a mobile accessibility label.');
-assertIncludes(discover, 'accessibilityRole="button"', 'Explore TripBuilder hero should be announced as a tappable control.');
 assert(
-  /<TouchableOpacity[\s\S]*?testID="explore-tripbuilder-wizard-surface"[\s\S]*?onPress=\{handleOpenExploreTripBuilderFromHero\}/.test(discover),
-  'Explore TripBuilder hero should be a tappable surface that opens the real Trip Builder route picker.',
+  !discover.includes('/explore-trip-builder') &&
+    !discover.includes('handleBuildTripFromRoute') &&
+    !discover.includes('stageTripBuilderItineraryHandoff') &&
+    !discover.includes('CREATE STACK'),
+  'Mounted Explore should not expose Trip Builder, itinerary, or saved-plan stack entry points.',
 );
 assert(!discover.includes('testID="explore-primary-tab-control"'), 'Explore should not render the legacy primary tab control.');
-assertIncludes(discover, 'ExploreTripBuilderWizardRouteCard', 'Explore should expose Build Trip directly on guidance-ready route cards.');
-assertIncludes(discover, 'handleBuildTripFromExploreWizardCandidate', 'Explore wizard cards should save and route into Trip Builder.');
-assertIncludes(discover, 'canonicalExplorePlanningRoutes', 'Trip Builder should use the canonical Guidance Ready inventory context.');
-assertIncludes(discover, 'saveExplorePlanningRouteContext({', 'Explore should save filtered routes for Trip Builder.');
-assertIncludes(discover, 'handleBuildTripFromRoute(selectedOpportunity)', 'Selected route details entry');
-assertIncludes(discover, 'stageTripBuilderItineraryHandoff(op);', 'Selected route analysis should prepare a Trip Builder itinerary draft');
-assertIncludes(discover, 'handleBuildTripFromRoute(aiPreviewRoute)', 'AI route details entry');
-assertIncludes(discover, 'handleBuildTripFromRoute(route);', 'AI route card entry');
+assertIncludes(discover, 'ExploreTrailRouteCard', 'Explore should render trail discovery cards.');
+assertIncludes(discover, 'handlePrepareOfflineExploreWizardCandidate', 'Explore trail cards should support direct offline downloads.');
+assertIncludes(discover, "mode: 'trail_download'", 'Explore offline handoff should explicitly use route-only download mode.');
 assertIncludes(rootLayout, 'name="explore-trip-builder"', 'Root protected stack should register the direct Trip Builder route for mobile handoff.');
-assertIncludes(rootLayout, 'name="explore-offline-prep-pack"', 'Root protected stack should register the Explore Offline Prep route for sibling planning handoff.');
+assertIncludes(rootLayout, 'name="explore-offline-prep-pack"', 'Root protected stack should register the Explore Offline Trails route.');
 
 assert(!screen.includes('ExpeditionReadinessCard'), 'Trip Builder UI must not duplicate the readiness card component.');
 assert(!screen.includes('ExploreReadinessSummary'), 'Trip Builder UI must not duplicate route readiness summary UI.');

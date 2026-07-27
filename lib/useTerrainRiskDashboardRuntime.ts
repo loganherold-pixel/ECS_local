@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ActiveRouteProgressSnapshot } from './activeRouteProgress';
 import { getMapboxToken } from './mapConfig';
 import type { ImportedRoute } from './routeStore';
-import type { ActiveVehicleContext } from './vehicle/activeVehicleTypes';
 import {
   buildTerrainRiskCommandRoute,
   type TerrainRiskRoute,
@@ -36,10 +35,6 @@ import {
   type ECSAsyncSurfaceState,
   type SettleRequestOptions,
 } from './state/asyncSurfaceState';
-import {
-  buildTerrainIntelligenceSnapshot,
-  type TerrainIntelligenceSnapshot,
-} from './terrainIntelligencePresentation';
 
 export type TerrainRiskGpsElevationFreshness = 'live' | 'recent' | 'stale' | 'unavailable';
 
@@ -49,15 +44,12 @@ export type TerrainRiskDashboardRuntimeInput = {
   hasRenderableGeometry: boolean;
   currentGpsElevationFeet: number | null;
   currentGpsElevationFreshness: TerrainRiskGpsElevationFreshness;
-  activeVehicleContext?: ActiveVehicleContext | null;
-  profileDensity?: 'compact' | 'expanded' | 'all';
 };
 
 export type TerrainRiskDashboardRuntime = {
   active: boolean;
   route: TerrainRiskRoute | null;
   presentation: TerrainRiskDashboardPresentation;
-  terrainIntelligence: TerrainIntelligenceSnapshot;
   completedDistanceMiles: number | null;
   onRetryElevation: (() => void) | null;
 };
@@ -74,8 +66,6 @@ export function useTerrainRiskDashboardRuntime({
   hasRenderableGeometry,
   currentGpsElevationFeet,
   currentGpsElevationFreshness,
-  activeVehicleContext,
-  profileDensity = 'all',
 }: TerrainRiskDashboardRuntimeInput): TerrainRiskDashboardRuntime {
   const hasActiveRoute = Boolean(routeProgress?.isActive);
   const hasLiveGuidance = Boolean(hasActiveRoute && hasRenderableGeometry);
@@ -451,15 +441,6 @@ export function useTerrainRiskDashboardRuntime({
       samplingState.status,
     ],
   );
-  const terrainIntelligence = useMemo(
-    () => buildTerrainIntelligenceSnapshot({
-      presentation,
-      route,
-      activeVehicleContext,
-      profileDensity,
-    }),
-    [activeVehicleContext?.profileSignature, presentation, profileDensity, route],
-  );
   const handleElevationRetry = useCallback(() => {
     invalidateTerrainElevationSamplingCache();
     setSamplingRetryGeneration((current) => current + 1);
@@ -469,7 +450,6 @@ export function useTerrainRiskDashboardRuntime({
     active: hasActiveRoute,
     route,
     presentation,
-    terrainIntelligence,
     completedDistanceMiles,
     onRetryElevation: needsElevationSampling && samplingState.retryEligible
       ? handleElevationRetry

@@ -23,7 +23,6 @@ import { classifyExploreRouteAuthority } from '../lib/exploreRouteAuthority';
 import Header from '../components/Header';
 import { ECSAsyncStateMessage } from '../components/ECSStateMessage';
 import MissionCommandProposalAction from '../components/mission-command/MissionCommandProposalAction';
-import { ExplorePlanningTabs } from '../components/discover/ExplorePlanningTabs';
 import { SafeIcon as Ionicons } from '../components/SafeIcon';
 import TopoBackground from '../components/TopoBackground';
 import { ECS, TACTICAL } from '../lib/theme';
@@ -8422,7 +8421,6 @@ export default function ExploreTripBuilderScreen() {
     <TopoBackground>
       <View style={[styles.safeContainer, { paddingBottom: bottomClearance }]}>
         <Header title="Explore" />
-        <ExplorePlanningTabs activeTab="trip_builder" />
         <View style={styles.bodyFrame}>
           <View
             style={styles.fixedContent}

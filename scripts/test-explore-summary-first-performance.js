@@ -115,9 +115,11 @@ assert(fs.existsSync(summaryCardPath), 'RouteCatalogSummaryCard should render su
 assert(
   discover.includes('RouteCatalogSummaryCard') &&
     discover.includes('visibleRouteCatalogSummaries') &&
-    discover.includes('handleOpenRouteCatalogSummaryTripBuilder') &&
-    discover.includes('onOpenTripBuilder={handleOpenRouteCatalogSummaryTripBuilder}'),
-  'Discover route summaries should open Trip Builder without hydrating geometry in the list.',
+    discover.includes('handlePrepareRouteCatalogSummaryOffline') &&
+    discover.includes('onPrepareOffline={handlePrepareRouteCatalogSummaryOffline}') &&
+    discover.includes('void handlePrepareOfflineFromRoute(routeForHandoff)') &&
+    !discover.includes("pathname: '/explore-trip-builder'"),
+  'Discover route summaries should remain summary-only until the operator requests an offline trail download.',
 );
 assert(
   discover.includes('const routeCatalogSummaryPacks = useMemo') &&
@@ -139,7 +141,7 @@ assert(
   tripBuilder.includes('continueTripBuilderRoutePreparation(started, selectedRoute, {') &&
     tripBuilder.includes('routePreparationState.status === \'awaiting_trailhead_selection\'') &&
     tripBuilder.includes('saveTripBuilderRouteHandoff(ready.canonicalRoute'),
-  'Trip Builder should own selected-route detail loading, trailhead confirmation, and canonical persistence.',
+  'The retained compatibility Trip Builder should still own its own selected-route preparation when reached outside mounted Explore.',
 );
 assert(
     routeDetail.includes('fetchRouteCatalogTrailPackDetail') &&
@@ -148,7 +150,7 @@ assert(
     routeDetail.includes('classifyExploreRouteAvailability') &&
     routeDetail.includes('hasPostDetailPolicyBlocker') &&
     routeDetail.includes('ROUTE_CATALOG_DETAIL_REJECTED'),
-  'The selected-route adapter should reuse the canonical detail client, stable-identity merge, and Trip Builder-specific post-fetch safety gates.',
+  'The shared selected-route adapter should retain canonical detail loading and stable-identity safety gates.',
 );
 assert(
   !discover.includes('routeGeometryViewportOverlayEnabled') &&
@@ -163,7 +165,7 @@ assert(
   'Ordinary Explore list rendering should request bounded summaries without preview geometry.',
 );
 assert(
-  discover.includes('Available Routes') &&
+  discover.includes('Available Trails') &&
     discover.includes('DETAIL DEFERRED') &&
     discover.includes('exploreGuidanceReadyInventory.discoverableCandidateSet') &&
     !discover.includes('Routes Found, None Guidance Ready') &&

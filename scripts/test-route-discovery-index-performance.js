@@ -601,10 +601,10 @@ assert.notStrictEqual(fallbackImageEntry.thumbnail.state, 'suppressed_mismatch')
   'RouteCatalogSummaryCard',
   'paginateRouteCatalogSummaries',
   'visibleRouteCatalogSummaries',
-  'handleOpenRouteCatalogSummaryTripBuilder',
-  'onOpenTripBuilder={handleOpenRouteCatalogSummaryTripBuilder}',
-  'stageTripBuilderItineraryHandoff(routeForHandoff)',
-  "pathname: '/explore-trip-builder'",
+  'handlePrepareRouteCatalogSummaryOffline',
+  'onPrepareOffline={handlePrepareRouteCatalogSummaryOffline}',
+  'void handlePrepareOfflineFromRoute(routeForHandoff)',
+  "mode: 'trail_download'",
   'includePreviewGeometry: false',
 ].forEach((needle) => {
   assert(discoverSource.includes(needle), `Explore should use summary-first Trail Pack wiring: ${needle}.`);

@@ -10,6 +10,7 @@ function read(relativePath) {
 
 const discover = read(path.join('app', '(tabs)', 'discover.tsx'));
 const card = read(path.join('components', 'discover', 'RouteCatalogSummaryCard.tsx'));
+const trailCard = read(path.join('components', 'discover', 'ExploreTrailRouteCard.tsx'));
 const feedbackPanel = read(path.join('components', 'trailPacks', 'TrailPackFeedbackPanel.tsx'));
 const previewPanel = read(path.join('components', 'trailPacks', 'TrailPackPreviewModal.tsx'));
 const offlinePrepPack = read(path.join('app', 'explore-offline-prep-pack.tsx'));
@@ -18,31 +19,33 @@ const domain = read(path.join('lib', 'explore', 'trailPacks.ts'));
 const selectedRouteDetail = read(path.join('lib', 'explore', 'exploreTripBuilderRouteDetail.ts'));
 
 assert(
-  discover.includes('ExploreTripBuilderWizardRouteCard') &&
-    discover.includes('testID="explore-tripbuilder-wizard-surface"') &&
+  discover.includes('ExploreTrailRouteCard') &&
+    !discover.includes('testID="explore-tripbuilder-wizard-surface"') &&
     discover.includes('buildExploreGuidanceReadyInventory') &&
     discover.includes('exploreGuidanceReadyInventory.discoverableCandidateSet') &&
     discover.includes('visibleExploreWizardCardCandidates') &&
     !discover.includes('exploreWizardHiddenNotice') &&
     !discover.includes('ECS will not save, stitch, or navigate those routes from Explore'),
-  'Explore should render the route-first Trip Builder wizard using normalized discoverable candidates without user-facing hidden unavailable route warnings',
+  'Explore should render normalized trail discovery candidates without mounting a Trip Builder hero or hidden unavailable-route warnings',
 );
 assert(
   discover.includes('EXPLORE_WIZARD_SOURCE_FILTERS') &&
     discover.includes("label: 'Trail Packs'") &&
     discover.includes("label: 'Hidden Gems'") &&
     discover.includes("label: 'ECS Ideas'") &&
-    discover.includes("label: 'Saved/Built'") &&
-    discover.includes("label: 'Imported/Stitched'"),
-  'Explore TripBuilder wizard should expose source chips for Trail Packs, Hidden Gems, ECS Ideas, Saved/Built, and Imported/Stitched routes',
+    discover.includes("label: 'Saved Trails'") &&
+    discover.includes("label: 'Imported Trails'"),
+  'Explore should expose basic source chips for Trail Packs, Hidden Gems, ECS Ideas, saved trails, and imported trails',
 );
 assert(
-  discover.includes('saveExploreRouteForPlanning(hydratedCandidate)') &&
-    discover.includes('requireFullCatalogDetail: true') &&
+  discover.includes('handleSaveExploreWizardCandidate') &&
     discover.includes('handleStartExploreWizardCandidate') &&
     discover.includes('autoStartNavigation: true') &&
-    discover.includes('handleBuildTripFromExploreWizardCandidate'),
-  'Explore TripBuilder route cards should wire Save, Start, and Build Trip through full-detail planning/navigation flows',
+    discover.includes('handlePrepareOfflineExploreWizardCandidate') &&
+    trailCard.includes('onPrepareOffline') &&
+    trailCard.includes('OFFLINE') &&
+    !trailCard.includes('BUILD TRIP'),
+  'Explore trail cards should wire Save, Start, and offline download without Trip Builder actions',
 );
 assert(
   discover.includes("import RouteCatalogSummaryCard from '../../components/discover/RouteCatalogSummaryCard'"),
@@ -111,9 +114,10 @@ assert(
 assert(
   discover.includes('trailPackToOfflinePrepCatalogInput') &&
     discover.includes('handleCacheTrailPackOffline') &&
-    discover.includes("saveOfflinePrepPackHandoff(offlinePrepInput, 'route_details')") &&
+    discover.includes("mode: 'trail_download'") &&
+    discover.includes("}, 'route_details')") &&
     discover.includes("pathname: '/explore-offline-prep-pack'"),
-  'Trail Pack cache action should persist a route catalog Offline Prep handoff and open the Offline Prep Pack flow',
+  'Trail Pack cache action should persist a route-only offline handoff and open Offline Trails',
 );
 assert(
   previewPanel.includes('disabled={!canStart}') &&
@@ -132,7 +136,7 @@ assert(
     selectedRouteDetail.includes('(options.fetchDetail ?? fetchRouteCatalogTrailPackDetail)(trailPackId, {') &&
     discover.includes('routeCatalogSourceVersion: trailPack.updatedAt ?? null') &&
     !discover.includes('sourceVersion: summary.updatedAt'),
-  'Explore list rendering should avoid summary detail reads while selected Trip Builder detail uses route plus source-version cache identity.',
+  'Explore list rendering should avoid summary detail reads while the shared selected-route adapter keeps route plus source-version cache identity.',
 );
 assert(
   tripBuilder.includes('testID="trip-builder-route-preparation-state"') &&
@@ -174,18 +178,18 @@ assert(
 assert(
   card.includes('SourceTruthInspectorTrigger') &&
     card.includes('ROUTE SUMMARY') &&
-    card.includes('OPEN TRIP BUILDER') &&
+    card.includes('DOWNLOAD OFFLINE') &&
     !card.includes('PREVIEW') &&
     !card.includes('NAVIGATE') &&
     !card.includes('bookmark-outline'),
-  'Route catalog summary cards should show source truth plus one summary-first Trip Builder action',
+  'Route catalog summary cards should show source truth plus one summary-first offline action',
 );
 assert(
-  card.includes('onOpenTripBuilder(summary.routeId)') &&
-    card.includes('tripBuilderDisabledReason') &&
-    card.includes('accessibilityState={{ disabled: !!tripBuilderDisabledReason }}') &&
+  card.includes('onPrepareOffline(summary.routeId)') &&
+    card.includes('offlineDisabledReason') &&
+    card.includes('accessibilityState={{ disabled: !!offlineDisabledReason }}') &&
     !card.includes('MapRenderer'),
-  'Summary cards should defer geometry/detail loading to Trip Builder, expose typed disabled reasons, and avoid mounting map work in the Explore list',
+  'Summary cards should defer geometry/detail loading until download, expose typed disabled reasons, and avoid mounting map work in the Explore list',
 );
 assert(
   previewPanel.includes('getTrailPackGuidanceReadiness') &&

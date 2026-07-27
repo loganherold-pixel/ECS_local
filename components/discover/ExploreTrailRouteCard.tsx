@@ -16,14 +16,14 @@ import {
   resolveRouteCardImage,
 } from '../../lib/explore/routeImageResolver';
 
-type ExploreTripBuilderWizardRouteCardProps = {
+type ExploreTrailRouteCardProps = {
   candidate: ExploreWizardRouteCandidate;
   sourceLabel: string;
   isSaved: boolean;
   onPreview: () => void;
   onStart: () => void;
   onSave: () => void;
-  onBuildTrip: () => void;
+  onPrepareOffline: () => void;
   deferThumbnail?: boolean;
   deferEnrichment?: boolean;
   onThumbnailLoadDuration?: (durationMs: number, metadata: Record<string, unknown>) => void;
@@ -42,18 +42,18 @@ function routeDistance(candidate: ExploreWizardRouteCandidate): string {
     : 'DISTANCE UNKNOWN';
 }
 
-function ExploreTripBuilderWizardRouteCardComponent({
+function ExploreTrailRouteCardComponent({
   candidate,
   sourceLabel,
   isSaved,
   onPreview,
   onStart,
   onSave,
-  onBuildTrip,
+  onPrepareOffline,
   deferThumbnail = false,
   deferEnrichment = false,
   onThumbnailLoadDuration,
-}: ExploreTripBuilderWizardRouteCardProps) {
+}: ExploreTrailRouteCardProps) {
   const isGeneratedIdea = candidate.sourceKind === 'ecs_idea';
   const imageCacheRef = useRef(createRouteImageMemoryCache());
   const thumbnailLoadStartedAtRef = useRef<number | null>(null);
@@ -102,7 +102,7 @@ function ExploreTripBuilderWizardRouteCardComponent({
   }, [candidate.id, deferEnrichment]);
 
   return (
-    <View style={styles.card} testID={`explore-tripbuilder-route-card-${candidate.id}`}>
+    <View style={styles.card} testID={`explore-trail-route-card-${candidate.id}`}>
       <View style={styles.body}>
         <View style={styles.titleRow}>
           <View style={styles.headerThumbnail}>
@@ -177,13 +177,7 @@ function ExploreTripBuilderWizardRouteCardComponent({
                       color={TACTICAL.amber}
                     />
                     <Text style={styles.readyBadgeText}>
-                      {candidate.guidanceReady
-                        ? 'GUIDANCE READY'
-                        : candidate.tripBuilderEligible
-                          ? candidate.detailState === 'deferred'
-                            ? 'DETAIL IN TRIP BUILDER'
-                            : 'TRIP BUILDER READY'
-                          : 'TRIP BUILDER BLOCKED'}
+                      {candidate.guidanceReady ? 'TRAIL READY' : 'ROUTE DATA LIMITED'}
                     </Text>
                   </View>
                 </>
@@ -222,30 +216,41 @@ function ExploreTripBuilderWizardRouteCardComponent({
         {!candidate.guidanceReady ? (
           <>
             <Text style={styles.deferredDetailText}>
-              {candidate.tripBuilderEligible
-                ? candidate.detailState === 'deferred'
-                  ? 'Summary available. Verified route geometry is prepared after you open Trip Builder.'
-                  : candidate.guidanceUnavailableReason ??
-                    'Trip Builder is available, but advanced guidance is not ready for this route.'
-                : candidate.tripBuilderUnavailableReason ?? 'This summary cannot open Trip Builder.'}
+              {candidate.guidanceUnavailableReason ??
+                candidate.unavailableReason ??
+                'Verified route geometry is not loaded yet. Offline download will verify authoritative detail before saving.'}
             </Text>
             <View style={styles.actionRow}>
               <TouchableOpacity
-                style={[
-                  styles.primaryAction,
-                  !candidate.tripBuilderEligible && styles.primaryActionDisabled,
-                ]}
-                activeOpacity={0.86}
-                onPress={onBuildTrip}
-                disabled={!candidate.tripBuilderEligible}
+                style={styles.secondaryAction}
+                activeOpacity={0.82}
+                onPress={onPreview}
                 accessibilityRole="button"
-                accessibilityLabel={`Open ${candidate.title} in Trip Builder`}
-                accessibilityHint={candidate.tripBuilderUnavailableReason ?? undefined}
-                accessibilityState={{ disabled: !candidate.tripBuilderEligible }}
-                testID={`explore-open-trip-builder-${candidate.id}`}
+                accessibilityLabel={`Preview ${candidate.title}`}
               >
-                <Ionicons name="git-merge-outline" size={12} color="#081014" />
-                <Text style={styles.primaryActionText}>OPEN TRIP BUILDER</Text>
+                <Ionicons name="scan-outline" size={12} color={TACTICAL.text} />
+                <Text style={styles.secondaryActionText}>PREVIEW</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.secondaryAction}
+                activeOpacity={0.82}
+                onPress={onSave}
+                accessibilityRole="button"
+                accessibilityLabel={`Save ${candidate.title}`}
+              >
+                <Ionicons name={isSaved ? 'star' : 'star-outline'} size={12} color={TACTICAL.text} />
+                <Text style={styles.secondaryActionText}>{isSaved ? 'SAVED' : 'SAVE'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.secondaryAction}
+                activeOpacity={0.82}
+                onPress={onPrepareOffline}
+                accessibilityRole="button"
+                accessibilityLabel={`Download ${candidate.title} for offline use`}
+                testID={`explore-download-trail-${candidate.id}`}
+              >
+                <Ionicons name="download-outline" size={12} color={TACTICAL.text} />
+                <Text style={styles.secondaryActionText}>OFFLINE</Text>
               </TouchableOpacity>
             </View>
           </>
@@ -274,12 +279,13 @@ function ExploreTripBuilderWizardRouteCardComponent({
             <TouchableOpacity
               style={styles.secondaryAction}
               activeOpacity={0.82}
-              onPress={onBuildTrip}
+              onPress={onPrepareOffline}
               accessibilityRole="button"
-              accessibilityLabel={`Build trip for ${candidate.title}`}
+              accessibilityLabel={`Download ${candidate.title} for offline use`}
+              testID={`explore-download-trail-${candidate.id}`}
             >
-              <Ionicons name="git-merge-outline" size={12} color={TACTICAL.text} />
-              <Text style={styles.secondaryActionText}>BUILD TRIP</Text>
+              <Ionicons name="download-outline" size={12} color={TACTICAL.text} />
+              <Text style={styles.secondaryActionText}>OFFLINE</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.primaryAction}
@@ -298,8 +304,8 @@ function ExploreTripBuilderWizardRouteCardComponent({
   );
 }
 
-const ExploreTripBuilderWizardRouteCard = React.memo(
-  ExploreTripBuilderWizardRouteCardComponent,
+const ExploreTrailRouteCard = React.memo(
+  ExploreTrailRouteCardComponent,
   (previous, next) =>
     previous.candidate === next.candidate &&
     previous.sourceLabel === next.sourceLabel &&
@@ -309,7 +315,7 @@ const ExploreTripBuilderWizardRouteCard = React.memo(
     previous.onThumbnailLoadDuration === next.onThumbnailLoadDuration,
 );
 
-export default ExploreTripBuilderWizardRouteCard;
+export default ExploreTrailRouteCard;
 
 const styles = StyleSheet.create({
   card: {

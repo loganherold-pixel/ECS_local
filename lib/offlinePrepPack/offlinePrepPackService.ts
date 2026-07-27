@@ -1587,7 +1587,8 @@ export function buildOfflinePrepPackManifest(
   input: OfflinePrepPackInput,
   options: { offlineMapAdapter?: OfflineMapPreparationAdapter | null } = {},
 ): OfflinePrepPackManifest {
-  if (input.itinerary) {
+  const isTrailDownload = input.mode === 'trail_download';
+  if (input.itinerary && !isTrailDownload) {
     return buildOfflinePrepPackManifestFromItinerary({
       itinerary: input.itinerary,
       mapStyleKey: input.mapStyleKey,
@@ -1621,30 +1622,9 @@ export function buildOfflinePrepPackManifest(
   const offlineMapItem = buildOfflineMapItem(input, bounds, points.length, adapter);
   const criticalSegmentsItem = buildCriticalOfflineSegmentsItem(input, points, offlineMapItem);
 
-  const items: OfflinePrepPackItem[] = [
-    offlineMapItem,
-    ...(criticalSegmentsItem ? [criticalSegmentsItem] : []),
-    item({
-      type: 'route_line',
-      label: 'Route Line',
-      status: points.length >= 2 ? 'ready' : 'unavailable',
-      availability: points.length >= 2 ? 'available' : 'unavailable',
-      required: true,
-      source: 'selected_route',
-      summary: points.length >= 2 ? `${points.length} route points are available for offline prep.` : 'Route geometry data unavailable.',
-      count: points.length,
-      error: points.length >= 2 ? null : makeError('route-line-missing', 'route_line', 'Route geometry is missing.'),
-    }),
-    buildOfflineRoadGuidanceItem(input),
-    item({
-      type: 'waypoints',
-      label: 'Waypoints',
-      status: countArray(route.waypoints) > 0 ? 'ready' : 'unavailable',
-      availability: countArray(route.waypoints) > 0 ? 'available' : 'unavailable',
-      source: 'selected_route',
-      summary: countArray(route.waypoints) > 0 ? 'Route waypoints can be saved with the pack.' : 'No known waypoint source detected.',
-      count: countArray(route.waypoints),
-    }),
+  const tripPlanItems: OfflinePrepPackItem[] = isTrailDownload
+    ? []
+    : [
     item({
       type: 'campsites',
       label: 'Campsites and Emergency Points',
@@ -1703,6 +1683,33 @@ export function buildOfflinePrepPackManifest(
       source: 'smart_resupply_plan',
       summary: smart ? `Smart Resupply summary is available with ${smart.warnings.length} item${smart.warnings.length === 1 ? '' : 's'} to verify.` : 'Smart Resupply data unavailable.',
     }),
+  ];
+
+  const items: OfflinePrepPackItem[] = [
+    offlineMapItem,
+    ...(criticalSegmentsItem ? [criticalSegmentsItem] : []),
+    item({
+      type: 'route_line',
+      label: 'Route Line',
+      status: points.length >= 2 ? 'ready' : 'unavailable',
+      availability: points.length >= 2 ? 'available' : 'unavailable',
+      required: true,
+      source: 'selected_route',
+      summary: points.length >= 2 ? `${points.length} route points are available for offline prep.` : 'Route geometry data unavailable.',
+      count: points.length,
+      error: points.length >= 2 ? null : makeError('route-line-missing', 'route_line', 'Route geometry is missing.'),
+    }),
+    buildOfflineRoadGuidanceItem(input),
+    item({
+      type: 'waypoints',
+      label: 'Waypoints',
+      status: countArray(route.waypoints) > 0 ? 'ready' : 'unavailable',
+      availability: countArray(route.waypoints) > 0 ? 'available' : 'unavailable',
+      source: 'selected_route',
+      summary: countArray(route.waypoints) > 0 ? 'Route waypoints can be saved with the pack.' : 'No known waypoint source detected.',
+      count: countArray(route.waypoints),
+    }),
+    ...tripPlanItems,
     item({
       type: 'weather_snapshot',
       label: 'Weather Snapshot',
@@ -1716,7 +1723,7 @@ export function buildOfflinePrepPackManifest(
       metadata: weatherSnapshot,
     }),
     buildGpxItem(input, points),
-    buildTripSheetItem(input),
+    ...(!isTrailDownload ? [buildTripSheetItem(input)] : []),
   ];
 
   const errors = items.map((entry) => entry.error).filter((error): error is OfflinePrepPackError => !!error);
@@ -1726,7 +1733,9 @@ export function buildOfflinePrepPackManifest(
   const lifecycle = mergeJourneyLinkage(sourceLifecycle, {
     phase: 'offline_ready',
     identity: {
-      tripPlanId: input.tripPlan?.id ?? sourceLifecycle?.identity.tripPlanId ?? canonicalJourneyEntityId('trip_plan', routeKey),
+      tripPlanId: isTrailDownload
+        ? null
+        : input.tripPlan?.id ?? sourceLifecycle?.identity.tripPlanId ?? canonicalJourneyEntityId('trip_plan', routeKey),
       offlinePackageId,
     },
     activeVehicleId: input.vehicleProfile?.id ?? sourceLifecycle?.activeVehicleId ?? null,

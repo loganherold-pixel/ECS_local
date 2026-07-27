@@ -411,14 +411,15 @@ assert(
     discover.includes('await hydrateRouteCatalogOpportunityForHandoff(') &&
     discover.includes('stageExploreReadinessPreview(routeForHandoff)') &&
     discover.includes('buildValidatedExploreNavigationPayload(routeForHandoff)') &&
-    discover.includes('stageTripBuilderItineraryHandoff(routeForHandoff)') &&
+    discover.includes('getOfflinePrepPackRouteCoordinates({') &&
+    discover.includes("mode: 'trail_download'") &&
     discover.includes('saveOfflinePrepPackHandoff({') &&
     discover.includes('route: routeForHandoff as any') &&
     !discover.includes('trailPackPreviewDetailStatus') &&
     !discover.includes('trailPackPreviewRequestRef') &&
     tripBuilder.includes('continueTripBuilderRoutePreparation(started, selectedRoute') &&
     tripBuilderPreparation.includes('resolveExploreTripBuilderRouteDetail(route, {'),
-  'Explore should surface honest partial coverage, refine summary results locally, keep previews summary-only, and leave selected detail preparation to Trip Builder while retaining explicit guidance/offline hydration actions',
+  'Explore should surface honest partial coverage, refine summary results locally, keep previews summary-only, and hydrate authoritative detail only for guidance or offline download actions',
 );
 const guidanceInventoryBlock = discover
   .split('const exploreGuidanceReadyInventory = useMemo')[1]
@@ -436,7 +437,7 @@ assert(
     canonicalPlanningBlock.includes('exploreWizardCandidateSet.candidates.map((candidate) => candidate.route)') &&
     discover.includes('routes: canonicalExplorePlanningRoutes as any') &&
     !discover.includes('const publicSuggestedTrailheadRoutes'),
-  'Explore planning/offline route discovery should use the shared discoverable inventory while retaining strict guidance readiness separately.',
+  'Explore offline route discovery should use the shared discoverable inventory while retaining strict guidance readiness separately.',
 );
 assert(
   !discover.includes('ecs_demo_full_route_fixture') &&

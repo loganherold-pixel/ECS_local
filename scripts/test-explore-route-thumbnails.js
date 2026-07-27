@@ -35,8 +35,8 @@ const trailPackCardSource = fs.readFileSync(
   path.join(root, 'components', 'discover', 'TrailPackCard.tsx'),
   'utf8',
 );
-const wizardRouteCardSource = fs.readFileSync(
-  path.join(root, 'components', 'discover', 'ExploreTripBuilderWizardRouteCard.tsx'),
+const trailRouteCardSource = fs.readFileSync(
+  path.join(root, 'components', 'discover', 'ExploreTrailRouteCard.tsx'),
   'utf8',
 );
 const routeCatalogSummaryCardSource = fs.readFileSync(
@@ -340,7 +340,7 @@ assert.ok(
     discoverSource.includes('aiRouteThumbnailAssignments') &&
     discoverSource.includes('favoriteTrailThumbnailAssignments') &&
     discoverSource.includes('RouteCatalogSummaryCard') &&
-    discoverSource.includes('ExploreTripBuilderWizardRouteCard') &&
+    discoverSource.includes('ExploreTrailRouteCard') &&
     discoverSource.includes('thumbnailOverride={hiddenGemThumbnailAssignments.get(String(route.id)) ?? null}') &&
     discoverSource.includes('thumbnailOverride={knownRouteThumbnailAssignments.get(String(route.id)) ?? null}') &&
     discoverSource.includes('thumbnailOverride={aiRouteThumbnailAssignments.get(String(route.id)) ?? null}') &&
@@ -349,9 +349,9 @@ assert.ok(
     routeCatalogSummaryCardSource.includes('resolveRouteCardImage') &&
     routeCatalogSummaryCardSource.includes('remoteThumbnailUri: thumbnailFailed ? null : summary.thumbnailUrl') &&
     routeCatalogSummaryCardSource.includes('accessibilityLabel={`${summary.title} route thumbnail`}') &&
-    wizardRouteCardSource.includes('candidate.thumbnail?.uri') &&
-    wizardRouteCardSource.includes('accessibilityLabel={`Preview ${candidate.title}`}'),
-  'Explore route lists and the route-first wizard should use deterministic environment thumbnails with per-card fallbacks.',
+    trailRouteCardSource.includes('candidate.thumbnail?.uri') &&
+    trailRouteCardSource.includes('accessibilityLabel={`Preview ${candidate.title}`}'),
+  'Explore route lists and trail cards should use deterministic environment thumbnails with per-card fallbacks.',
 );
 assert.ok(
   aiRouteCardSource.includes('thumbnailOverride?: ExploreTrailThumbnailAssignment | null') &&

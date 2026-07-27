@@ -16,8 +16,8 @@ const trailPackCardSource = fs.readFileSync(
   path.join(root, 'components', 'discover', 'TrailPackCard.tsx'),
   'utf8',
 );
-const tripBuilderCardSource = fs.readFileSync(
-  path.join(root, 'components', 'discover', 'ExploreTripBuilderWizardRouteCard.tsx'),
+const trailRouteCardSource = fs.readFileSync(
+  path.join(root, 'components', 'discover', 'ExploreTrailRouteCard.tsx'),
   'utf8',
 );
 const routeCardSummaryPath = path.join(root, 'lib', 'explore', 'exploreRouteCardSummary.ts');
@@ -62,8 +62,8 @@ assert.ok(
 );
 
 assert.ok(
-  /!\s*compactPreview\s*\?\s*\([\s\S]*NAVIGATE[\s\S]*BUILD[\s\S]*\)\s*:\s*null/.test(aiCardSource),
-  'AI route Navigate/Build actions should only render outside compact preview mode.',
+  /!\s*compactPreview\s*\?\s*\([\s\S]*NAVIGATE[\s\S]*\)\s*:\s*null/.test(aiCardSource),
+  'AI route navigation actions should only render outside compact preview mode.',
 );
 
 assert.ok(
@@ -185,28 +185,65 @@ assert.ok(
 );
 
 assert.ok(
-  tripBuilderCardSource.includes('styles.headerThumbnail') &&
-    !tripBuilderCardSource.includes('buildExploreRouteCardSummary(candidate)') &&
-    !tripBuilderCardSource.includes("label: 'Status'") &&
-    !tripBuilderCardSource.includes("label: 'Current Condition'") &&
-    !tripBuilderCardSource.includes("label: 'Why'") &&
-    !tripBuilderCardSource.includes("label: 'What to Watch'") &&
-    !tripBuilderCardSource.includes("label: 'Recommended Action'") &&
-    !tripBuilderCardSource.includes("label: 'To Improve Status'") &&
-    !tripBuilderCardSource.includes('styles.summaryList') &&
-    !tripBuilderCardSource.includes('thumbnailWrap') &&
-    !tripBuilderCardSource.includes('thumbnailOverlay') &&
-    !tripBuilderCardSource.includes('candidate.dataUsed.length') &&
-    !tripBuilderCardSource.includes('SOURCES'),
-  'TripBuilder route cards should use a compact side thumbnail and keep readiness assessment detail out of the card face.',
+  trailRouteCardSource.includes('styles.headerThumbnail') &&
+    !trailRouteCardSource.includes('buildExploreRouteCardSummary(candidate)') &&
+    !trailRouteCardSource.includes("label: 'Status'") &&
+    !trailRouteCardSource.includes("label: 'Current Condition'") &&
+    !trailRouteCardSource.includes("label: 'Why'") &&
+    !trailRouteCardSource.includes("label: 'What to Watch'") &&
+    !trailRouteCardSource.includes("label: 'Recommended Action'") &&
+    !trailRouteCardSource.includes("label: 'To Improve Status'") &&
+    !trailRouteCardSource.includes('styles.summaryList') &&
+    !trailRouteCardSource.includes('thumbnailWrap') &&
+    !trailRouteCardSource.includes('thumbnailOverlay') &&
+    !trailRouteCardSource.includes('candidate.dataUsed.length') &&
+    !trailRouteCardSource.includes('SOURCES'),
+  'Trail route cards should use a compact side thumbnail and keep readiness assessment detail out of the card face.',
 );
 
 assert.ok(
-  hasStyleValue(tripBuilderCardSource, 'headerThumbnail', 'width', '72') &&
-    hasStyleValue(tripBuilderCardSource, 'headerThumbnail', 'height', '54') &&
+  hasStyleValue(trailRouteCardSource, 'headerThumbnail', 'width', '72') &&
+    hasStyleValue(trailRouteCardSource, 'headerThumbnail', 'height', '54') &&
     hasStyleValue(trailPackCardSource, 'thumbnailFrame', 'width', '70') &&
     hasStyleValue(aiCardSource, 'thumbnailFrame', 'width', '70'),
   'Explorer route visuals should be small thumbnails, not full-width top-half banners.',
+);
+
+const deferredTrailActions = trailRouteCardSource.slice(
+  trailRouteCardSource.indexOf('!candidate.guidanceReady ?'),
+  trailRouteCardSource.indexOf(') : (', trailRouteCardSource.indexOf('!candidate.guidanceReady ?')),
+);
+const readyTrailActions = trailRouteCardSource.slice(
+  trailRouteCardSource.indexOf(') : (', trailRouteCardSource.indexOf('!candidate.guidanceReady ?')),
+  trailRouteCardSource.indexOf('</View>\n        )}', trailRouteCardSource.indexOf('!candidate.guidanceReady ?')),
+);
+for (const [branch, branchSource] of [
+  ['deferred', deferredTrailActions],
+  ['guidance-ready', readyTrailActions],
+]) {
+  assert.ok(branchSource.includes('onPress={onPreview}'), `${branch} trail cards should retain Preview.`);
+  assert.ok(branchSource.includes('onPress={onSave}'), `${branch} trail cards should retain Save.`);
+  assert.ok(
+    branchSource.includes('onPress={onPrepareOffline}') &&
+      branchSource.includes('testID={`explore-download-trail-${candidate.id}`}') &&
+      branchSource.includes('>OFFLINE</Text>'),
+    `${branch} trail cards should expose an independent Offline download action.`,
+  );
+}
+assert.ok(
+  readyTrailActions.includes('onPress={onStart}') &&
+    readyTrailActions.includes('>START</Text>'),
+  'Guidance-ready trail cards should retain Start.',
+);
+assert.ok(
+  !deferredTrailActions.includes('onPress={onStart}'),
+  'A deferred summary must not expose Start before verified guidance geometry is available.',
+);
+assert.ok(
+  !trailRouteCardSource.includes('onBuildTrip') &&
+    !trailRouteCardSource.includes('BUILD TRIP') &&
+    !discoverSource.includes('ExploreTripBuilderWizardRouteCard'),
+  'Mounted trail cards should not retain Trip Builder actions or the retired card implementation.',
 );
 
 assert.ok(
@@ -221,9 +258,10 @@ assert.ok(
 assert.ok(
   discoverSource.includes('filteredExploreRouteIds') &&
     discoverSource.includes('filteredFavoriteTrails') &&
-    discoverSource.includes('filteredFavoritePlans') &&
-    discoverSource.includes('favoritesTotal = filteredFavoriteTrails.length + filteredFavoritePlans.length'),
-  'Favorites counts should derive from the active Explore route context.',
+    discoverSource.includes('favoritesTotal = filteredFavoriteTrails.length') &&
+    !discoverSource.includes('filteredFavoritePlans') &&
+    !discoverSource.includes('FavoriteTrailPlan'),
+  'Explore Favorites should contain filtered trails only, without itinerary-plan aggregation.',
 );
 
 assert.ok(

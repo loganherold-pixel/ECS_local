@@ -88,7 +88,7 @@ export type BuildOfflinePrepPackPresentationInput = {
 const GROUP_LABELS: Record<OfflinePrepPresentationGroupId, string> = {
   map: 'Offline Map',
   route_geometry: 'Route Geometry',
-  guidance_itinerary: 'Guidance and Itinerary',
+  guidance_itinerary: 'Guidance',
   optional_field_context: 'Optional Field Context',
 };
 
@@ -508,7 +508,7 @@ export function buildOfflinePrepPackPresentation({
       severity: 'blocker',
       title: 'Canonical route geometry is missing',
       message: 'A drawable route line is required before ECS can present this pack as offline-navigation ready.',
-      recommendedAction: 'Return to Trip Builder and prepare valid canonical route geometry.',
+      recommendedAction: 'Select a trail with verified canonical route geometry and retry the download.',
       itemType: null,
       source: 'presentation',
     });
